@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage/
+
+# Docker
+.docker-data/
+
+# Drizzle
+drizzle/meta/_journal.json.bak
+
+# Vite
+vite.config.ts.timestamp-*
+
+# Mirror output
+.mirror-out/
+
+# Misc
+tmp/
+.turbo/

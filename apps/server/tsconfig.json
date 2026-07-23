@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/adapters" },
+    { "path": "../../packages/api" },
+    { "path": "../../packages/worker" },
+    { "path": "../../packages/scheduler" },
+    { "path": "../../packages/brain-oss" }
+  ]
+}
