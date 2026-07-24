@@ -1,5 +1,11 @@
 /**
- * @claros/api - HTTP API layer (Fastify routes, middleware).
- * Depends on @claros/core, @claros/adapters.
+ * @claros/api - HTTP API layer (Fastify routes, plugins, middleware).
+ * Depends on @claros/core, @claros/adapters, @claros/db.
+ *
+ * Mirror side: PUBLIC (packages/api is in the mirror whitelist).
  */
-export const CLAROS_API_VERSION = "0.0.0";
+export { buildApp } from "./app.js";
+export type { BuildAppOptions } from "./app.js";
+export type { TenantContext } from "./types.js";
+export type { Db } from "./plugins/db.js";
+export { SESSION_COOKIE_NAME } from "./routes/auth.js";

@@ -15,9 +15,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@claros/core": "workspace:*",
     "@claros/adapters": "workspace:*",
-    "@claros/brain-oss": "workspace:*"
+    "@claros/brain-oss": "workspace:*",
+    "@claros/core": "workspace:*",
+    "pg-boss": "^12.26.2"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

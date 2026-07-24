@@ -1,0 +1,21 @@
+{
+  "name": "@claros/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./schema": {
+      "import": "./dist/schema/index.js",
+      "types": "./dist/schema/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2"
+  },
+  "peerDependencies": {
+    "pg": "^8.0.0"
+  }
+}

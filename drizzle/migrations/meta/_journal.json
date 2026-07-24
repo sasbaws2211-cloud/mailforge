@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1784835761297,
+      "tag": "0000_dark_korg",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784839562980,
+      "tag": "0001_orange_mauler",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784840769777,
+      "tag": "0002_confused_blizzard",
+      "breakpoints": true
+    }
+  ]
+}

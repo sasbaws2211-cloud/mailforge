@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@claros/worker": "workspace:*"
+    "@claros/core": "workspace:*",
+    "pg-boss": "^12.26.2"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

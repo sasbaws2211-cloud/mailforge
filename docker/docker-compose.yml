@@ -11,6 +11,19 @@ services:
       - PORT=3000
       - HOST=0.0.0.0
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # NODE_ENV must be "development" (not "production" and not absent) so the
+      # console login fallback fires when no transport is configured.
+      # isConsoleLoginAllowed() returns false if NODE_ENV is absent or "production".
+      - NODE_ENV=${NODE_ENV:-development}
+      # First-boot seed: creates the default tenant and owner user when the
+      # database is empty. Set this to the email you will use to log in.
+      # Required on first boot; ignored once a tenant exists.
+      - SEED_ADMIN_EMAIL=${SEED_ADMIN_EMAIL:-admin@example.com}
+      # Opt-in auto-migrate: applies pending schema migrations on startup.
+      # This is the ONLY context where CLAROS_MIGRATE_ON_BOOT should be true.
+      # Cloud deployments (Neon) must never set this - migrations run via
+      # scripts/migrate.sh under Umut's control.
+      - CLAROS_MIGRATE_ON_BOOT=true
     command: ["--role=all"]
     depends_on:
       postgres:
@@ -24,7 +37,7 @@ services:
       POSTGRES_PASSWORD: claros
       POSTGRES_DB: claros
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

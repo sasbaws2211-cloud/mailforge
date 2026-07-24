@@ -1,0 +1,532 @@
+/**
+ * Auth system tests - magic link flow.
+ *
+ * These are integration tests requiring a Postgres connection.
+ * They test the full auth lifecycle:
+ * - Token generation and verification
+ * - Single-use enforcement (reused token)
+ * - Expired token rejection
+ * - Tampered token rejection
+ * - Unknown email handling
+ * - Session creation and validation
+ * - Console fallback behavior (stdout only, never in response body)
+ *
+ * Run with: pnpm test (requires local Postgres from docker-compose).
+ *
+ * When no Postgres is reachable: integration tests skip with a visible message;
+ * unit tests (token utilities, isConsoleLoginAllowed) always run.
+ * In CI (CI=true): connection failure is fatal.
+ */
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { drizzle } from "drizzle-orm/node-postgres";
+import pg from "pg";
+import { eq, sql } from "drizzle-orm";
+import { buildApp } from "../src/index.js";
+import {
+  tenants,
+  users,
+  sessions,
+  magicLinkTokens,
+  transportConfigs,
+} from "@claros/db/schema";
+import { generateToken, hashToken, isConsoleLoginAllowed, SESSION_COOKIE_NAME } from "../src/routes/auth.js";
+
+const TEST_DB_URL = process.env.DATABASE_URL ?? "postgres://claros:claros@localhost:5432/claros";
+
+let pool: pg.Pool;
+let db: ReturnType<typeof drizzle>;
+let testTenantId: string;
+let testUserId: string;
+let dbAvailable = false;
+
+beforeAll(async () => {
+  pool = new pg.Pool({ connectionString: TEST_DB_URL, connectionTimeoutMillis: 3000 });
+  try {
+    await pool.query("SELECT 1");
+    db = drizzle(pool);
+    dbAvailable = true;
+  } catch (err) {
+    const inCI = process.env.CI === "true";
+    if (inCI) {
+      throw new Error(
+        `[auth.test] DATABASE_URL is not reachable in CI.\n` +
+        `URL: ${TEST_DB_URL}\n` +
+        `Cause: ${(err as Error).message}\n\n` +
+        `The CI workflow must include a Postgres service and apply migrations.\n` +
+        `See .github/workflows/ci.yml for the expected setup.`
+      );
+    }
+    console.warn("[auth.test] DATABASE_URL not reachable - integration tests will be skipped.");
+    console.warn("[auth.test] To run: start local Postgres (docker compose up postgres).");
+    return;
+  }
+
+  // Clean up any test data from previous runs
+  await db.execute(sql`DELETE FROM magic_link_tokens WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = 'test-auth')`);
+  await db.execute(sql`DELETE FROM sessions WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = 'test-auth')`);
+  await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = 'test-auth')`);
+  await db.execute(sql`DELETE FROM users WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = 'test-auth')`);
+  await db.execute(sql`DELETE FROM tenants WHERE slug = 'test-auth'`);
+
+  // Create test tenant and user
+  const [tenant] = await db
+    .insert(tenants)
+    .values({ name: "Test Auth", slug: "test-auth", plan: "free" })
+    .returning({ id: tenants.id });
+  testTenantId = tenant!.id;
+
+  const [user] = await db
+    .insert(users)
+    .values({ tenantId: testTenantId, email: "test@example.com", role: "owner" })
+    .returning({ id: users.id });
+  testUserId = user!.id;
+});
+
+afterAll(async () => {
+  if (!dbAvailable) {
+    await pool.end();
+    return;
+  }
+  // Clean up
+  await db.execute(sql`DELETE FROM magic_link_tokens WHERE tenant_id = ${testTenantId}`);
+  await db.execute(sql`DELETE FROM sessions WHERE tenant_id = ${testTenantId}`);
+  await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id = ${testTenantId}`);
+  await db.execute(sql`DELETE FROM users WHERE tenant_id = ${testTenantId}`);
+  await db.execute(sql`DELETE FROM tenants WHERE id = ${testTenantId}`);
+  await pool.end();
+});
+
+beforeEach(async () => {
+  if (!dbAvailable) return;
+  // Clean tokens and sessions between tests
+  await db.execute(sql`DELETE FROM magic_link_tokens WHERE tenant_id = ${testTenantId}`);
+  await db.execute(sql`DELETE FROM sessions WHERE tenant_id = ${testTenantId}`);
+});
+
+/**
+ * Helper: create a valid token directly in the DB and return the raw token.
+ * Bypasses the login endpoint to get a usable token for verify/session tests.
+ */
+async function createTestToken(ttlMinutes = 10): Promise<string> {
+  const { raw, hash } = generateToken();
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+  await db.insert(magicLinkTokens).values({
+    tenantId: testTenantId,
+    userId: testUserId,
+    tokenHash: hash,
+    expiresAt,
+  });
+  return raw;
+}
+
+describe("database availability sentinel", () => {
+  it("database unavailable: integration tests skipped", () => {
+    if (dbAvailable) return;
+    console.warn("[auth.test] All DB integration tests skipped - no database.");
+    expect(true).toBe(true);
+  });
+});
+
+describe("token utilities", () => {
+  it("generateToken returns raw and hash of correct lengths", () => {
+    const { raw, hash } = generateToken();
+    // 32 bytes base64url = 43 chars
+    expect(raw.length).toBe(43);
+    // SHA-256 hex = 64 chars
+    expect(hash.length).toBe(64);
+  });
+
+  it("hashToken produces same hash for same input", () => {
+    const raw = "test-token-value";
+    expect(hashToken(raw)).toBe(hashToken(raw));
+  });
+
+  it("hashToken produces different hash for different input", () => {
+    expect(hashToken("a")).not.toBe(hashToken("b"));
+  });
+});
+
+describe("isConsoleLoginAllowed", () => {
+  const originalEnv = process.env.NODE_ENV;
+
+  afterAll(() => {
+    process.env.NODE_ENV = originalEnv;
+  });
+
+  it("returns false when NODE_ENV is undefined", () => {
+    delete process.env.NODE_ENV;
+    expect(isConsoleLoginAllowed()).toBe(false);
+  });
+
+  it("returns false when NODE_ENV is production", () => {
+    process.env.NODE_ENV = "production";
+    expect(isConsoleLoginAllowed()).toBe(false);
+  });
+
+  it("returns true when NODE_ENV is development", () => {
+    process.env.NODE_ENV = "development";
+    expect(isConsoleLoginAllowed()).toBe(true);
+  });
+
+  it("returns true when NODE_ENV is test", () => {
+    process.env.NODE_ENV = "test";
+    expect(isConsoleLoginAllowed()).toBe(true);
+  });
+});
+
+describe("POST /auth/login", () => {
+  it("returns generic message for unknown email (no enumeration)", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: "nobody@example.com" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.message).toContain("login link has been sent");
+    // Must NEVER contain a loginUrl in the response body
+    expect(body.loginUrl).toBeUndefined();
+    await app.close();
+  });
+
+  it("returns message without leaking URL in response (console only)", async () => {
+    if (!dbAvailable) return;
+    process.env.NODE_ENV = "test";
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: "test@example.com" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.message).toBe("Login link printed to server console.");
+    // URL must NOT be in the response body - console fallback is stdout only
+    expect(body.loginUrl).toBeUndefined();
+    await app.close();
+  });
+
+  it("creates a token in the database on valid login", async () => {
+    if (!dbAvailable) return;
+    process.env.NODE_ENV = "test";
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: "test@example.com" },
+    });
+
+    // Verify a token was created in the DB
+    const tokens = await db
+      .select({ id: magicLinkTokens.id })
+      .from(magicLinkTokens)
+      .where(eq(magicLinkTokens.userId, testUserId));
+    expect(tokens.length).toBe(1);
+
+    await app.close();
+  });
+
+  it("normalizes email to lowercase", async () => {
+    if (!dbAvailable) return;
+    process.env.NODE_ENV = "test";
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: "TEST@EXAMPLE.COM" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    // Should find the user (email stored as lowercase) and create token
+    expect(body.message).toBe("Login link printed to server console.");
+    await app.close();
+  });
+});
+
+describe("GET /auth/verify", () => {
+  it("verifies a valid token and returns session cookie", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const rawToken = await createTestToken();
+
+    const verifyRes = await app.inject({
+      method: "GET",
+      url: `/auth/verify?token=${rawToken}`,
+    });
+    expect(verifyRes.statusCode).toBe(200);
+    const body = JSON.parse(verifyRes.body);
+    expect(body.message).toBe("Login successful.");
+    expect(body.user.email).toBe("test@example.com");
+    expect(body.user.role).toBe("owner");
+
+    // Check that session cookie is set
+    const cookies = verifyRes.cookies;
+    const sessionCookie = cookies.find(
+      (c: { name: string }) => c.name === SESSION_COOKIE_NAME,
+    );
+    expect(sessionCookie).toBeDefined();
+    expect(sessionCookie!.httpOnly).toBe(true);
+    expect(sessionCookie!.sameSite).toBe("Lax");
+
+    await app.close();
+  });
+
+  it("rejects a reused token (single-use enforcement)", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const rawToken = await createTestToken();
+
+    // First use - should succeed
+    const res1 = await app.inject({
+      method: "GET",
+      url: `/auth/verify?token=${rawToken}`,
+    });
+    expect(res1.statusCode).toBe(200);
+
+    // Second use - should fail
+    const res2 = await app.inject({
+      method: "GET",
+      url: `/auth/verify?token=${rawToken}`,
+    });
+    expect(res2.statusCode).toBe(401);
+    const body2 = JSON.parse(res2.body);
+    expect(body2.error).toContain("Invalid or expired");
+
+    await app.close();
+  });
+
+  it("rejects an expired token", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+
+    // Manually insert an expired token
+    const { raw, hash } = generateToken();
+    const expiredAt = new Date(Date.now() - 60 * 1000); // 1 minute ago
+    await db.insert(magicLinkTokens).values({
+      tenantId: testTenantId,
+      userId: testUserId,
+      tokenHash: hash,
+      expiresAt: expiredAt,
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/auth/verify?token=${raw}`,
+    });
+    expect(res.statusCode).toBe(401);
+    const body = JSON.parse(res.body);
+    expect(body.error).toContain("Invalid or expired");
+
+    await app.close();
+  });
+
+  it("rejects a tampered token (wrong hash)", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/auth/verify?token=completely-fabricated-token-that-does-not-exist",
+    });
+    expect(res.statusCode).toBe(401);
+    const body = JSON.parse(res.body);
+    expect(body.error).toContain("Invalid or expired");
+
+    await app.close();
+  });
+
+  it("rejects an empty token", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/auth/verify?token=",
+    });
+    expect(res.statusCode).toBe(401);
+
+    await app.close();
+  });
+});
+
+describe("GET /auth/me", () => {
+  it("returns 401 without session cookie", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/auth/me",
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("returns user info with valid session", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const rawToken = await createTestToken();
+
+    // Verify token to get session
+    const verifyRes = await app.inject({
+      method: "GET",
+      url: `/auth/verify?token=${rawToken}`,
+    });
+    const sessionCookie = verifyRes.cookies.find(
+      (c: { name: string }) => c.name === SESSION_COOKIE_NAME,
+    )!;
+
+    // Use session to get /auth/me
+    const meRes = await app.inject({
+      method: "GET",
+      url: "/auth/me",
+      cookies: { [SESSION_COOKIE_NAME]: sessionCookie.value },
+    });
+    expect(meRes.statusCode).toBe(200);
+    const body = JSON.parse(meRes.body);
+    expect(body.user.email).toBe("test@example.com");
+    expect(body.user.tenantId).toBe(testTenantId);
+
+    await app.close();
+  });
+
+  it("returns 401 for expired session", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+
+    // Manually insert an expired session
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        tenantId: testTenantId,
+        userId: testUserId,
+        expiresAt: new Date(Date.now() - 1000), // already expired
+      })
+      .returning({ id: sessions.id });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/auth/me",
+      cookies: { [SESSION_COOKIE_NAME]: session!.id },
+    });
+    expect(res.statusCode).toBe(401);
+
+    await app.close();
+  });
+
+  it("returns 401 when session exists but user row is gone", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+
+    // Insert a session referencing a non-existent user UUID.
+    // We bypass the FK constraint using session_replication_role to simulate
+    // a race condition or cascade-then-stale-cookie scenario.
+    const fakeUserId = "00000000-0000-0000-0000-000000000099";
+    const futureExpiry = new Date(Date.now() + 86400000); // 1 day from now
+    await db.execute(sql`SET session_replication_role = 'replica'`);
+    const [orphanSession] = await db
+      .insert(sessions)
+      .values({
+        tenantId: testTenantId,
+        userId: fakeUserId,
+        expiresAt: futureExpiry,
+      })
+      .returning({ id: sessions.id });
+    await db.execute(sql`SET session_replication_role = 'origin'`);
+
+    // The session exists and is not expired, but the user row is gone.
+    // The tenant plugin's INNER JOIN on users must reject this.
+    const res = await app.inject({
+      method: "GET",
+      url: "/auth/me",
+      cookies: { [SESSION_COOKIE_NAME]: orphanSession!.id },
+    });
+    expect(res.statusCode).toBe(401);
+
+    // Clean up the orphan row
+    await db.execute(sql`SET session_replication_role = 'replica'`);
+    await db.delete(sessions).where(eq(sessions.id, orphanSession!.id));
+    await db.execute(sql`SET session_replication_role = 'origin'`);
+
+    await app.close();
+  });
+});
+
+describe("POST /auth/logout", () => {
+  it("clears the session cookie and destroys session", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const rawToken = await createTestToken();
+
+    // Verify token to get session
+    const verifyRes = await app.inject({
+      method: "GET",
+      url: `/auth/verify?token=${rawToken}`,
+    });
+    const sessionCookie = verifyRes.cookies.find(
+      (c: { name: string }) => c.name === SESSION_COOKIE_NAME,
+    )!;
+
+    // Logout
+    const logoutRes = await app.inject({
+      method: "POST",
+      url: "/auth/logout",
+      cookies: { [SESSION_COOKIE_NAME]: sessionCookie.value },
+    });
+    expect(logoutRes.statusCode).toBe(200);
+
+    // Verify session is gone
+    const meRes = await app.inject({
+      method: "GET",
+      url: "/auth/me",
+      cookies: { [SESSION_COOKIE_NAME]: sessionCookie.value },
+    });
+    expect(meRes.statusCode).toBe(401);
+
+    await app.close();
+  });
+});
+
+describe("authenticated /v1 scope", () => {
+  it("returns 404 for /v1 routes (no routes registered yet)", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+
+    // No routes exist under /v1 yet, so Fastify returns 404.
+    // Once routes are added (task 7+), the preHandler will reject unauthenticated requests.
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/anything",
+    });
+    expect(res.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it("tenant is resolved for authenticated requests (via /auth/me)", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const rawToken = await createTestToken();
+
+    const verifyRes = await app.inject({
+      method: "GET",
+      url: `/auth/verify?token=${rawToken}`,
+    });
+    const sessionCookie = verifyRes.cookies.find(
+      (c: { name: string }) => c.name === SESSION_COOKIE_NAME,
+    )!;
+
+    // Verify tenant is resolved via /auth/me which shows tenantId
+    const meRes = await app.inject({
+      method: "GET",
+      url: "/auth/me",
+      cookies: { [SESSION_COOKIE_NAME]: sessionCookie.value },
+    });
+    expect(meRes.statusCode).toBe(200);
+    const body = JSON.parse(meRes.body);
+    expect(body.user.tenantId).toBe(testTenantId);
+
+    await app.close();
+  });
+});

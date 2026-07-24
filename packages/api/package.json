@@ -16,9 +16,15 @@
   },
   "dependencies": {
     "@claros/core": "workspace:*",
-    "@claros/adapters": "workspace:*"
+    "@claros/adapters": "workspace:*",
+    "@claros/db": "workspace:*",
+    "@fastify/cookie": "^9.4.0",
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^4.28.0",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@types/node": "^20.14.0",
     "typescript": "^5.5.0",
     "vitest": "^1.6.0"
   }

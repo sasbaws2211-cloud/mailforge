@@ -1,7 +1,0 @@
-/**
- * Community schema placeholder.
- * Phase 1 will add real tables: contacts, events, flows, messages,
- * suppressions, kb, templates, users, tenants, transport_configs.
- *
- * Every table will have tenant_id. Every query will be tenant-scoped.
- */
