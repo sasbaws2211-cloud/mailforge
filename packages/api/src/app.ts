@@ -20,8 +20,11 @@ import type { FastifyInstance, FastifyServerOptions } from "fastify";
 
 import { registerDbPlugin, type Db } from "./plugins/db.js";
 import { registerTenantPlugin } from "./plugins/tenant.js";
+import { registerIngestAuthPlugin } from "./plugins/ingest-auth.js";
 import healthRoute from "./routes/health.js";
 import authRoutes from "./routes/auth.js";
+import ingestRoutes from "./routes/ingest.js";
+import flowsRoutes from "./routes/flows.js";
 
 export interface BuildAppOptions {
   /**
@@ -49,6 +52,13 @@ export interface BuildAppOptions {
    * No trailing slash. Defaults to http://localhost:{PORT}.
    */
   baseUrl?: string;
+  /**
+   * Job enqueue function. Injected by apps/server when pg-boss is available.
+   * Signature matches PgBoss.send() for the subset we need: queue name, data, options.
+   * API routes use this to enqueue background jobs (e.g. flow compilation).
+   * When absent (tests without pg-boss), routes that require enqueue return 503.
+   */
+  enqueue?: (queue: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<string | null>;
 }
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {
@@ -76,6 +86,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     registerDbPlugin(app, opts.db);
   }
 
+  // Job enqueue function decoration (app.enqueue)
+  if (opts.enqueue) {
+    app.decorate("enqueue", opts.enqueue);
+  }
+
   // Tenant resolution. Validates session cookie, resolves request.tenant.
   // Must be registered on root instance, before any routes.
   registerTenantPlugin(app);
@@ -90,12 +105,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     await app.register(authRoutes, { prefix: "/auth", baseUrl });
   }
 
-  // --- Authenticated scope ---------------------------------------------------
+  // --- Authenticated scope (dashboard) ----------------------------------------
   // All routes that require a resolved tenant go here, under the /v1 prefix.
   // A preHandler rejects requests where request.tenant is null (returning 401).
+  // This scope uses SESSION COOKIE authentication only.
   //
   // Route registrations are added as tasks are implemented:
-  //   v1.register(eventsRoutes,    { prefix: "/events" });     // task 7
   //   v1.register(contactsRoutes,  { prefix: "/contacts" });   // task 8+
   //   v1.register(flowsRoutes,     { prefix: "/flows" });       // task 10
   //   v1.register(messagesRoutes,  { prefix: "/messages" });
@@ -112,9 +127,30 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           reply.send({ error: "Authentication required." });
         }
       });
+
+      // task 10: flow CRUD (dashboard operators only)
+      if (opts.db) {
+        await v1.register(flowsRoutes, { prefix: "/flows" });
+      }
     },
     { prefix: "/v1" },
   );
+
+  // --- Ingestion scope (API key auth) ------------------------------------------
+  // POST /v1/track and POST /v1/identify use BEARER TOKEN authentication,
+  // completely separate from the session-cookie dashboard scope above.
+  // A request carrying only a session cookie cannot reach these routes (the
+  // ingest auth plugin rejects it). A request carrying only a bearer key
+  // cannot reach the dashboard routes (the dashboard preHandler rejects it).
+  if (opts.db) {
+    await app.register(
+      async (ingest) => {
+        registerIngestAuthPlugin(ingest);
+        await ingest.register(ingestRoutes);
+      },
+      { prefix: "/v1" },
+    );
+  }
 
   return app;
 }

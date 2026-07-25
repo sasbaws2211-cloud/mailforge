@@ -1,0 +1,1 @@
+CREATE INDEX "idx_messages_contact_sent" ON "lifecycle_messages" USING btree ("contact_id","sent_at" DESC NULLS LAST) WHERE status IN ('sending', 'sent');

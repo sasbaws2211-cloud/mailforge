@@ -31,6 +31,12 @@ export const flowMemberships = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     exitedAt: timestamp("exited_at", { withTimezone: true }),
     exitReason: text("exit_reason"), // completed|condition_met|admin|priority_override
+    // [impl] task 12d: records last-observed condition evaluation error.
+    // Non-null means the scan could not interpret a condition on the current step
+    // or plan-level exit. The membership stays active but unadvanced until the
+    // flow is recompiled with a valid condition vocabulary. Self-clears when the
+    // condition becomes parseable on a subsequent scan pass.
+    conditionError: text("condition_error"),
   },
   (table) => [
     // [v2] Only ONE ACTIVE membership per flow per contact

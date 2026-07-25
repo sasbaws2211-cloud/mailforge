@@ -31,7 +31,17 @@ import {
 } from "@claros/db/schema";
 import { generateToken, hashToken, isConsoleLoginAllowed, SESSION_COOKIE_NAME } from "../src/routes/auth.js";
 
-const TEST_DB_URL = process.env.DATABASE_URL ?? "postgres://claros:claros@localhost:5432/claros";
+const TEST_DB_URL = process.env.DATABASE_URL;
+if (!TEST_DB_URL) {
+  const inCI = process.env.CI === "true";
+  throw new Error(
+    `[auth.test] DATABASE_URL is not set.\n\n` +
+    `This test requires a Postgres connection.\n` +
+    (inCI
+      ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
+      : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+  );
+}
 
 let pool: pg.Pool;
 let db: ReturnType<typeof drizzle>;

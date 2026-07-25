@@ -28,6 +28,9 @@ export const flows = pgTable("flows", {
   promptSource: text("prompt_source"), // original natural language prompt
   compiledPlan: jsonb("compiled_plan"), // deterministic execution plan
   compiledAt: timestamp("compiled_at", { withTimezone: true }),
+  // [impl] task 11: compilation status tracking
+  compileStatus: text("compile_status"), // null|pending|ready|failed
+  compileError: text("compile_error"), // human-readable error when status = failed
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });

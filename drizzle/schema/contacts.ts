@@ -4,6 +4,7 @@ import {
   text,
   timestamp,
   jsonb,
+  integer,
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
@@ -29,6 +30,12 @@ export const contacts = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     activatedAt: timestamp("activated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    // Engagement depth counters: two 15-day buckets approximating a 30-day window.
+    // Incremented at ingest time; rolled over by a scheduled job every 15 days.
+    // Depth query computes (bucket_current + bucket_prev) at read time.
+    eventCountBucketCurrent: integer("event_count_bucket_current").default(0),
+    eventCountBucketPrev: integer("event_count_bucket_prev").default(0),
+    lastCounterResetAt: timestamp("last_counter_reset_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("uq_contacts_tenant_external_id").on(

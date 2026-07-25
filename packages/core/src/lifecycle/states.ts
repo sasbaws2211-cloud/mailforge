@@ -1,0 +1,181 @@
+/**
+ * Lifecycle state machine: states, valid transitions, and configuration types.
+ *
+ * This is the single source of truth for which transitions are legal.
+ * An attempt to transition outside this table is a bug, not a no-op.
+ *
+ * Mirror side: PUBLIC (packages/core is mirrored).
+ */
+
+// ---------------------------------------------------------------------------
+// States
+// ---------------------------------------------------------------------------
+
+export const LIFECYCLE_STATES = [
+  "signed_up",
+  "activated",
+  "engaged",
+  "at_risk",
+  "dormant",
+  "churned",
+  "resurrected",
+] as const;
+
+export type LifecycleState = (typeof LIFECYCLE_STATES)[number];
+
+// ---------------------------------------------------------------------------
+// Transition trigger types
+// ---------------------------------------------------------------------------
+
+/**
+ * How a transition is triggered:
+ * - event: an inbound event (track/identify) causes the transition
+ * - time: absence of events over a threshold causes the transition (scan worker)
+ */
+export type TransitionTrigger = "event" | "time";
+
+// ---------------------------------------------------------------------------
+// Valid transitions (exhaustive - anything not listed is illegal)
+// ---------------------------------------------------------------------------
+
+export interface TransitionRule {
+  from: LifecycleState;
+  to: LifecycleState;
+  trigger: TransitionTrigger;
+  description: string;
+}
+
+/**
+ * The complete set of legal lifecycle transitions.
+ * Encoded explicitly per the spec (Section 4). If a transition is not in this
+ * list, it is a bug in the caller, not a silent no-op.
+ */
+export const VALID_TRANSITIONS: readonly TransitionRule[] = [
+  {
+    from: "signed_up",
+    to: "activated",
+    trigger: "event",
+    description: "All activation_events satisfied",
+  },
+  {
+    from: "activated",
+    to: "engaged",
+    trigger: "event",
+    description: "Any activity after activation",
+  },
+  {
+    from: "activated",
+    to: "engaged",
+    trigger: "time",
+    description:
+      "Stale activated contact promoted to engaged after natural_frequency_days so decay path begins",
+  },
+  {
+    from: "engaged",
+    to: "at_risk",
+    trigger: "time",
+    description: "No activity for at_risk_missed_intervals x natural_frequency_days",
+  },
+  {
+    from: "at_risk",
+    to: "engaged",
+    trigger: "event",
+    description: "Any activity while at_risk",
+  },
+  {
+    from: "at_risk",
+    to: "dormant",
+    trigger: "time",
+    description: "No activity for dormant_days",
+  },
+  {
+    from: "dormant",
+    to: "engaged",
+    trigger: "event",
+    description: "Any activity while dormant",
+  },
+  {
+    from: "dormant",
+    to: "churned",
+    trigger: "time",
+    description: "No activity for churned_days",
+  },
+  {
+    from: "churned",
+    to: "resurrected",
+    trigger: "event",
+    description: "Any activity after churned",
+  },
+  {
+    from: "resurrected",
+    to: "engaged",
+    trigger: "time",
+    description: "Scan promotes resurrected to engaged once activity is confirmed",
+  },
+] as const;
+
+/**
+ * Pre-computed lookup: for a given (from, trigger) pair, what are the valid
+ * target states? Used by the evaluator to validate transitions and by tests
+ * to confirm exhaustiveness.
+ */
+export const VALID_TRANSITION_MAP: ReadonlyMap<
+  `${LifecycleState}:${TransitionTrigger}`,
+  readonly LifecycleState[]
+> = (() => {
+  const map = new Map<`${LifecycleState}:${TransitionTrigger}`, LifecycleState[]>();
+  for (const rule of VALID_TRANSITIONS) {
+    const key = `${rule.from}:${rule.trigger}` as const;
+    const existing = map.get(key) ?? [];
+    existing.push(rule.to);
+    map.set(key, existing);
+  }
+  return map;
+})();
+
+/**
+ * Assert that a proposed transition is legal. Throws if not.
+ * This is NOT a "should we transition" check - it is a "is this transition
+ * even possible in the state machine" check. Call this before writing.
+ */
+export function assertValidTransition(
+  from: LifecycleState,
+  to: LifecycleState,
+  trigger: TransitionTrigger,
+): void {
+  const key = `${from}:${trigger}` as const;
+  const validTargets = VALID_TRANSITION_MAP.get(key);
+  if (!validTargets || !validTargets.includes(to)) {
+    throw new Error(
+      `Invalid lifecycle transition: ${from} -> ${to} (trigger: ${trigger}). ` +
+        `Valid targets from ${from} with trigger ${trigger}: ${validTargets?.join(", ") ?? "none"}.`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle configuration (per-tenant, stored in tenants.settings)
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle thresholds. Stored in tenants.settings.lifecycle.
+ * All fields optional - defaults applied from constants.ts.
+ */
+export interface LifecycleConfig {
+  /** Events that must ALL occur for signed_up -> activated. Empty = no auto-activation. */
+  activation_events: string[];
+  /** Days from first_seen_at within which activation must happen (informational). */
+  activation_window_days: number;
+  /** Expected activity interval in days. */
+  natural_frequency_days: number;
+  /** Multiplier: at_risk after this many missed intervals. */
+  at_risk_missed_intervals: number;
+  /** Days of inactivity before dormant (from last_seen_at). */
+  dormant_days: number;
+  /** Days of inactivity before churned (from last_seen_at). */
+  churned_days: number;
+  /** Window for engagement depth computation (days). */
+  engagement_depth_window_days: number;
+  /** Top N percentile = power user. */
+  power_user_percentile: number;
+}

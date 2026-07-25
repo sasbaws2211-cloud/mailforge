@@ -64,16 +64,38 @@ describe("startScheduler - registration pattern", () => {
     expect(schedules.find((s) => s.queue === QUEUE.SCAN)).toBeDefined();
   });
 
+  it("registers a schedule for QUEUE.DRAIN", async () => {
+    await startScheduler(mockBoss as never);
+    expect(schedules.find((s) => s.queue === QUEUE.DRAIN)).toBeDefined();
+  });
+
+  it("registers a schedule for QUEUE.REAP", async () => {
+    await startScheduler(mockBoss as never);
+    expect(schedules.find((s) => s.queue === QUEUE.REAP)).toBeDefined();
+  });
+
   it("SCAN is scheduled with cron every-15 * * * *", async () => {
     await startScheduler(mockBoss as never);
     const entry = schedules.find((s) => s.queue === QUEUE.SCAN)!;
     expect(entry.cron).toBe("*/15 * * * *");
   });
 
+  it("DRAIN is scheduled with cron every-15 * * * *", async () => {
+    await startScheduler(mockBoss as never);
+    const entry = schedules.find((s) => s.queue === QUEUE.DRAIN)!;
+    expect(entry.cron).toBe("*/15 * * * *");
+  });
+
+  it("REAP is scheduled with cron 0 * * * * (top of every hour)", async () => {
+    await startScheduler(mockBoss as never);
+    const entry = schedules.find((s) => s.queue === QUEUE.REAP)!;
+    expect(entry.cron).toBe("0 * * * *");
+  });
+
   it("registers exactly as many schedules as there are cron-triggered queues", async () => {
     await startScheduler(mockBoss as never);
-    // One schedule per cron queue. Counts must be updated when Phase 2 adds drain/reap.
-    expect(schedules).toHaveLength(1);
+    // Five cron schedules: SCAN + DRAIN + REAP + COUNTER_ROLLOVER + PARTITION_MAINTENANCE.
+    expect(schedules).toHaveLength(5);
   });
 
   it("does NOT call boss.work()", async () => {

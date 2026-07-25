@@ -6,10 +6,12 @@
  * start of each test and the results are authoritative regardless of what other
  * packages are running in parallel under turbo.
  *
- * Database setup (one-time, already done in this repo's local Postgres):
- *   createdb -U claros claros_seed_test
- *   DIRECT_DATABASE_URL=postgres://claros:claros@127.0.0.1:5432/claros_seed_test \
- *     bash scripts/migrate.sh
+ * Database setup:
+ *   Local (docker-compose): created and migrated automatically by the initdb
+ *   script (docker/initdb/01-seed-test-db.sh) on first container start.
+ *   No manual steps needed. After schema changes: docker compose down -v && up -d.
+ *
+ *   CI: created by the workflow step "Create seed test database" (createdb + migrate).
  *
  * The SEED_TEST_DATABASE_URL env var controls which database is used.
  * When neither it nor the fallback host is reachable, the tests skip and print
@@ -222,9 +224,17 @@ async function bootstrapSeedBuggy(db: Db, seedEmail: string): Promise<void> {
 // Test database: isolated from the main claros DB and all other test suites.
 // ---------------------------------------------------------------------------
 
-const SEED_TEST_URL =
-  process.env.SEED_TEST_DATABASE_URL ??
-  "postgres://claros:claros@127.0.0.1:5432/claros_seed_test";
+const SEED_TEST_URL = process.env.SEED_TEST_DATABASE_URL;
+if (!SEED_TEST_URL) {
+  const inCI = process.env.CI === "true";
+  throw new Error(
+    `[seed.test] SEED_TEST_DATABASE_URL is not set.\n\n` +
+    `This test requires a dedicated Postgres database.\n` +
+    (inCI
+      ? `Set the variable in the workflow env block:\n\n  SEED_TEST_DATABASE_URL: postgres://claros:claros@localhost:5432/claros_seed_test\n`
+      : `Set the variable in .env (see .env.example) or export it:\n\n  export SEED_TEST_DATABASE_URL='postgres://claros:claros@localhost:5433/claros_seed_test'\n`),
+  );
+}
 const SEED_EMAIL = "seed-concurrency-test@claros-test.invalid";
 
 let pool: pg.Pool;

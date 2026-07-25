@@ -22,6 +22,62 @@
       "when": 1784840769777,
       "tag": "0002_confused_blizzard",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784889654140,
+      "tag": "0003_known_the_stranger",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784892035991,
+      "tag": "0004_woozy_ricochet",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784918232682,
+      "tag": "0005_aberrant_metal_master",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784961110404,
+      "tag": "0006_kind_carlie_cooper",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784963204938,
+      "tag": "0007_chief_sister_grimm",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784965745709,
+      "tag": "0008_sharp_forgotten_one",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784971415842,
+      "tag": "0009_optimal_amazoness",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784978053718,
+      "tag": "0010_lucky_ultimates",
+      "breakpoints": true
     }
   ]
 }

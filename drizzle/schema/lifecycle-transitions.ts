@@ -12,7 +12,13 @@ export const lifecycleTransitions = pgTable("lifecycle_transitions", {
     .references(() => contacts.id),
   fromState: text("from_state").notNull(),
   toState: text("to_state").notNull(),
-  triggerEventId: uuid("trigger_event_id"), // no FK: audit log must survive event pruning
+  // trigger_event_id references events.id logically but has no FK constraint.
+  // Originally: audit log must survive event pruning (retention drops old partitions).
+  // Additionally: events is partitioned by received_at with PK (id, received_at),
+  // so a FK on event_id alone has no matching unique index. Referential integrity
+  // is guaranteed by the ingest code path (evaluateAndApplyTransition writes the
+  // transition row immediately after the event INSERT in the same request handler).
+  triggerEventId: uuid("trigger_event_id"),
   metadata: jsonb("metadata"),
   transitionedAt: timestamp("transitioned_at", {
     withTimezone: true,

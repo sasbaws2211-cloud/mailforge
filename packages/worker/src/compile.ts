@@ -1,0 +1,182 @@
+/**
+ * Compile worker handler - processes flow compilation jobs.
+ *
+ * Job flow:
+ * 1. Read the flow row (tenant-scoped).
+ * 2. Check compile_status is still 'pending' (CAS guard).
+ * 3. Read the tenant's active llm_configs row and decrypt it.
+ * 4. Build an LLM provider from the decrypted config.
+ * 5. Resolve available @template and @kb references for the prompt context.
+ * 6. Call compile() from brain-oss.
+ * 7. On success: write compiled_plan, compiled_at, compile_status = 'ready'.
+ * 8. On failure: write compile_status = 'failed', compile_error.
+ *
+ * CAS semantics: the worker only writes if compile_status is still 'pending'.
+ * If the prompt changed while the job was in flight (status reset to null by
+ * the API), the write returns 0 rows and the stale result is discarded.
+ *
+ * Mirror side: PUBLIC (packages/worker is mirrored).
+ */
+import { eq, and } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { flows, llmConfigs, templates, kbEntries } from "@claros/db/schema";
+import { decrypt, parseEncryptionKey } from "@claros/adapters";
+import {
+  compile,
+  OpenAICompatibleProvider,
+  type LlmProviderConfig,
+  type CompilePromptContext,
+} from "@claros/brain-oss";
+import type { CompileJobData } from "@claros/core";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type Db = NodePgDatabase<Record<string, never>>;
+
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
+
+export async function handleCompileJob(
+  data: CompileJobData,
+  db: Db,
+): Promise<void> {
+  const { flow_id, tenant_id } = data;
+
+  // 1. Read the flow row
+  const flowRows = await db
+    .select()
+    .from(flows)
+    .where(and(eq(flows.id, flow_id), eq(flows.tenantId, tenant_id)))
+    .limit(1);
+
+  if (flowRows.length === 0) {
+    console.warn(`[compile] flow ${flow_id} not found for tenant ${tenant_id}, skipping`);
+    return;
+  }
+
+  const flow = flowRows[0]!;
+
+  // 2. CAS guard: only proceed if compile_status is still 'pending'
+  if (flow.compileStatus !== "pending") {
+    console.warn(`[compile] flow ${flow_id} compile_status is '${flow.compileStatus}', expected 'pending', skipping`);
+    return;
+  }
+
+  // 3. Check prompt_source exists
+  if (!flow.promptSource) {
+    await markFailed(db, flow_id, "Flow has no prompt_source to compile.");
+    return;
+  }
+
+  // 4. Read the tenant's active LLM config
+  const llmRows = await db
+    .select()
+    .from(llmConfigs)
+    .where(and(eq(llmConfigs.tenantId, tenant_id), eq(llmConfigs.isActive, true)))
+    .limit(1);
+
+  if (llmRows.length === 0) {
+    await markFailed(db, flow_id, "No LLM configuration found. Add an LLM provider in Settings before compiling flows.");
+    return;
+  }
+
+  const llmConfig = llmRows[0]!;
+
+  // 5. Decrypt the LLM config
+  const encryptionKeyEnv = process.env.ENCRYPTION_KEY;
+  if (!encryptionKeyEnv) {
+    await markFailed(db, flow_id, "ENCRYPTION_KEY environment variable is not set. Required for decrypting LLM credentials.");
+    return;
+  }
+
+  let providerConfig: LlmProviderConfig;
+  try {
+    const key = parseEncryptionKey(encryptionKeyEnv);
+    const decrypted = decrypt(llmConfig.config, key);
+    providerConfig = JSON.parse(decrypted) as LlmProviderConfig;
+  } catch (err) {
+    await markFailed(db, flow_id, `Failed to decrypt LLM configuration: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  // 6. Build provider
+  const provider = new OpenAICompatibleProvider(providerConfig);
+
+  // 7. Resolve available templates and KB entries for the prompt context
+  const [templateRows, kbRows] = await Promise.all([
+    db
+      .select({ slug: templates.slug })
+      .from(templates)
+      .where(and(eq(templates.tenantId, tenant_id), eq(templates.isActive, true))),
+    db
+      .select({ title: kbEntries.title })
+      .from(kbEntries)
+      .where(and(eq(kbEntries.tenantId, tenant_id), eq(kbEntries.isActive, true))),
+  ]);
+
+  const ctx: CompilePromptContext = {
+    promptSource: flow.promptSource,
+    triggerType: flow.triggerType,
+    triggerConfig: flow.triggerConfig as Record<string, unknown>,
+    availableTemplates: templateRows.map((r) => r.slug),
+    availableKbEntries: kbRows.map((r) => r.title),
+  };
+
+  // 8. Call compile
+  const result = await compile(provider, ctx);
+
+  // 9. Write result with CAS (only if still pending)
+  if (result.ok) {
+    const updated = await db
+      .update(flows)
+      .set({
+        compiledPlan: result.plan,
+        compiledAt: new Date(),
+        compileStatus: "ready",
+        compileError: null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(flows.id, flow_id), eq(flows.compileStatus, "pending")))
+      .returning({ id: flows.id });
+
+    if (updated.length === 0) {
+      console.warn(`[compile] flow ${flow_id} CAS failed on success write (status changed), discarding result`);
+    }
+  } else {
+    const updated = await db
+      .update(flows)
+      .set({
+        compileStatus: "failed",
+        compileError: result.error.slice(0, 2000), // truncate to reasonable length
+        updatedAt: new Date(),
+      })
+      .where(and(eq(flows.id, flow_id), eq(flows.compileStatus, "pending")))
+      .returning({ id: flows.id });
+
+    if (updated.length === 0) {
+      console.warn(`[compile] flow ${flow_id} CAS failed on error write (status changed), discarding`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Mark a flow's compilation as failed. Used for pre-LLM failures (missing config, etc.).
+ * Also uses CAS on compile_status = 'pending'.
+ */
+async function markFailed(db: Db, flowId: string, error: string): Promise<void> {
+  await db
+    .update(flows)
+    .set({
+      compileStatus: "failed",
+      compileError: error.slice(0, 2000),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(flows.id, flowId), eq(flows.compileStatus, "pending")));
+}

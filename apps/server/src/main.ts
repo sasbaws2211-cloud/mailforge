@@ -181,6 +181,13 @@ async function start(): Promise<void> {
     }
   }
 
+  // Warn (not fail) if ENCRYPTION_KEY is absent. The server can start and
+  // serve the quickstart path without it. Flow compilation and LLM config
+  // storage will fail at first use with a clear error message.
+  if (!process.env.ENCRYPTION_KEY) {
+    console.warn("[config] ENCRYPTION_KEY not set - LLM config storage and flow compilation will be unavailable until configured.");
+  }
+
   // Bootstrap seed: only relevant for roles that serve HTTP (api, all).
   // Worker and scheduler have no login surface and no reason to know whether
   // a seed tenant exists. Running seed on every role also introduces a
@@ -190,10 +197,34 @@ async function start(): Promise<void> {
     await bootstrapSeed(db);
   }
 
+  // pg-boss: every role needs at least one boss instance.
+  // - role=all: one instance handles enqueue (API), work (worker), and schedule.
+  // - role=api: a lightweight instance for enqueue only (no work, no schedule).
+  // - role=worker: work handlers only (no schedule).
+  // - role=scheduler: cron schedules only (no work).
+  const boss = createBoss(databaseUrl, {
+    schedule: role === "all" || role === "scheduler",
+  });
+
+  boss.on("error", (err) => {
+    console.error("[pg-boss] error:", err);
+  });
+
+  await boss.start();
+  console.log(`[pg-boss] started (role=${role}, schema=pgboss)`);
+
+  // Enqueue function: wraps boss.send() for the API layer.
+  const enqueue = async (
+    queue: string,
+    data: Record<string, unknown>,
+    opts?: Record<string, unknown>,
+  ): Promise<string | null> => {
+    return boss.send(queue, data, opts ?? {});
+  };
+
   // API roles: "all" and "api" start the HTTP server.
-  // "worker" and "scheduler" do not expose HTTP (pg-boss workers only, task 5).
   if (role === "all" || role === "api") {
-    const app = await buildApp({ role, edition, db });
+    const app = await buildApp({ role, edition, db, enqueue });
 
     try {
       await app.listen({ port, host });
@@ -204,42 +235,25 @@ async function start(): Promise<void> {
     }
   }
 
-  // pg-boss: worker and scheduler roles share one boss instance per process.
-  // The scheduler role registers cron schedules; the worker role registers handlers.
-  // When role=all, both run in the same process against the same boss instance.
-  if (role === "all" || role === "worker" || role === "scheduler") {
-    const boss = createBoss(databaseUrl, {
-      // Disable cron scheduling on pure worker roles to avoid duplicate cron
-      // firings when a separate scheduler process is already registered.
-      // The scheduler role (and all) keeps scheduling enabled (the default).
-      schedule: role === "all" || role === "scheduler",
-    });
-
-    boss.on("error", (err) => {
-      console.error("[pg-boss] error:", err);
-    });
-
-    await boss.start();
-    console.log(`[pg-boss] started (role=${role}, schema=pgboss)`);
-
-    if (role === "all" || role === "worker") {
-      await startWorker(boss);
-      console.log("[pg-boss] worker handlers registered");
-    }
-
-    if (role === "all" || role === "scheduler") {
-      await startScheduler(boss);
-      console.log("[pg-boss] cron schedules registered");
-    }
-
-    // Graceful shutdown: stop pg-boss when the process exits.
-    const shutdown = async () => {
-      console.log("[pg-boss] stopping...");
-      await boss.stop({ graceful: true, timeout: 10000 });
-    };
-    process.once("SIGTERM", () => void shutdown());
-    process.once("SIGINT", () => void shutdown());
+  // Worker: register job handlers.
+  if (role === "all" || role === "worker") {
+    await startWorker(boss, db);
+    console.log("[pg-boss] worker handlers registered");
   }
+
+  // Scheduler: register cron schedules.
+  if (role === "all" || role === "scheduler") {
+    await startScheduler(boss);
+    console.log("[pg-boss] cron schedules registered");
+  }
+
+  // Graceful shutdown: stop pg-boss when the process exits.
+  const shutdown = async () => {
+    console.log("[pg-boss] stopping...");
+    await boss.stop({ graceful: true, timeout: 10000 });
+  };
+  process.once("SIGTERM", () => void shutdown());
+  process.once("SIGINT", () => void shutdown());
 }
 
 start();

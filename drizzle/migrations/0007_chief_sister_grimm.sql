@@ -1,0 +1,1 @@
+ALTER TABLE "flow_memberships" ADD COLUMN "condition_error" text;

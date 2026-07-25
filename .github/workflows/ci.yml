@@ -27,7 +27,6 @@ jobs:
 
     env:
       DATABASE_URL: postgres://claros:claros@localhost:5432/claros
-      DIRECT_DATABASE_URL: postgres://claros:claros@localhost:5432/claros
       SEED_TEST_DATABASE_URL: postgres://claros:claros@localhost:5432/claros_seed_test
 
     steps:
@@ -50,7 +49,7 @@ jobs:
       - name: Create seed test database
         run: |
           PGPASSWORD=claros createdb -h localhost -U claros claros_seed_test
-          DIRECT_DATABASE_URL=postgres://claros:claros@localhost:5432/claros_seed_test \
+          DATABASE_URL=postgres://claros:claros@localhost:5432/claros_seed_test \
             pnpm db:migrate -- --yes
 
       - run: pnpm build

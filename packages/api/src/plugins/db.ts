@@ -12,9 +12,13 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 
 export type Db = NodePgDatabase<Record<string, never>>;
 
+/** Enqueue function type - matches the subset of PgBoss.send() we need. */
+export type EnqueueFn = (queue: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<string | null>;
+
 declare module "fastify" {
   interface FastifyInstance {
     db: Db;
+    enqueue?: EnqueueFn;
   }
 }
 

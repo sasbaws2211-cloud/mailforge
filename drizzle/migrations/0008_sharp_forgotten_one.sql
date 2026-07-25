@@ -1,0 +1,1 @@
+CREATE INDEX "idx_events_tenant_time" ON "events" USING btree ("tenant_id","timestamp" DESC NULLS LAST);

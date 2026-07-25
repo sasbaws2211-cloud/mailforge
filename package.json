@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
-    "test": "turbo test",
+    "test": "bash scripts/test.sh",
     "typecheck": "turbo typecheck",
     "lint": "turbo lint",
     "db:generate": "drizzle-kit generate --config drizzle/drizzle.config.ts",

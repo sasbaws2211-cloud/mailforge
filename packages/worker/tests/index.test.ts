@@ -1,7 +1,7 @@
 /**
  * Tests for @claros/worker: createBoss factory and startWorker registration pattern.
  *
- * Covers the one queue defined in task 5 (SCAN). Pattern tests confirm:
+ * Covers the queues defined in tasks 5 and 11 (SCAN, COMPILE). Pattern tests confirm:
  * - createBoss returns a usable instance without throwing
  * - startWorker registers exactly the queues defined in QUEUE
  * - the registered handler resolves without throwing (stub behavior)
@@ -40,6 +40,89 @@ vi.mock("pg-boss", async () => {
   const MockPgBoss = vi.fn().mockImplementation(() => mockBoss);
   return { ...actual, PgBoss: MockPgBoss };
 });
+
+// Mock db (not used by SCAN handler in unit mode, but required by startWorker signature)
+// The scan handler calls phaseTimeTransitions(db, now) which queries tenants table.
+// In this unit test, we mock the module to prevent actual DB calls.
+const mockDb = {} as never;
+
+// Mock scan-time-transitions module to avoid DB calls in unit tests
+vi.mock("../src/scan-time-transitions.js", () => ({
+  phaseTimeTransitions: vi.fn(async () => ({
+    tenantsProcessed: 0,
+    contactsEvaluated: 0,
+    transitionsApplied: 0,
+    appliedTransitions: [],
+  })),
+}));
+
+// Mock scan-enrollment module to avoid DB calls in unit tests
+vi.mock("../src/scan-enrollment.js", () => ({
+  phaseEnrollment: vi.fn(async () => ({
+    transitionsEvaluated: 0,
+    enrollmentsAttempted: 0,
+    enrollmentsSucceeded: 0,
+    evictions: 0,
+  })),
+}));
+
+// Mock scan-step-advancement module to avoid DB calls in unit tests
+vi.mock("../src/scan-step-advancement.js", () => ({
+  phaseStepAdvancement: vi.fn(async () => ({
+    tenantsProcessed: 0,
+    membershipsEvaluated: 0,
+    messagesCreated: 0,
+    stepsAdvanced: 0,
+    membershipsCompleted: 0,
+    membershipsExitedArchived: 0,
+    membershipsSkippedPaused: 0,
+    staleCheckpointsDiscarded: 0,
+  })),
+}));
+
+// Mock scan-engagement-depth module to avoid DB calls in unit tests
+vi.mock("../src/scan-engagement-depth.js", () => ({
+  phaseEngagementDepth: vi.fn(async () => ({
+    tenantsProcessed: 0,
+    contactsUpdated: 0,
+    contactsUnchanged: 0,
+  })),
+}));
+
+// Mock trigger-check module to avoid DB calls in unit tests
+vi.mock("../src/trigger-check.js", () => ({
+  handleTriggerCheck: vi.fn(async () => undefined),
+}));
+
+// Mock drain module to avoid DB calls in unit tests
+vi.mock("../src/drain.js", () => ({
+  processDrainTick: vi.fn(async () => ({
+    candidatesFetched: 0,
+    skippedNoTransport: 0,
+    skippedNoEmail: 0,
+    sent: 0,
+    suppressed: 0,
+    deferredFrequency: 0,
+    deferredWindow: 0,
+    transportErrors: 0,
+  })),
+  fetchDrainBatchSimple: vi.fn(async () => []),
+}));
+
+// Mock reap module to avoid DB calls in unit tests
+vi.mock("../src/reap.js", () => ({
+  processReapTick: vi.fn(async () => ({
+    sendingRetried: 0,
+    sendingFailed: 0,
+    generatingRetried: 0,
+    generatingFailed: 0,
+  })),
+}));
+
+// Mock transport module to avoid import issues in unit tests
+vi.mock("../src/transport.js", () => ({
+  nullTransportResolver: vi.fn(async () => null),
+}));
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -81,7 +164,7 @@ describe("startWorker - registration pattern", () => {
   });
 
   it("registers a handler for every QUEUE constant", async () => {
-    await startWorker(mockBoss as never);
+    await startWorker(mockBoss as never, mockDb);
     const registered = new Set(registrations.map((r) => r.queue));
     for (const name of Object.values(QUEUE)) {
       expect(registered, `missing handler for ${name}`).toContain(name);
@@ -89,12 +172,12 @@ describe("startWorker - registration pattern", () => {
   });
 
   it("registers exactly as many handlers as QUEUE has entries", async () => {
-    await startWorker(mockBoss as never);
+    await startWorker(mockBoss as never, mockDb);
     expect(registrations).toHaveLength(Object.keys(QUEUE).length);
   });
 
   it("no unrecognised queue names are registered", async () => {
-    await startWorker(mockBoss as never);
+    await startWorker(mockBoss as never, mockDb);
     const known = new Set(Object.values(QUEUE));
     for (const { queue } of registrations) {
       expect(known, `unexpected registration: ${queue}`).toContain(queue);
@@ -102,7 +185,7 @@ describe("startWorker - registration pattern", () => {
   });
 
   it("SCAN handler resolves without throwing", async () => {
-    await startWorker(mockBoss as never);
+    await startWorker(mockBoss as never, mockDb);
     const reg = registrations.find((r) => r.queue === QUEUE.SCAN)!;
     expect(reg).toBeDefined();
     await expect(
@@ -128,7 +211,7 @@ describe("failure path", () => {
     mockBoss.work.mockImplementation(async (name: string, _opts: unknown, handler: never) => {
       registrations.push({ queue: name, handler });
     });
-    await expect(startWorker(mockBoss as never)).resolves.toBeUndefined();
+    await expect(startWorker(mockBoss as never, mockDb)).resolves.toBeUndefined();
   });
 });
 

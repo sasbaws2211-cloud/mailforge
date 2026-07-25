@@ -5,5 +5,5 @@
     "rootDir": "src"
   },
   "include": ["src"],
-  "references": [{ "path": "../core" }, { "path": "../adapters" }, { "path": "../brain-oss" }]
+  "references": [{ "path": "../core" }, { "path": "../adapters" }, { "path": "../brain-oss" }, { "path": "../../drizzle" }]
 }
