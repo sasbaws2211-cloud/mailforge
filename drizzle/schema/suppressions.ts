@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp } from "drizzle-orm/pg-core";
 import { tenants } from "./tenants.js";
 
 export const suppressions = pgTable(
@@ -13,7 +13,9 @@ export const suppressions = pgTable(
     source: text("source"), // one_click|page|webhook|admin|csv_import
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
-  (table) => [
-    uniqueIndex("uq_suppressions_tenant_email").on(table.tenantId, table.email),
-  ]
+  // NOTE: The unique constraint on (tenant_id, lower(email)) is a functional
+  // unique index created by migration 0013. Drizzle-kit cannot represent
+  // expression indexes natively; the index is managed outside the schema DSL.
+  // Do NOT add a uniqueIndex() here - it would create a second (wrong) index.
+  () => []
 );

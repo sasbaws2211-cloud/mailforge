@@ -1,5 +1,6 @@
 /**
- * Reap worker - recovers messages stuck in 'sending' or 'generating'.
+ * Reap worker - recovers messages stuck in 'sending', 'generating', or
+ * 'awaiting_content'.
  *
  * Scheduled every REAP_INTERVAL_MINUTES (60 min) via pg-boss cron ("0 * * * *").
  *
@@ -13,6 +14,14 @@
  *     Drain will pick it up again on the next tick.
  *   - 'generating' stuck > 2h: reset to 'pending_generation', increment retry_count.
  *     The Brain worker will re-attempt the decision.
+ *   - 'awaiting_content' stuck > 2h: reset to 'pending_generation', increment retry_count.
+ *     'awaiting_content' is entered after decide() succeeds and is left only
+ *     when the full draft+assess sequence completes. Failures in draft(), the
+ *     value gate, the budget check, or a process crash leave the row at
+ *     'awaiting_content' with no terminal state and no other recovery path.
+ *     Resetting to 'pending_generation' re-enters the full pipeline: the fresh
+ *     run will re-decide and re-draft. The same retry ceiling applies so a
+ *     permanently failing message still terminates rather than looping.
  *   - retry_count >= MAX_RETRY_COUNT (3): set to 'failed' (terminal). Logged
  *     for observability; no alerting system exists yet.
  *
@@ -51,6 +60,8 @@ export interface ReapTickResult {
   sendingFailed: number;
   generatingRetried: number;
   generatingFailed: number;
+  awaitingContentRetried: number;
+  awaitingContentFailed: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +72,8 @@ export interface ReapTickResult {
  * Process a single reap tick. Called by the pg-boss handler.
  *
  * Finds all messages whose updated_at is older than REAP_STUCK_THRESHOLD_HOURS
- * and whose status is 'sending' or 'generating', then recovers or terminates them.
+ * and whose status is 'sending', 'generating', or 'awaiting_content', then
+ * recovers or terminates them.
  *
  * Each UPDATE is atomic CAS:
  *   WHERE status = <expected> AND updated_at < <threshold>
@@ -70,19 +82,32 @@ export interface ReapTickResult {
  *
  * @param db  - Drizzle database instance.
  * @param now - Current time (injected for testability).
+ * @param tenantIds - Optional tenant scope. When provided, only messages for
+ *   these tenants are processed. When omitted, all tenants are processed
+ *   (production default).
  */
 export async function processReapTick(
   db: Db,
   now: Date,
+  tenantIds?: string[],
 ): Promise<ReapTickResult> {
   const stats: ReapTickResult = {
     sendingRetried: 0,
     sendingFailed: 0,
     generatingRetried: 0,
     generatingFailed: 0,
+    awaitingContentRetried: 0,
+    awaitingContentFailed: 0,
   };
 
   const threshold = new Date(now.getTime() - REAP_STUCK_THRESHOLD_HOURS * 60 * 60 * 1000);
+
+  // Optional tenant scope fragment. When tenantIds is provided, only those
+  // tenants' messages are processed. When omitted (production default), the
+  // fragment is a no-op (TRUE).
+  const tenantFilter = tenantIds && tenantIds.length > 0
+    ? sql`AND tenant_id IN (${sql.join(tenantIds.map((id) => sql`${id}`), sql`, `)})`
+    : sql``;
 
   // ---------------------------------------------------------------------------
   // Recover 'sending' messages (stuck drain)
@@ -101,6 +126,7 @@ export async function processReapTick(
     WHERE status = 'sending'
       AND updated_at < ${threshold}
       AND retry_count < ${MAX_RETRY_COUNT}
+      ${tenantFilter}
     RETURNING id, tenant_id
   `);
 
@@ -115,6 +141,7 @@ export async function processReapTick(
     WHERE status = 'sending'
       AND updated_at < ${threshold}
       AND retry_count >= ${MAX_RETRY_COUNT}
+      ${tenantFilter}
     RETURNING id, tenant_id
   `);
 
@@ -143,6 +170,7 @@ export async function processReapTick(
     WHERE status = 'generating'
       AND updated_at < ${threshold}
       AND retry_count < ${MAX_RETRY_COUNT}
+      ${tenantFilter}
     RETURNING id, tenant_id
   `);
 
@@ -157,6 +185,7 @@ export async function processReapTick(
     WHERE status = 'generating'
       AND updated_at < ${threshold}
       AND retry_count >= ${MAX_RETRY_COUNT}
+      ${tenantFilter}
     RETURNING id, tenant_id
   `);
 
@@ -167,6 +196,56 @@ export async function processReapTick(
       console.error(
         `[reap] message ${row.id} (tenant ${row.tenant_id}) permanently failed: ` +
           `stuck in 'generating' after ${MAX_RETRY_COUNT} retries`,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Recover 'awaiting_content' messages (stuck draft / value gate / process crash)
+  //
+  // 'awaiting_content' is entered after decide() succeeds. The draft call,
+  // budget check, assess call, or a process crash between those steps can leave
+  // the row here with nothing to recover it. Reap resets to 'pending_generation'
+  // so the full pipeline re-runs (fresh decide + draft + assess). The same
+  // retry ceiling applies, ensuring permanent failures terminate rather than loop.
+  // ---------------------------------------------------------------------------
+
+  // Retry: retry_count < MAX_RETRY_COUNT -> reset to 'pending_generation'
+  const awaitingContentRetried = await db.execute<{ id: string; tenant_id: string }>(sql`
+    UPDATE lifecycle_messages
+    SET
+      status = 'pending_generation',
+      retry_count = retry_count + 1,
+      updated_at = ${now}
+    WHERE status = 'awaiting_content'
+      AND updated_at < ${threshold}
+      AND retry_count < ${MAX_RETRY_COUNT}
+      ${tenantFilter}
+    RETURNING id, tenant_id
+  `);
+
+  stats.awaitingContentRetried = awaitingContentRetried.rows.length;
+
+  // Fail: retry_count >= MAX_RETRY_COUNT -> terminal 'failed'
+  const awaitingContentFailed = await db.execute<{ id: string; tenant_id: string }>(sql`
+    UPDATE lifecycle_messages
+    SET
+      status = 'failed',
+      updated_at = ${now}
+    WHERE status = 'awaiting_content'
+      AND updated_at < ${threshold}
+      AND retry_count >= ${MAX_RETRY_COUNT}
+      ${tenantFilter}
+    RETURNING id, tenant_id
+  `);
+
+  stats.awaitingContentFailed = awaitingContentFailed.rows.length;
+
+  if (awaitingContentFailed.rows.length > 0) {
+    for (const row of awaitingContentFailed.rows) {
+      console.error(
+        `[reap] message ${row.id} (tenant ${row.tenant_id}) permanently failed: ` +
+          `stuck in 'awaiting_content' after ${MAX_RETRY_COUNT} retries`,
       );
     }
   }

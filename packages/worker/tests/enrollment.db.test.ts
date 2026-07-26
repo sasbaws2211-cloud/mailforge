@@ -111,6 +111,9 @@ afterAll(async () => {
 
 async function cleanup() {
   await db.execute(
+    sql`DELETE FROM lifecycle_messages WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`,
+  );
+  await db.execute(
     sql`DELETE FROM flow_memberships WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`,
   );
   await db.execute(
@@ -121,6 +124,9 @@ async function cleanup() {
   );
   await db.execute(
     sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`,
+  );
+  await db.execute(
+    sql`DELETE FROM scan_checkpoints WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`,
   );
   await db.execute(sql`DELETE FROM tenants WHERE slug = ${SLUG}`);
 }

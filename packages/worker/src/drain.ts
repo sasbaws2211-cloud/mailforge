@@ -461,14 +461,16 @@ async function buildThrottleGateInput(
   contactTimezone: string | null,
   now: Date,
 ): Promise<ThrottleGateInput> {
-  // Check suppression
+  // Check suppression (case-insensitive via functional index on lower(email)).
+  // The index uq_suppressions_tenant_email_lower is keyed on lower(email), so
+  // the query must use lower() on both sides to hit the index.
   const suppressionRow = await db
     .select({ id: suppressions.id })
     .from(suppressions)
     .where(
       and(
         eq(suppressions.tenantId, candidate.tenantId),
-        eq(suppressions.email, contactEmail),
+        sql`lower(${suppressions.email}) = lower(${contactEmail})`,
       ),
     )
     .limit(1);

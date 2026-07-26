@@ -25,6 +25,9 @@ import healthRoute from "./routes/health.js";
 import authRoutes from "./routes/auth.js";
 import ingestRoutes from "./routes/ingest.js";
 import flowsRoutes from "./routes/flows.js";
+import kbRoutes from "./routes/kb.js";
+import suppressionRoutes from "./routes/suppressions.js";
+import templatesRoutes from "./routes/templates.js";
 
 export interface BuildAppOptions {
   /**
@@ -112,9 +115,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   //
   // Route registrations are added as tasks are implemented:
   //   v1.register(contactsRoutes,  { prefix: "/contacts" });   // task 8+
-  //   v1.register(flowsRoutes,     { prefix: "/flows" });       // task 10
+  //   v1.register(flowsRoutes,     { prefix: "/flows" });       // task 10 ✓
+  //   v1.register(kbRoutes,        { prefix: "/kb" });          // task 21 ✓
   //   v1.register(messagesRoutes,  { prefix: "/messages" });
-  //   v1.register(kbRoutes,        { prefix: "/kb" });          // task 21
   //   v1.register(templatesRoutes, { prefix: "/templates" });
   //   v1.register(analyticsRoutes, { prefix: "/analytics" });
   //   v1.register(settingsRoutes,  { prefix: "/settings" });
@@ -131,6 +134,21 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       // task 10: flow CRUD (dashboard operators only)
       if (opts.db) {
         await v1.register(flowsRoutes, { prefix: "/flows" });
+      }
+
+      // task 21: knowledge base CRUD (dashboard operators only)
+      if (opts.db) {
+        await v1.register(kbRoutes, { prefix: "/kb" });
+      }
+
+      // task 24: suppression list import + list (dashboard operators only)
+      if (opts.db) {
+        await v1.register(suppressionRoutes, { prefix: "/suppressions" });
+      }
+
+      // task 25: business model templates (dashboard operators only)
+      if (opts.db) {
+        await v1.register(templatesRoutes, { prefix: "/templates" });
       }
     },
     { prefix: "/v1" },

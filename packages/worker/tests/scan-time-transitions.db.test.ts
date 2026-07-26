@@ -68,6 +68,9 @@ beforeAll(async () => {
   await db.execute(
     sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`,
   );
+  await db.execute(
+    sql`DELETE FROM scan_checkpoints WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`,
+  );
   await db.execute(sql`DELETE FROM tenants WHERE slug = ${SLUG}`);
 
   // Create test tenant with default lifecycle config (natural_frequency_days=7)
@@ -97,6 +100,7 @@ afterAll(async () => {
   }
   await db.execute(sql`DELETE FROM lifecycle_transitions WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${testTenantId}`);
+  await db.execute(sql`DELETE FROM scan_checkpoints WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`DELETE FROM tenants WHERE slug = ${SLUG}`);
   await pool.end();
 });
@@ -157,7 +161,7 @@ describe("phaseTimeTransitions - basic transitions", () => {
     // at_risk threshold: 2 * 7 = 14 days
     const contactId = await insertContact("scan_engaged_1", "engaged", daysAgo(14));
 
-    await phaseTimeTransitions(db, now);
+    await phaseTimeTransitions(db, now, [testTenantId]);
 
     expect(await getContactState(contactId)).toBe("at_risk");
     const transitions = await getTransitions(contactId);
@@ -172,7 +176,7 @@ describe("phaseTimeTransitions - basic transitions", () => {
     if (!dbAvailable) return;
     const contactId = await insertContact("scan_engaged_safe", "engaged", daysAgo(13));
 
-    await phaseTimeTransitions(db, now);
+    await phaseTimeTransitions(db, now, [testTenantId]);
 
     expect(await getContactState(contactId)).toBe("engaged");
     const transitions = await getTransitions(contactId);
@@ -183,7 +187,7 @@ describe("phaseTimeTransitions - basic transitions", () => {
     if (!dbAvailable) return;
     const contactId = await insertContact("scan_atrisk_1", "at_risk", daysAgo(30));
 
-    await phaseTimeTransitions(db, now);
+    await phaseTimeTransitions(db, now, [testTenantId]);
 
     expect(await getContactState(contactId)).toBe("dormant");
     const transitions = await getTransitions(contactId);
@@ -196,7 +200,7 @@ describe("phaseTimeTransitions - basic transitions", () => {
     if (!dbAvailable) return;
     const contactId = await insertContact("scan_dormant_1", "dormant", daysAgo(90));
 
-    await phaseTimeTransitions(db, now);
+    await phaseTimeTransitions(db, now, [testTenantId]);
 
     expect(await getContactState(contactId)).toBe("churned");
     const transitions = await getTransitions(contactId);
@@ -210,7 +214,7 @@ describe("phaseTimeTransitions - basic transitions", () => {
     // Within natural_frequency_days (7): 3 days ago
     const contactId = await insertContact("scan_resurrected_1", "resurrected", daysAgo(3));
 
-    await phaseTimeTransitions(db, now);
+    await phaseTimeTransitions(db, now, [testTenantId]);
 
     expect(await getContactState(contactId)).toBe("engaged");
     const transitions = await getTransitions(contactId);
@@ -223,7 +227,7 @@ describe("phaseTimeTransitions - basic transitions", () => {
     if (!dbAvailable) return;
     const contactId = await insertContact("scan_resurrected_stale", "resurrected", daysAgo(8));
 
-    await phaseTimeTransitions(db, now);
+    await phaseTimeTransitions(db, now, [testTenantId]);
 
     expect(await getContactState(contactId)).toBe("resurrected");
     const transitions = await getTransitions(contactId);
@@ -234,7 +238,7 @@ describe("phaseTimeTransitions - basic transitions", () => {
     if (!dbAvailable) return;
     const contactId = await insertContact("scan_activated_stale", "activated", daysAgo(7));
 
-    await phaseTimeTransitions(db, now);
+    await phaseTimeTransitions(db, now, [testTenantId]);
 
     expect(await getContactState(contactId)).toBe("engaged");
     const transitions = await getTransitions(contactId);
@@ -247,7 +251,7 @@ describe("phaseTimeTransitions - basic transitions", () => {
     if (!dbAvailable) return;
     const contactId = await insertContact("scan_activated_fresh", "activated", daysAgo(6));
 
-    await phaseTimeTransitions(db, now);
+    await phaseTimeTransitions(db, now, [testTenantId]);
 
     expect(await getContactState(contactId)).toBe("activated");
     const transitions = await getTransitions(contactId);
@@ -259,7 +263,7 @@ describe("phaseTimeTransitions - basic transitions", () => {
     // Insert a contact that will transition
     await insertContact("scan_stats_1", "engaged", daysAgo(20));
 
-    const result = await phaseTimeTransitions(db, now);
+    const result = await phaseTimeTransitions(db, now, [testTenantId]);
 
     expect(result.tenantsProcessed).toBeGreaterThanOrEqual(1);
     expect(result.contactsEvaluated).toBeGreaterThanOrEqual(1);
@@ -356,11 +360,11 @@ describe("concurrency: two overlapping scans write exactly one audit row", () =>
 
     // Both scan invocations will try to transition the same contact
     const callerA = gate.callerFn(async () => {
-      return phaseTimeTransitions(db, now);
+      return phaseTimeTransitions(db, now, [testTenantId]);
     });
 
     const callerB = gate.callerFn(async () => {
-      return phaseTimeTransitions(db, now);
+      return phaseTimeTransitions(db, now, [testTenantId]);
     });
 
     const promises = [callerA(), callerB()];
@@ -436,7 +440,7 @@ describe("concurrency: scan racing a concurrent ingest transition", () => {
 
     // Caller B: the scan tries to transition at_risk -> dormant
     const callerB = gate.callerFn(async () => {
-      return phaseTimeTransitions(db, now);
+      return phaseTimeTransitions(db, now, [testTenantId]);
     });
 
     const promises = [callerA(), callerB()];

@@ -11,9 +11,9 @@ describe("@claros/brain-oss", () => {
     expect(typeof brain.draft).toBe("function");
   });
 
-  it("decide returns a noop action (placeholder)", async () => {
+  it("decide stub returns skip (sends nothing until real prompts are wired)", async () => {
     const brain = createOssBrain({});
     const result = await brain.decide({});
-    expect(result.action).toBe("noop");
+    expect(result.action).toBe("skip");
   });
 });

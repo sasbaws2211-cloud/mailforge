@@ -119,9 +119,27 @@ vi.mock("../src/reap.js", () => ({
   })),
 }));
 
+// Mock content module to avoid DB calls in unit tests
+vi.mock("../src/content.js", () => ({
+  processContentTick: vi.fn(async () => ({
+    claimed: 0,
+    advanced: 0,
+    skipped: 0,
+    errors: 0,
+  })),
+}));
+
 // Mock transport module to avoid import issues in unit tests
 vi.mock("../src/transport.js", () => ({
   nullTransportResolver: vi.fn(async () => null),
+}));
+
+// Mock embed-kb module to avoid fetch calls in unit tests
+vi.mock("../src/embed-kb.js", () => ({
+  handleKbEmbedJob: vi.fn(async () => undefined),
+  EMBEDDING_MAX_CHARS: 32_000,
+  DEFAULT_EMBEDDING_MODEL: "text-embedding-3-small",
+  EmbeddingPermanentError: class EmbeddingPermanentError extends Error {},
 }));
 
 // ---------------------------------------------------------------------------

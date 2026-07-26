@@ -23,8 +23,9 @@
 import { PgBoss, fromDrizzle } from "pg-boss";
 import type { Job } from "pg-boss";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { QUEUE, type ScanJobData, type CompileJobData, type TriggerCheckJobData, type DrainJobData, type ReapJobData, type CounterRolloverJobData, type PartitionMaintenanceJobData } from "@claros/core";
+import { QUEUE, type ScanJobData, type CompileJobData, type TriggerCheckJobData, type DrainJobData, type ReapJobData, type CounterRolloverJobData, type PartitionMaintenanceJobData, type ContentGenerationJobData, type KbEmbedJobData } from "@claros/core";
 import { handleCompileJob } from "./compile.js";
+import { handleKbEmbedJob } from "./embed-kb.js";
 import { phaseTimeTransitions } from "./scan-time-transitions.js";
 import { phaseEnrollment } from "./scan-enrollment.js";
 import { phaseStepAdvancement } from "./scan-step-advancement.js";
@@ -34,6 +35,7 @@ import { processDrainTick, fetchDrainBatchSimple, type FetchDrainBatch } from ".
 import { processReapTick } from "./reap.js";
 import { processCounterRollover } from "./counter-rollover.js";
 import { processPartitionMaintenance } from "./partition-maintenance.js";
+import { processContentTick } from "./content.js";
 import { nullTransportResolver, type TransportResolver } from "./transport.js";
 
 export { fromDrizzle };
@@ -47,6 +49,25 @@ export { processCounterRollover } from "./counter-rollover.js";
 export type { CounterRolloverResult } from "./counter-rollover.js";
 export { processPartitionMaintenance } from "./partition-maintenance.js";
 export type { PartitionMaintenanceResult } from "./partition-maintenance.js";
+export { processContentTick, claimContentBatch } from "./content.js";
+export type { ContentTickResult, ContentCandidate } from "./content.js";
+export { handleKbEmbedJob, EMBEDDING_MAX_CHARS, DEFAULT_EMBEDDING_MODEL } from "./embed-kb.js";
+export { EmbeddingPermanentError, resolveEmbeddingProvider, callEmbedding } from "./embedding-client.js";
+export { buildKbContextSection, KB_MAX_RESULTS, KB_SIMILARITY_FLOOR } from "./context-kb.js";
+export { assembleContext } from "./context-assembler.js";
+export type { AssembledContext } from "./context-assembler.js";
+export {
+  estimateTokens,
+  estimateTokensFromMessages,
+  estimateDecideTokens,
+  estimateAssessTokens,
+  checkAssessBudget,
+  applyBudgetTruncation,
+  applyBudgetForBothPaths,
+  draftContextToDecideContext,
+  MAX_CONTEXT_TOKENS,
+} from "./context-budget.js";
+export type { TruncationResult, DroppableSection } from "./context-budget.js";
 export const CLAROS_WORKER_VERSION = "0.0.0";
 
 type Db = NodePgDatabase<Record<string, never>>;
@@ -106,6 +127,8 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
   await boss.createQueue(QUEUE.REAP);
   await boss.createQueue(QUEUE.COUNTER_ROLLOVER);
   await boss.createQueue(QUEUE.PARTITION_MAINTENANCE);
+  await boss.createQueue(QUEUE.CONTENT_GENERATION);
+  await boss.createQueue(QUEUE.KB_EMBED);
 
   await boss.work<ScanJobData>(
     QUEUE.SCAN,
@@ -230,8 +253,8 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
     { pollingIntervalSeconds: 5 },
     async (jobs: Job<ReapJobData>[]) => {
       // Reap runs as a single cron-triggered job (every hour).
-      // Finds messages stuck in 'sending' or 'generating' for > 2h and
-      // either retries them or marks them failed after MAX_RETRY_COUNT.
+      // Finds messages stuck in 'sending', 'generating', or 'awaiting_content'
+      // for > 2h and either retries them or marks them failed after MAX_RETRY_COUNT.
       const now = new Date();
       const result = await processReapTick(db, now);
 
@@ -239,12 +262,15 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
         result.sendingRetried +
         result.sendingFailed +
         result.generatingRetried +
-        result.generatingFailed;
+        result.generatingFailed +
+        result.awaitingContentRetried +
+        result.awaitingContentFailed;
 
       if (total > 0) {
         console.log(
           `[reap] tick: sending retried=${result.sendingRetried} failed=${result.sendingFailed}, ` +
-            `generating retried=${result.generatingRetried} failed=${result.generatingFailed}`,
+            `generating retried=${result.generatingRetried} failed=${result.generatingFailed}, ` +
+            `awaiting_content retried=${result.awaitingContentRetried} failed=${result.awaitingContentFailed}`,
         );
       }
 
@@ -285,6 +311,51 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
       }
 
       void jobs;
+    },
+  );
+
+  await boss.work<ContentGenerationJobData>(
+    QUEUE.CONTENT_GENERATION,
+    { pollingIntervalSeconds: 5 },
+    async (jobs: Job<ContentGenerationJobData>[]) => {
+      // Content generation runs every 5 min. Claims pending_generation
+      // messages, runs Brain decide+draft (stubbed in this slice), and
+      // advances to awaiting_content.
+      const now = new Date();
+      const result = await processContentTick(db, now);
+
+      const total = result.claimed;
+      if (total > 0) {
+        console.log(
+          `[content-generation] tick: ${result.claimed} claimed, ` +
+            `${result.advanced} advanced, ${result.skipped} skipped, ` +
+            `${result.valueGated} value_gated, ${result.errors} errors`,
+        );
+      }
+
+      void jobs;
+    },
+  );
+
+  await boss.work<KbEmbedJobData>(
+    QUEUE.KB_EMBED,
+    { pollingIntervalSeconds: 5 },
+    async (jobs: Job<KbEmbedJobData>[]) => {
+      // KB embedding: generate and store a pgvector embedding for a single
+      // kb_entries row. Each job carries { kb_entry_id, tenant_id }.
+      // singletonKey = kb_entry_id ensures only one job per entry is active.
+      for (const job of jobs) {
+        try {
+          await handleKbEmbedJob(job.data, db);
+        } catch (err) {
+          console.error(
+            `[kb-embed] error for entry ${job.data.kb_entry_id}:`,
+            err,
+          );
+          // Throw so pg-boss marks the job as failed and retries per retryLimit.
+          throw err;
+        }
+      }
     },
   );
 }

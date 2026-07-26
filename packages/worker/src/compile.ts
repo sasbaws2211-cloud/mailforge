@@ -4,12 +4,11 @@
  * Job flow:
  * 1. Read the flow row (tenant-scoped).
  * 2. Check compile_status is still 'pending' (CAS guard).
- * 3. Read the tenant's active llm_configs row and decrypt it.
- * 4. Build an LLM provider from the decrypted config.
- * 5. Resolve available @template and @kb references for the prompt context.
- * 6. Call compile() from brain-oss.
- * 7. On success: write compiled_plan, compiled_at, compile_status = 'ready'.
- * 8. On failure: write compile_status = 'failed', compile_error.
+ * 3. Resolve the tenant's LLM provider via resolveTenantProvider().
+ * 4. Resolve available @template and @kb references for the prompt context.
+ * 5. Call compile() from brain-oss.
+ * 6. On success: write compiled_plan, compiled_at, compile_status = 'ready'.
+ * 7. On failure: write compile_status = 'failed', compile_error.
  *
  * CAS semantics: the worker only writes if compile_status is still 'pending'.
  * If the prompt changed while the job was in flight (status reset to null by
@@ -19,15 +18,13 @@
  */
 import { eq, and } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { flows, llmConfigs, templates, kbEntries } from "@claros/db/schema";
-import { decrypt, parseEncryptionKey } from "@claros/adapters";
+import { flows, templates, kbEntries } from "@claros/db/schema";
 import {
   compile,
-  OpenAICompatibleProvider,
-  type LlmProviderConfig,
   type CompilePromptContext,
 } from "@claros/brain-oss";
 import type { CompileJobData } from "@claros/core";
+import { resolveTenantProvider } from "./provider-resolver.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -71,41 +68,15 @@ export async function handleCompileJob(
     return;
   }
 
-  // 4. Read the tenant's active LLM config
-  const llmRows = await db
-    .select()
-    .from(llmConfigs)
-    .where(and(eq(llmConfigs.tenantId, tenant_id), eq(llmConfigs.isActive, true)))
-    .limit(1);
-
-  if (llmRows.length === 0) {
-    await markFailed(db, flow_id, "No LLM configuration found. Add an LLM provider in Settings before compiling flows.");
+  // 4. Resolve the tenant's LLM provider (DB lookup + decrypt)
+  const providerResult = await resolveTenantProvider(db, tenant_id);
+  if (!providerResult.ok) {
+    await markFailed(db, flow_id, providerResult.reason);
     return;
   }
+  const { provider } = providerResult;
 
-  const llmConfig = llmRows[0]!;
-
-  // 5. Decrypt the LLM config
-  const encryptionKeyEnv = process.env.ENCRYPTION_KEY;
-  if (!encryptionKeyEnv) {
-    await markFailed(db, flow_id, "ENCRYPTION_KEY environment variable is not set. Required for decrypting LLM credentials.");
-    return;
-  }
-
-  let providerConfig: LlmProviderConfig;
-  try {
-    const key = parseEncryptionKey(encryptionKeyEnv);
-    const decrypted = decrypt(llmConfig.config, key);
-    providerConfig = JSON.parse(decrypted) as LlmProviderConfig;
-  } catch (err) {
-    await markFailed(db, flow_id, `Failed to decrypt LLM configuration: ${err instanceof Error ? err.message : String(err)}`);
-    return;
-  }
-
-  // 6. Build provider
-  const provider = new OpenAICompatibleProvider(providerConfig);
-
-  // 7. Resolve available templates and KB entries for the prompt context
+  // 5. Resolve available templates and KB entries for the prompt context
   const [templateRows, kbRows] = await Promise.all([
     db
       .select({ slug: templates.slug })
@@ -125,10 +96,10 @@ export async function handleCompileJob(
     availableKbEntries: kbRows.map((r) => r.title),
   };
 
-  // 8. Call compile
+  // 6. Call compile
   const result = await compile(provider, ctx);
 
-  // 9. Write result with CAS (only if still pending)
+  // 7. Write result with CAS (only if still pending)
   if (result.ok) {
     const updated = await db
       .update(flows)

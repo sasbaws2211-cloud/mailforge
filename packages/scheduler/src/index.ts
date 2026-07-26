@@ -37,7 +37,7 @@ export async function startScheduler(boss: PgBoss): Promise<void> {
   await boss.schedule(QUEUE.DRAIN, "*/15 * * * *", {});
 
   // reap: every 60 minutes (matches REAP_INTERVAL_MINUTES from Appendix B).
-  // Recovers messages stuck in 'sending' or 'generating' for > 2h.
+  // Recovers messages stuck in 'sending', 'generating', or 'awaiting_content' for > 2h.
   // Interval differs from drain: a message must be stuck for 2h before reap
   // acts; running reap more frequently would be redundant for most of that window.
   await boss.schedule(QUEUE.REAP, "0 * * * *", {});
@@ -51,4 +51,9 @@ export async function startScheduler(boss: PgBoss): Promise<void> {
   // on the events table exist for current month + 2 months ahead.
   // Idempotent and cheap (pg_class lookup) when partitions already exist.
   await boss.schedule(QUEUE.PARTITION_MAINTENANCE, "*/15 * * * *", {});
+
+  // content-generation: every 5 minutes. Claims pending_generation messages
+  // and runs Brain decide+draft. More frequent than drain because LLM calls
+  // have latency; smaller batches processed more often keeps pipeline moving.
+  await boss.schedule(QUEUE.CONTENT_GENERATION, "*/5 * * * *", {});
 }

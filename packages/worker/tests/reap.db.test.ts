@@ -6,6 +6,8 @@
  * - sending stuck > 2h, retry_count = MAX: set to 'failed', logged
  * - generating stuck > 2h, retry_count < MAX: reset to 'pending_generation', retry_count++
  * - generating stuck > 2h, retry_count = MAX: set to 'failed'
+ * - awaiting_content stuck > 2h, retry_count < MAX: reset to 'pending_generation' (step 0 fix)
+ * - awaiting_content stuck > 2h, retry_count = MAX: set to 'failed' (no infinite loop)
  * - fresh messages (updated_at within 2h) are not touched
  * - messages in other statuses (approved, sent, failed, suppressed) are not touched
  * - PgGate race: reap resets 'sending' to 'approved' while drain is about to write 'sent';
@@ -104,6 +106,9 @@ async function cleanup() {
   );
   await db.execute(
     sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`,
+  );
+  await db.execute(
+    sql`DELETE FROM scan_checkpoints WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`,
   );
   await db.execute(sql`DELETE FROM tenants WHERE slug = ${SLUG}`);
 }
@@ -244,7 +249,7 @@ describe("reap worker", () => {
         updatedAt: stuckAt,
       });
 
-      const result = await processReapTick(db, now);
+      const result = await processReapTick(db, now, [testTenantId]);
 
       expect(result.sendingRetried).toBe(1);
       expect(result.sendingFailed).toBe(0);
@@ -274,7 +279,7 @@ describe("reap worker", () => {
         updatedAt: stuckAt,
       });
 
-      const result = await processReapTick(db, now);
+      const result = await processReapTick(db, now, [testTenantId]);
 
       expect(result.sendingRetried).toBe(1);
       expect(result.sendingFailed).toBe(0);
@@ -302,7 +307,7 @@ describe("reap worker", () => {
         updatedAt: stuckAt,
       });
 
-      const result = await processReapTick(db, now);
+      const result = await processReapTick(db, now, [testTenantId]);
 
       expect(result.sendingRetried).toBe(0);
       expect(result.sendingFailed).toBe(1);
@@ -329,7 +334,7 @@ describe("reap worker", () => {
         updatedAt: stuckAt,
       });
 
-      const result = await processReapTick(db, now);
+      const result = await processReapTick(db, now, [testTenantId]);
 
       expect(result.generatingRetried).toBe(1);
       expect(result.generatingFailed).toBe(0);
@@ -359,7 +364,7 @@ describe("reap worker", () => {
         updatedAt: stuckAt,
       });
 
-      const result = await processReapTick(db, now);
+      const result = await processReapTick(db, now, [testTenantId]);
 
       expect(result.generatingFailed).toBe(1);
       expect(result.generatingRetried).toBe(0);
@@ -387,7 +392,7 @@ describe("reap worker", () => {
         updatedAt: recentAt,
       });
 
-      const result = await processReapTick(db, now);
+      const result = await processReapTick(db, now, [testTenantId]);
 
       expect(result.sendingRetried).toBe(0);
       expect(result.sendingFailed).toBe(0);
@@ -422,7 +427,7 @@ describe("reap worker", () => {
         inserted.push({ id, status });
       }
 
-      const result = await processReapTick(db, now);
+      const result = await processReapTick(db, now, [testTenantId]);
 
       expect(result.sendingRetried).toBe(0);
       expect(result.sendingFailed).toBe(0);
@@ -469,7 +474,7 @@ describe("reap worker", () => {
         }));
       }
 
-      const result = await processReapTick(db, now);
+      const result = await processReapTick(db, now, [testTenantId]);
 
       expect(result.sendingRetried).toBe(3);
       expect(result.generatingRetried).toBe(2);
@@ -508,7 +513,7 @@ describe("reap worker", () => {
       });
 
       // Step 1: Reap runs and resets the message to 'approved'.
-      const reapResult = await processReapTick(db, now);
+      const reapResult = await processReapTick(db, now, [testTenantId]);
       expect(reapResult.sendingRetried).toBe(1);
 
       const afterReap = await getMessage(messageId);
@@ -572,7 +577,7 @@ describe("reap worker", () => {
 
       // Now reap runs. updated_at was just refreshed to now, so it is no longer
       // older than the 2h threshold. Reap should not touch it.
-      const reapResult = await processReapTick(db, now);
+      const reapResult = await processReapTick(db, now, [testTenantId]);
 
       expect(reapResult.sendingRetried).toBe(0);
       expect(reapResult.sendingFailed).toBe(0);
@@ -580,6 +585,79 @@ describe("reap worker", () => {
       const final = await getMessage(messageId);
       // Drain state preserved; 'sent' is a non-target status for reap.
       expect(final.status).toBe("sent");
+    });
+  });
+
+  describe("awaiting_content: stuck draft / gate / process crash (step 0 fix)", () => {
+    it("awaiting_content stuck > 2h, retry_count < MAX: reset to pending_generation, retry_count++", async () => {
+      if (!dbAvailable) return;
+      const now = new Date("2026-07-21T12:00:00Z");
+      const contactId = await insertContact("ac-reap-retry");
+      const flowId = await insertFlow();
+      const membershipId = await insertMembership(contactId, flowId);
+      const stuckAt = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+      const messageId = await insertMessage({
+        contactId, flowId, membershipId,
+        status: "awaiting_content",
+        retryCount: 0,
+        updatedAt: stuckAt,
+      });
+
+      const result = await processReapTick(db, now, [testTenantId]);
+
+      expect(result.awaitingContentRetried).toBe(1);
+      expect(result.awaitingContentFailed).toBe(0);
+
+      const msg = await getMessage(messageId);
+      expect(msg.status).toBe("pending_generation");
+      expect(msg.retryCount).toBe(1);
+    });
+
+    it("awaiting_content stuck > 2h, retry_count = MAX: set to failed (no infinite loop)", async () => {
+      if (!dbAvailable) return;
+      const now = new Date("2026-07-21T12:00:00Z");
+      const contactId = await insertContact("ac-reap-fail");
+      const flowId = await insertFlow();
+      const membershipId = await insertMembership(contactId, flowId);
+      const stuckAt = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+      const messageId = await insertMessage({
+        contactId, flowId, membershipId,
+        status: "awaiting_content",
+        retryCount: 3, // = MAX_RETRY_COUNT
+        updatedAt: stuckAt,
+      });
+
+      const result = await processReapTick(db, now, [testTenantId]);
+
+      expect(result.awaitingContentFailed).toBe(1);
+      expect(result.awaitingContentRetried).toBe(0);
+
+      const msg = await getMessage(messageId);
+      expect(msg.status).toBe("failed");
+    });
+
+    it("awaiting_content fresh (< 2h) is not touched", async () => {
+      if (!dbAvailable) return;
+      const now = new Date("2026-07-21T12:00:00Z");
+      const contactId = await insertContact("ac-reap-fresh");
+      const flowId = await insertFlow();
+      const membershipId = await insertMembership(contactId, flowId);
+      // Only 30 minutes old - not stuck
+      const freshAt = new Date(now.getTime() - 30 * 60 * 1000);
+      const messageId = await insertMessage({
+        contactId, flowId, membershipId,
+        status: "awaiting_content",
+        retryCount: 0,
+        updatedAt: freshAt,
+      });
+
+      const result = await processReapTick(db, now, [testTenantId]);
+
+      expect(result.awaitingContentRetried).toBe(0);
+      expect(result.awaitingContentFailed).toBe(0);
+
+      const msg = await getMessage(messageId);
+      expect(msg.status).toBe("awaiting_content"); // untouched
     });
   });
 });

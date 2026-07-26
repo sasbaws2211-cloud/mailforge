@@ -69,10 +69,16 @@ export interface PhaseTimeTransitionsResult {
 /**
  * Phase 1 of the scan: evaluate time-driven lifecycle transitions for all
  * tenants. Returns aggregate stats for observability.
+ *
+ * @param db - Drizzle database instance.
+ * @param now - Current time (injected for testability).
+ * @param tenantIds - Optional tenant scope. When provided, only these tenants
+ *   are processed. When omitted, all tenants are processed (production default).
  */
 export async function phaseTimeTransitions(
   db: Db,
   now: Date,
+  tenantIds?: string[],
 ): Promise<PhaseTimeTransitionsResult> {
   const stats: PhaseTimeTransitionsResult = {
     tenantsProcessed: 0,
@@ -81,11 +87,20 @@ export async function phaseTimeTransitions(
     appliedTransitions: [],
   };
 
-  // Load all tenants (small cardinality - no pagination needed).
-  const tenantRows = await db
-    .select({ id: tenants.id, settings: tenants.settings })
-    .from(tenants)
-    .orderBy(tenants.id);
+  // Load tenants: use provided list or discover all.
+  let tenantRows: { id: string; settings: unknown }[];
+  if (tenantIds && tenantIds.length > 0) {
+    tenantRows = await db
+      .select({ id: tenants.id, settings: tenants.settings })
+      .from(tenants)
+      .where(inArray(tenants.id, tenantIds))
+      .orderBy(tenants.id);
+  } else {
+    tenantRows = await db
+      .select({ id: tenants.id, settings: tenants.settings })
+      .from(tenants)
+      .orderBy(tenants.id);
+  }
 
   for (const tenant of tenantRows) {
     const settings = tenant.settings as Record<string, unknown> | null | undefined;

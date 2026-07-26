@@ -138,6 +138,9 @@ async function cleanup() {
   await db.execute(
     sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`,
   );
+  await db.execute(
+    sql`DELETE FROM scan_checkpoints WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`,
+  );
   await db.execute(sql`DELETE FROM tenants WHERE slug = ${SLUG}`);
 }
 

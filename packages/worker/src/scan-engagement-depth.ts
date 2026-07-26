@@ -62,10 +62,16 @@ export interface PhaseEngagementDepthResult {
 /**
  * Phase 4 of the scan: compute and write engagement_depth for all engaged
  * contacts across all tenants.
+ *
+ * @param db - Drizzle database instance.
+ * @param now - Current time (injected for testability).
+ * @param tenantIds - Optional tenant scope. When provided, only these tenants
+ *   are processed. When omitted, all tenants are processed (production default).
  */
 export async function phaseEngagementDepth(
   db: Db,
   now: Date,
+  tenantIds?: string[],
 ): Promise<PhaseEngagementDepthResult> {
   const stats: PhaseEngagementDepthResult = {
     tenantsProcessed: 0,
@@ -73,10 +79,20 @@ export async function phaseEngagementDepth(
     contactsUnchanged: 0,
   };
 
-  const tenantRows = await db
-    .select({ id: tenants.id, settings: tenants.settings })
-    .from(tenants)
-    .orderBy(tenants.id);
+  // Load tenants: use provided list or discover all.
+  let tenantRows: { id: string; settings: unknown }[];
+  if (tenantIds && tenantIds.length > 0) {
+    tenantRows = await db
+      .select({ id: tenants.id, settings: tenants.settings })
+      .from(tenants)
+      .where(inArray(tenants.id, tenantIds))
+      .orderBy(tenants.id);
+  } else {
+    tenantRows = await db
+      .select({ id: tenants.id, settings: tenants.settings })
+      .from(tenants)
+      .orderBy(tenants.id);
+  }
 
   for (const tenant of tenantRows) {
     const settings = tenant.settings as Record<string, unknown> | null | undefined;

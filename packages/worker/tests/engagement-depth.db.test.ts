@@ -77,6 +77,9 @@ beforeAll(async () => {
   await db.execute(
     sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG}, 'test-depth-isolation-other'))`,
   );
+  await db.execute(
+    sql`DELETE FROM scan_checkpoints WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG}, 'test-depth-isolation-other'))`,
+  );
   await db.execute(sql`DELETE FROM tenants WHERE slug IN (${SLUG}, 'test-depth-isolation-other')`);
 
   // Create test tenant with default lifecycle config
@@ -103,7 +106,9 @@ afterAll(async () => {
     await pool.end();
     return;
   }
+  await db.execute(sql`DELETE FROM events WHERE tenant_id = ${tenantId}`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${tenantId}`);
+  await db.execute(sql`DELETE FROM scan_checkpoints WHERE tenant_id = ${tenantId}`);
   await db.execute(sql`DELETE FROM tenants WHERE id = ${tenantId}`);
   await pool.end();
 });
@@ -177,7 +182,7 @@ describe("phaseEngagementDepth - rate-based buckets (cohort < 10, power suppress
     if (!dbAvailable) return;
     const cId = await insertContact("ed_minimal_1", "engaged");
     await insertEvents(cId, 1);
-    await phaseEngagementDepth(db, NOW);
+    await phaseEngagementDepth(db, NOW, [tenantId]);
     expect(await getDepth(cId)).toBe("minimal");
   });
 
@@ -185,7 +190,7 @@ describe("phaseEngagementDepth - rate-based buckets (cohort < 10, power suppress
     if (!dbAvailable) return;
     const cId = await insertContact("ed_minimal_2", "engaged");
     await insertEvents(cId, 2);
-    await phaseEngagementDepth(db, NOW);
+    await phaseEngagementDepth(db, NOW, [tenantId]);
     expect(await getDepth(cId)).toBe("minimal");
   });
 
@@ -193,7 +198,7 @@ describe("phaseEngagementDepth - rate-based buckets (cohort < 10, power suppress
     if (!dbAvailable) return;
     const cId = await insertContact("ed_casual_3", "engaged");
     await insertEvents(cId, 3);
-    await phaseEngagementDepth(db, NOW);
+    await phaseEngagementDepth(db, NOW, [tenantId]);
     expect(await getDepth(cId)).toBe("casual");
   });
 
@@ -201,7 +206,7 @@ describe("phaseEngagementDepth - rate-based buckets (cohort < 10, power suppress
     if (!dbAvailable) return;
     const cId = await insertContact("ed_casual_4", "engaged");
     await insertEvents(cId, 4);
-    await phaseEngagementDepth(db, NOW);
+    await phaseEngagementDepth(db, NOW, [tenantId]);
     expect(await getDepth(cId)).toBe("casual");
   });
 
@@ -209,7 +214,7 @@ describe("phaseEngagementDepth - rate-based buckets (cohort < 10, power suppress
     if (!dbAvailable) return;
     const cId = await insertContact("ed_regular_5", "engaged");
     await insertEvents(cId, 5);
-    await phaseEngagementDepth(db, NOW);
+    await phaseEngagementDepth(db, NOW, [tenantId]);
     expect(await getDepth(cId)).toBe("regular");
   });
 
@@ -217,7 +222,7 @@ describe("phaseEngagementDepth - rate-based buckets (cohort < 10, power suppress
     if (!dbAvailable) return;
     const cId = await insertContact("ed_regular_8", "engaged");
     await insertEvents(cId, 8);
-    await phaseEngagementDepth(db, NOW);
+    await phaseEngagementDepth(db, NOW, [tenantId]);
     // power is suppressed (cohort < 10) - falls through to regular
     expect(await getDepth(cId)).toBe("regular");
   });
@@ -262,7 +267,7 @@ describe("phaseEngagementDepth - power bucket with large enough cohort", () => {
     if (!dbAvailable) return;
     if (!powerContactId) return; // setup skipped
 
-    await phaseEngagementDepth(db, NOW);
+    await phaseEngagementDepth(db, NOW, [tenantId]);
     expect(await getDepth(powerContactId)).toBe("power");
   });
 
@@ -288,7 +293,7 @@ describe("phaseEngagementDepth - zero events in window", () => {
     // All their events are outside the 30-day window
     await insertOldEvents(cId, 5);
 
-    await phaseEngagementDepth(db, NOW);
+    await phaseEngagementDepth(db, NOW, [tenantId]);
 
     // Depth should remain "regular" (not overwritten with null or changed)
     expect(await getDepth(cId)).toBe("regular");
@@ -299,7 +304,7 @@ describe("phaseEngagementDepth - zero events in window", () => {
     const cId = await insertContact("ed_no_events_ever", "engaged", null);
     // No events inserted at all
 
-    await phaseEngagementDepth(db, NOW);
+    await phaseEngagementDepth(db, NOW, [tenantId]);
 
     expect(await getDepth(cId)).toBeNull();
   });
@@ -315,7 +320,7 @@ describe("phaseEngagementDepth - non-engaged contacts are skipped", () => {
     const cId = await insertContact("ed_atrisk_skip", "at_risk", "power");
     await insertEvents(cId, 20);
 
-    await phaseEngagementDepth(db, NOW);
+    await phaseEngagementDepth(db, NOW, [tenantId]);
 
     // Depth should remain "power" (preserved, not overwritten to "regular")
     expect(await getDepth(cId)).toBe("power");
@@ -326,7 +331,7 @@ describe("phaseEngagementDepth - non-engaged contacts are skipped", () => {
     const cId = await insertContact("ed_dormant_skip", "dormant", "casual");
     await insertEvents(cId, 10);
 
-    await phaseEngagementDepth(db, NOW);
+    await phaseEngagementDepth(db, NOW, [tenantId]);
 
     expect(await getDepth(cId)).toBe("casual");
   });
@@ -344,11 +349,11 @@ describe("phaseEngagementDepth - IS DISTINCT FROM prevents write amplification",
     await insertEvents(cId, 5); // regular
 
     // First run
-    const run1 = await phaseEngagementDepth(db, NOW);
+    const run1 = await phaseEngagementDepth(db, NOW, [tenantId]);
     expect(await getDepth(cId)).toBe("regular");
 
     // Capture updated count from second run (nothing changed)
-    const run2 = await phaseEngagementDepth(db, NOW);
+    const run2 = await phaseEngagementDepth(db, NOW, [tenantId]);
 
     // The second run should not have updated this contact
     // (it may update others in the same tenant, but this contact's depth is unchanged)
@@ -409,8 +414,9 @@ describe("phaseEngagementDepth - tenant isolation", () => {
       .set({ eventCountBucketCurrent: 10, eventCountBucketPrev: 0 })
       .where(sql`id = ${otherContactId}`);
 
-    // Run phase over all tenants
-    await phaseEngagementDepth(db, NOW);
+    // Run phase over both test tenants (scoped to avoid interference from
+    // other parallel test files)
+    await phaseEngagementDepth(db, NOW, [tenantId, otherTenantId]);
 
     // The other tenant contact should have been updated based on ITS own tenant's config
     const otherDepth = await db
@@ -424,6 +430,7 @@ describe("phaseEngagementDepth - tenant isolation", () => {
 
     // Cleanup other tenant
     await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${otherTenantId}`);
+    await db.execute(sql`DELETE FROM scan_checkpoints WHERE tenant_id = ${otherTenantId}`);
     await db.execute(sql`DELETE FROM tenants WHERE id = ${otherTenantId}`);
   });
 });
@@ -435,7 +442,7 @@ describe("phaseEngagementDepth - tenant isolation", () => {
 describe("phaseEngagementDepth - stats", () => {
   it("tenantsProcessed includes the test tenant", async () => {
     if (!dbAvailable) return;
-    const result = await phaseEngagementDepth(db, NOW);
+    const result = await phaseEngagementDepth(db, NOW, [tenantId]);
     expect(result.tenantsProcessed).toBeGreaterThanOrEqual(1);
   });
 
@@ -445,7 +452,7 @@ describe("phaseEngagementDepth - stats", () => {
     const cId = await insertContact("ed_stats_check", "engaged");
     await insertEvents(cId, 3);
 
-    const result = await phaseEngagementDepth(db, NOW);
+    const result = await phaseEngagementDepth(db, NOW, [tenantId]);
 
     // The sum of updated + unchanged must be at least 1 (this contact)
     expect(result.contactsUpdated + result.contactsUnchanged).toBeGreaterThanOrEqual(1);

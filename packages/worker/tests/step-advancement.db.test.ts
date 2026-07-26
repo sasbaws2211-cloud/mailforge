@@ -268,7 +268,7 @@ describe("phaseStepAdvancement - normal advancement", () => {
     });
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.messagesCreated).toBe(1);
     expect(result.stepsAdvanced).toBe(1);
@@ -309,7 +309,7 @@ describe("phaseStepAdvancement - normal advancement", () => {
     });
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.messagesCreated).toBe(0);
     expect(result.stepsAdvanced).toBe(0);
@@ -357,7 +357,7 @@ describe("phaseStepAdvancement - normal advancement", () => {
     // Now = Jul 20 12:00, step 1 message created Jul 19 12:00.
     // Step 2 delay = 2d. Elapsed = 1d. Should NOT advance.
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.messagesCreated).toBe(0);
     expect(result.stepsAdvanced).toBe(0);
@@ -400,7 +400,7 @@ describe("phaseStepAdvancement - normal advancement", () => {
     });
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.messagesCreated).toBe(1);
     expect(result.stepsAdvanced).toBe(1);
@@ -435,7 +435,7 @@ describe("phaseStepAdvancement - normal advancement", () => {
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.messagesCreated).toBe(1);
     expect(result.membershipsCompleted).toBe(1);
@@ -475,7 +475,7 @@ describe("phaseStepAdvancement - membership completion", () => {
     });
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.messagesCreated).toBe(1);
     expect(result.membershipsCompleted).toBe(1);
@@ -525,7 +525,7 @@ describe("phaseStepAdvancement - crash idempotency", () => {
     });
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     // Message was NOT created again (conflict hit)
     expect(result.messagesCreated).toBe(0);
@@ -569,7 +569,7 @@ describe("phaseStepAdvancement - flow status handling", () => {
     });
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.membershipsExitedArchived).toBe(1);
     expect(result.messagesCreated).toBe(0);
@@ -601,7 +601,7 @@ describe("phaseStepAdvancement - flow status handling", () => {
     });
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.membershipsSkippedPaused).toBe(1);
     expect(result.messagesCreated).toBe(0);
@@ -633,7 +633,7 @@ describe("phaseStepAdvancement - flow status handling", () => {
     });
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.membershipsSkippedPaused).toBe(1);
     expect(result.messagesCreated).toBe(0);
@@ -667,7 +667,7 @@ describe("phaseStepAdvancement - checkpoint behavior", () => {
     });
 
     const now = new Date("2026-07-20T12:00:00Z");
-    await phaseStepAdvancement(db, now);
+    await phaseStepAdvancement(db, now, [testTenantId]);
 
     // Checkpoint should be deleted after full pass
     const checkpoints = await db
@@ -711,7 +711,7 @@ describe("phaseStepAdvancement - checkpoint behavior", () => {
     });
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.staleCheckpointsDiscarded).toBe(1);
     // The pass should still complete (processes all memberships from start)
@@ -834,8 +834,8 @@ describe("concurrency: two scans advancing the same membership", () => {
     await gate.lock();
 
     // Both callers will try to advance the same membership
-    const callerA = gate.callerFn(async () => phaseStepAdvancement(db, now));
-    const callerB = gate.callerFn(async () => phaseStepAdvancement(db, now));
+    const callerA = gate.callerFn(async () => phaseStepAdvancement(db, now, [testTenantId]));
+    const callerB = gate.callerFn(async () => phaseStepAdvancement(db, now, [testTenantId]));
 
     const promises = [callerA(), callerB()];
     await gate.waitForAllBlocked();
@@ -937,7 +937,7 @@ describe("concurrency: membership advancing while lifecycle transition fires", (
     await gate.lock();
 
     // Caller A: step advancement (advances flow A step 2)
-    const callerA = gate.callerFn(async () => phaseStepAdvancement(db, now));
+    const callerA = gate.callerFn(async () => phaseStepAdvancement(db, now, [testTenantId]));
 
     // Caller B: enrollment of flow B via the at_risk->dormant transition
     const { phaseEnrollment } = await import("../src/scan-enrollment.js");
@@ -1010,7 +1010,7 @@ describe("phaseStepAdvancement - step-level condition (proceed-if gate)", () => 
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.stepsSkippedCondition).toBe(1);
     expect(result.messagesCreated).toBe(0);
@@ -1041,7 +1041,7 @@ describe("phaseStepAdvancement - step-level condition (proceed-if gate)", () => 
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.messagesCreated).toBe(1);
     expect(result.membershipsCompleted).toBe(1);
@@ -1071,7 +1071,7 @@ describe("phaseStepAdvancement - step-level condition (proceed-if gate)", () => 
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.messagesCreated).toBe(1);
     expect(result.membershipsCompleted).toBe(1);
@@ -1098,7 +1098,7 @@ describe("phaseStepAdvancement - step-level condition (proceed-if gate)", () => 
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.stepsSkippedCondition).toBe(1);
     const membership = await getMembership(membershipId);
@@ -1141,7 +1141,7 @@ describe("phaseStepAdvancement - step-level condition (proceed-if gate)", () => 
     await insertEvent(contactId, "feature_activated", new Date("2026-07-19T10:00:00Z"));
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.messagesCreated).toBe(1);
     expect(result.membershipsCompleted).toBe(1);
@@ -1183,7 +1183,7 @@ describe("phaseStepAdvancement - step-level condition (proceed-if gate)", () => 
     // No feature_activated event exists
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.stepsSkippedCondition).toBe(1);
     expect(result.messagesCreated).toBe(0);
@@ -1212,7 +1212,7 @@ describe("phaseStepAdvancement - step-level condition (proceed-if gate)", () => 
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.membershipsCompleted).toBe(1);
     expect(result.messagesCreated).toBe(0);
@@ -1248,7 +1248,7 @@ describe("phaseStepAdvancement - step-level exit_condition", () => {
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.membershipsExitedCondition).toBe(1);
     expect(result.messagesCreated).toBe(0);
@@ -1279,7 +1279,7 @@ describe("phaseStepAdvancement - step-level exit_condition", () => {
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.messagesCreated).toBe(1);
     expect(result.membershipsCompleted).toBe(1);
@@ -1315,7 +1315,7 @@ describe("phaseStepAdvancement - plan-level exit_conditions", () => {
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.membershipsExitedCondition).toBe(1);
     expect(result.messagesCreated).toBe(0);
@@ -1348,7 +1348,7 @@ describe("phaseStepAdvancement - plan-level exit_conditions", () => {
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     // Should proceed normally
     expect(result.membershipsExitedCondition).toBe(0);
@@ -1382,7 +1382,7 @@ describe("phaseStepAdvancement - plan-level exit_conditions", () => {
     await insertEvent(contactId, "user_converted", new Date("2026-07-19T10:00:00Z"));
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.membershipsExitedCondition).toBe(1);
     expect(result.messagesCreated).toBe(0);
@@ -1418,7 +1418,7 @@ describe("phaseStepAdvancement - plan-level exit_conditions", () => {
     await insertEvent(contactId, "user_converted", new Date("2026-07-17T10:00:00Z"));
 
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     // Should proceed normally (event before membership does not count)
     expect(result.membershipsExitedCondition).toBe(0);
@@ -1451,7 +1451,7 @@ describe("phaseStepAdvancement - plan-level exit_conditions", () => {
 
     // No event, but state matches - combined condition requires both
     const now = new Date("2026-07-20T12:00:00Z");
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     // Should NOT exit (event is missing)
     expect(result.membershipsExitedCondition).toBe(0);
@@ -1483,7 +1483,7 @@ describe("phaseStepAdvancement - condition_error handling", () => {
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.membershipsStuckConditionError).toBe(1);
     expect(result.messagesCreated).toBe(0);
@@ -1517,7 +1517,7 @@ describe("phaseStepAdvancement - condition_error handling", () => {
       enteredAt: now,
     });
 
-    const result = await phaseStepAdvancement(db, now);
+    const result = await phaseStepAdvancement(db, now, [testTenantId]);
 
     expect(result.membershipsStuckConditionError).toBe(1);
     expect(result.messagesCreated).toBe(0);
@@ -1548,7 +1548,7 @@ describe("phaseStepAdvancement - condition_error handling", () => {
     });
 
     // First pass: condition_error is recorded
-    await phaseStepAdvancement(db, now);
+    await phaseStepAdvancement(db, now, [testTenantId]);
     let membership = await getMembership(membershipId);
     expect(membership!.conditionError).not.toBeNull();
 
@@ -1566,7 +1566,7 @@ describe("phaseStepAdvancement - condition_error handling", () => {
       .where(eq(flows.id, flowId));
 
     // Second pass: condition_error is cleared and step proceeds
-    const result2 = await phaseStepAdvancement(db, now);
+    const result2 = await phaseStepAdvancement(db, now, [testTenantId]);
     expect(result2.messagesCreated).toBe(1);
     expect(result2.membershipsStuckConditionError).toBe(0);
 
@@ -1595,13 +1595,13 @@ describe("phaseStepAdvancement - condition_error handling", () => {
     });
 
     // First pass
-    await phaseStepAdvancement(db, now);
+    await phaseStepAdvancement(db, now, [testTenantId]);
     const membership1 = await getMembership(membershipId);
     const error1 = membership1!.conditionError;
 
     // Second pass - same error, should not generate a new UPDATE
     // (We cannot directly observe no-write, but we can verify the value is unchanged)
-    await phaseStepAdvancement(db, now);
+    await phaseStepAdvancement(db, now, [testTenantId]);
     const membership2 = await getMembership(membershipId);
     expect(membership2!.conditionError).toBe(error1);
   });
@@ -1642,7 +1642,7 @@ describe("concurrency: condition evaluation does not corrupt data when lifecycle
     await gate.lock();
 
     // Caller A: scan with condition evaluation
-    const callerA = gate.callerFn(async () => phaseStepAdvancement(db, now));
+    const callerA = gate.callerFn(async () => phaseStepAdvancement(db, now, [testTenantId]));
 
     // Caller B: lifecycle state change (simulating ingest-driven transition)
     const callerB = gate.callerFn(async () => {

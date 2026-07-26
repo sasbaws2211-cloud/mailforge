@@ -6,6 +6,22 @@
  */
 export const CLAROS_CORE_VERSION = "0.0.0";
 
+/**
+ * Maximum hours of clock skew tolerated between a client-supplied event
+ * timestamp and the server time at ingestion.
+ *
+ * The ingest route (packages/api/src/routes/ingest.ts) clamps any
+ * client-supplied timestamp to within +/- this many hours of server time.
+ * The context-events builder (packages/worker) adds this same value as a
+ * slack to the received_at partition-pruning bound so that events whose
+ * timestamp is inside a semantic window but whose received_at is slightly
+ * earlier (clock running ahead) are never excluded by the pruning filter.
+ *
+ * Both sides of the system derive from this single source so the values
+ * cannot drift independently.
+ */
+export const INGEST_TIMESTAMP_CLAMP_HOURS = 72;
+
 export {
   QUEUE,
   type QueueName,
@@ -16,6 +32,8 @@ export {
   type ReapJobData,
   type CounterRolloverJobData,
   type PartitionMaintenanceJobData,
+  type ContentGenerationJobData,
+  type KbEmbedJobData,
 } from "./jobs.js";
 
 export {
@@ -101,3 +119,21 @@ export {
   type ThrottleGateInput,
   type ThrottleVerdict,
 } from "./throttle/index.js";
+
+export {
+  decideOutputSchema,
+  draftOutputSchema,
+  assessOutputSchema,
+  type DecideOutput,
+  type DraftOutput,
+  type AssessOutput,
+} from "./brain.js";
+
+export {
+  BUSINESS_MODEL_TEMPLATES,
+  BUSINESS_MODEL_TEMPLATE_LIST,
+  BUSINESS_MODEL_IDS,
+  type BusinessModelId,
+  type BusinessModelTemplate,
+  type TemplateFlow,
+} from "./business-model-templates.js";

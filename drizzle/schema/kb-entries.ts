@@ -40,6 +40,15 @@ export const kbEntries = pgTable(
     sourceUrl: text("source_url"), // for crawled content
     tags: text("tags").array(),
     embedding: vector1536("embedding"),
+    // [impl] task 22: embedding lifecycle state tracking.
+    // Mirrors the compile_status/compile_error pattern on the flows table.
+    // null = never enqueued; 'pending' = job enqueued, not yet written;
+    // 'failed' = permanently failed (dimensionality mismatch, bad model, etc.)
+    // 'failed' entries carry the reason in embedding_error.
+    // When embedding is non-NULL, embedding_status is implicitly 'done' (no column
+    // needed: the vector itself is the evidence).
+    embeddingStatus: text("embedding_status"), // null|pending|failed
+    embeddingError: text("embedding_error"),   // human-readable reason when failed
     isActive: boolean("is_active").default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),

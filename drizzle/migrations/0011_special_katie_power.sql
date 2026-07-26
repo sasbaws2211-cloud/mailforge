@@ -1,0 +1,1 @@
+CREATE INDEX "idx_messages_generation" ON "lifecycle_messages" USING btree ("tenant_id","status","created_at") WHERE status IN ('pending_generation', 'generating');

@@ -30,7 +30,7 @@ export const lifecycleMessages = pgTable(
       .notNull()
       .references(() => flowMemberships.id),
     flowStepOrder: integer("flow_step_order"),
-    status: text("status").notNull(), // pending_generation|generating|awaiting_content|pending_approval|approved|sending|sent|failed|suppressed
+    status: text("status").notNull(), // pending_generation|generating|awaiting_content|pending_approval|approved|sending|sent|failed|suppressed|skipped|value_gated
     feedback: text("feedback"), // opened|clicked|bounced|complained - ADVANCE-ONLY (see BACKLOG.md "Advance-only feedback guards")
     subject: text("subject"),
     bodyHtml: text("body_html"),
@@ -65,5 +65,10 @@ export const lifecycleMessages = pgTable(
       table.membershipId,
       table.flowStepOrder
     ),
+    // Content generation worker query: pending_generation/generating messages.
+    // Analogous to idx_messages_drain for the drain worker.
+    index("idx_messages_generation")
+      .on(table.tenantId, table.status, table.createdAt)
+      .where(sql`status IN ('pending_generation', 'generating')`),
   ]
 );

@@ -54,7 +54,7 @@ export const QUEUE = {
   DRAIN: "claros.drain",
 
   /**
-   * Reap: recover messages stuck in 'sending' or 'generating' (every hour).
+   * Reap: recover messages stuck in 'sending', 'generating', or 'awaiting_content' (every hour).
    * Payload: empty - handler queries the database for stuck messages.
    * Handler: packages/worker (task 15).
    * Schedule: packages/scheduler, cron "0 * * * *" (top of every hour).
@@ -63,6 +63,8 @@ export const QUEUE = {
    * and its status has not advanced. Recovery:
    *   - 'sending' stuck > 2h: reset to 'approved', increment retry_count.
    *   - 'generating' stuck > 2h: reset to 'pending_generation', increment retry_count.
+   *   - 'awaiting_content' stuck > 2h: reset to 'pending_generation', increment retry_count.
+   *     (Covers failures in draft(), value gate, budget check, or process crash after decide().)
    *   - retry_count >= MAX_RETRY_COUNT (3): set to 'failed' (terminal).
    */
   REAP: "claros.reap",
@@ -85,6 +87,36 @@ export const QUEUE = {
    * Schedule: packages/scheduler, cron every 15 min (frequent + idempotent).
    */
   PARTITION_MAINTENANCE: "claros.partition-maintenance",
+
+  /**
+   * Content generation: claim pending_generation messages, run Brain decide+draft.
+   * Payload: empty - handler queries the database for pending_generation messages.
+   * Handler: packages/worker (task 17).
+   * Schedule: packages/scheduler, cron every 5 min.
+   *
+   * Uses FOR UPDATE SKIP LOCKED + CAS to claim messages atomically, same pattern
+   * as drain. Reap (task 15) recovers messages stuck at 'generating' after timeout.
+   */
+  CONTENT_GENERATION: "claros.content-generation",
+
+  /**
+   * KB embedding: generate a pgvector embedding for a single kb_entries row.
+   * Payload: kb_entry_id + tenant_id.
+   * Handler: packages/worker (task 22).
+   * Trigger: POST /v1/kb (on create) and PATCH /v1/kb/:id (when content changes).
+   *
+   * singletonKey = kb_entry_id: only one embedding job runs per entry at a time.
+   * A content update while an embedding is in flight cancels the stale job
+   * implicitly - the new job lands and uses the latest content row.
+   *
+   * Failure path: provider errors are retried via pg-boss retryLimit/retryDelay.
+   * A permanently failing entry remains identifiable: its embedding column stays
+   * NULL, and the pg-boss job table records the failure.
+   *
+   * Re-embedding is triggered only when content changes. Tag-only or other
+   * field-only updates must not enqueue this job.
+   */
+  KB_EMBED: "claros.kb-embed",
 } as const;
 
 export type QueueName = (typeof QUEUE)[keyof typeof QUEUE];
@@ -147,3 +179,20 @@ export type CounterRolloverJobData = Record<string, never>;
  * partition exists on the events table and creates it if missing.
  */
 export type PartitionMaintenanceJobData = Record<string, never>;
+
+/**
+ * CONTENT_GENERATION job: no payload. The worker queries the database for
+ * messages at 'pending_generation' status and runs Brain decide+draft on each.
+ * Cron-triggered; the scheduler sends an empty object every 5 minutes.
+ */
+export type ContentGenerationJobData = Record<string, never>;
+
+/**
+ * KB_EMBED job: identifies which kb_entries row to embed and the owning tenant.
+ * Enqueued by POST /v1/kb (on create) and PATCH /v1/kb/:id (when content changes).
+ * singletonKey = kb_entry_id so concurrent updates produce one embedding job.
+ */
+export interface KbEmbedJobData {
+  kb_entry_id: string;
+  tenant_id: string;
+}

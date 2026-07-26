@@ -92,10 +92,21 @@ describe("startScheduler - registration pattern", () => {
     expect(entry.cron).toBe("0 * * * *");
   });
 
+  it("registers a schedule for QUEUE.CONTENT_GENERATION", async () => {
+    await startScheduler(mockBoss as never);
+    expect(schedules.find((s) => s.queue === QUEUE.CONTENT_GENERATION)).toBeDefined();
+  });
+
+  it("CONTENT_GENERATION is scheduled with cron every 5 min", async () => {
+    await startScheduler(mockBoss as never);
+    const entry = schedules.find((s) => s.queue === QUEUE.CONTENT_GENERATION)!;
+    expect(entry.cron).toBe("*/5 * * * *");
+  });
+
   it("registers exactly as many schedules as there are cron-triggered queues", async () => {
     await startScheduler(mockBoss as never);
-    // Five cron schedules: SCAN + DRAIN + REAP + COUNTER_ROLLOVER + PARTITION_MAINTENANCE.
-    expect(schedules).toHaveLength(5);
+    // Six cron schedules: SCAN + DRAIN + REAP + COUNTER_ROLLOVER + PARTITION_MAINTENANCE + CONTENT_GENERATION.
+    expect(schedules).toHaveLength(6);
   });
 
   it("does NOT call boss.work()", async () => {

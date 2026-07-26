@@ -86,10 +86,16 @@ export interface PhaseStepAdvancementResult {
 /**
  * Phase 3 of the scan: advance steps and create messages for all active
  * memberships. Returns aggregate stats for observability.
+ *
+ * @param db - Drizzle database instance.
+ * @param now - Current time (injected for testability).
+ * @param tenantIds - Optional tenant scope. When provided, only these tenants
+ *   are processed. When omitted, all tenants are processed (production default).
  */
 export async function phaseStepAdvancement(
   db: Db,
   now: Date,
+  tenantIds?: string[],
 ): Promise<PhaseStepAdvancementResult> {
   const stats: PhaseStepAdvancementResult = {
     tenantsProcessed: 0,
@@ -105,11 +111,16 @@ export async function phaseStepAdvancement(
     staleCheckpointsDiscarded: 0,
   };
 
-  // Load all tenants (small cardinality).
-  const tenantRows = await db
-    .select({ id: tenants.id })
-    .from(tenants)
-    .orderBy(tenants.id);
+  // Load tenants: use provided list or discover all.
+  let tenantRows: { id: string }[];
+  if (tenantIds && tenantIds.length > 0) {
+    tenantRows = tenantIds.map((id) => ({ id }));
+  } else {
+    tenantRows = await db
+      .select({ id: tenants.id })
+      .from(tenants)
+      .orderBy(tenants.id);
+  }
 
   for (const tenant of tenantRows) {
     let tenantStats: TenantStepResult;

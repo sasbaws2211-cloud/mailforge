@@ -78,6 +78,27 @@
       "when": 1784978053718,
       "tag": "0010_lucky_ultimates",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785045017902,
+      "tag": "0011_special_katie_power",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785062948141,
+      "tag": "0012_spooky_ser_duncan",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1785092785338,
+      "tag": "0013_nifty_bloodscream",
+      "breakpoints": true
     }
   ]
 }

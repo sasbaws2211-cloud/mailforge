@@ -58,6 +58,7 @@ import {
   resolveLifecycleConfig,
   dedupLockKey,
   QUEUE,
+  INGEST_TIMESTAMP_CLAMP_HOURS,
   type LifecycleState,
   type LifecycleConfig,
 } from "@claros/core";
@@ -65,8 +66,12 @@ import type { Db } from "../plugins/db.js";
 
 // --- Constants ---
 
-/** Maximum hours of skew tolerated between client timestamp and server time. */
-const TIMESTAMP_CLAMP_HOURS = 72;
+/**
+ * Maximum hours of clock skew tolerated between client timestamp and server
+ * time. Sourced from @claros/core so the worker's partition-pruning slack
+ * and this ingest clamp share a single definition and cannot drift.
+ */
+const TIMESTAMP_CLAMP_HOURS = INGEST_TIMESTAMP_CLAMP_HOURS;
 
 /** Valid values for the payment_status column. */
 const VALID_PAYMENT_STATUSES = new Set([
