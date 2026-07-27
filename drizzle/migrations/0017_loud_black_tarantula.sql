@@ -1,0 +1,1 @@
+CREATE INDEX "idx_messages_provider_id" ON "lifecycle_messages" USING btree ("provider_message_id") WHERE provider_message_id IS NOT NULL;

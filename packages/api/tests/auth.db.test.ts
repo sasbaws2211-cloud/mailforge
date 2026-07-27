@@ -17,7 +17,7 @@
  * unit tests (token utilities, isConsoleLoginAllowed) always run.
  * In CI (CI=true): connection failure is fatal.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
@@ -29,6 +29,7 @@ import {
   magicLinkTokens,
   transportConfigs,
 } from "@claros/db/schema";
+import { encrypt, parseEncryptionKey } from "@claros/adapters";
 import { generateToken, hashToken, isConsoleLoginAllowed, SESSION_COOKIE_NAME } from "../src/routes/auth.js";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
@@ -538,5 +539,286 @@ describe("authenticated /v1 scope", () => {
     expect(body.user.tenantId).toBe(testTenantId);
 
     await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Magic link email delivery via transport
+// ---------------------------------------------------------------------------
+
+const TEST_ENCRYPTION_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+function encryptCredentials(creds: { apiKey: string }): string {
+  const key = parseEncryptionKey(TEST_ENCRYPTION_KEY);
+  return encrypt(JSON.stringify(creds), key);
+}
+
+describe("POST /auth/login - email delivery via transport", () => {
+  let savedEncryptionKey: string | undefined;
+
+  beforeAll(() => {
+    savedEncryptionKey = process.env.ENCRYPTION_KEY;
+    process.env.ENCRYPTION_KEY = TEST_ENCRYPTION_KEY;
+  });
+
+  afterAll(() => {
+    if (savedEncryptionKey !== undefined) {
+      process.env.ENCRYPTION_KEY = savedEncryptionKey;
+    } else {
+      delete process.env.ENCRYPTION_KEY;
+    }
+  });
+
+  beforeEach(async () => {
+    if (!dbAvailable) return;
+    // Clean transport configs and tokens between tests
+    await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id = ${testTenantId}`);
+    await db.execute(sql`DELETE FROM magic_link_tokens WHERE tenant_id = ${testTenantId}`);
+  });
+
+  async function insertTransportConfig() {
+    const encrypted = encryptCredentials({ apiKey: "re_test_fake_key" });
+    await db.execute(sql`
+      INSERT INTO transport_configs (tenant_id, provider, config, is_active, from_email, from_name)
+      VALUES (${testTenantId}::uuid, 'resend', ${encrypted}::jsonb, true, 'noreply@test.example.com', 'Test App')
+    `);
+  }
+
+  it("sends login link via transport when configured (does not print to console)", async () => {
+    if (!dbAvailable) return;
+    process.env.NODE_ENV = "test";
+    await insertTransportConfig();
+
+    // Mock fetch to simulate Resend accepting the email
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "resend-msg-id-123" }),
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: { email: "test@example.com" },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      // Generic message (does not reveal whether email was sent or printed)
+      expect(body.message).toBe("If that email is registered, a login link has been sent.");
+
+      // Fetch was called (email sent)
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, opts] = fetchMock.mock.calls[0]!;
+      expect(url).toBe("https://api.resend.com/emails");
+      const reqBody = JSON.parse(opts.body as string);
+      expect(reqBody.to).toEqual(["test@example.com"]);
+      expect(reqBody.from).toContain("noreply@test.example.com");
+      expect(reqBody.subject).toBe("Your login link");
+      expect(reqBody.html).toContain("/auth/verify?token=");
+      expect(reqBody.text).toContain("/auth/verify?token=");
+      // No compliance headers (transactional email)
+      expect(reqBody.headers).toEqual({});
+
+      // Console was NOT used to print the link
+      const linkPrinted = consoleSpy.mock.calls.some(
+        (args) => args.some((a) => typeof a === "string" && a.includes("/auth/verify?token=")),
+      );
+      expect(linkPrinted).toBe(false);
+
+      await app.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it("falls back to console when send fails (transient error)", async () => {
+    if (!dbAvailable) return;
+    process.env.NODE_ENV = "test";
+    await insertTransportConfig();
+
+    // Mock fetch to simulate a transient failure
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ name: "internal_server_error", message: "boom", statusCode: 500 }),
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: { email: "test@example.com" },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      // Falls back to console
+      expect(body.message).toBe("Login link printed to server console.");
+
+      // Console WAS used because send failed
+      const linkPrinted = consoleSpy.mock.calls.some(
+        (args) => args.some((a) => typeof a === "string" && a.includes("/auth/verify?token=")),
+      );
+      expect(linkPrinted).toBe(true);
+
+      await app.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it("falls back to console when fetch throws (network error)", async () => {
+    if (!dbAvailable) return;
+    process.env.NODE_ENV = "test";
+    await insertTransportConfig();
+
+    // Mock fetch to throw (network failure)
+    const fetchMock = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: { email: "test@example.com" },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.message).toBe("Login link printed to server console.");
+
+      // Console fallback used
+      const linkPrinted = consoleSpy.mock.calls.some(
+        (args) => args.some((a) => typeof a === "string" && a.includes("/auth/verify?token=")),
+      );
+      expect(linkPrinted).toBe(true);
+
+      await app.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it("with no transport: prints to console without attempting send", async () => {
+    if (!dbAvailable) return;
+    process.env.NODE_ENV = "test";
+    // No transport config inserted
+
+    const fetchMock = vi.fn();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: { email: "test@example.com" },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.message).toBe("Login link printed to server console.");
+
+      // fetch was never called (no transport, no send attempt)
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      await app.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("email has no compliance headers or unsubscribe footer (transactional)", async () => {
+    if (!dbAvailable) return;
+    process.env.NODE_ENV = "test";
+    await insertTransportConfig();
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "msg-id" }),
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+      await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: { email: "test@example.com" },
+      });
+
+      const reqBody = JSON.parse(fetchMock.mock.calls[0]![1].body as string);
+      // No List-Unsubscribe in headers
+      expect(reqBody.headers["List-Unsubscribe"]).toBeUndefined();
+      expect(reqBody.headers["List-Unsubscribe-Post"]).toBeUndefined();
+      // No unsubscribe link or postal address in the body
+      expect(reqBody.html).not.toContain("unsubscribe");
+      expect(reqBody.html).not.toContain("Unsubscribe");
+      expect(reqBody.text).not.toContain("unsubscribe");
+      expect(reqBody.text).not.toContain("To unsubscribe:");
+
+      await app.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("suppressed address still receives login link (auth bypasses suppression)", async () => {
+    if (!dbAvailable) return;
+    process.env.NODE_ENV = "test";
+    await insertTransportConfig();
+
+    // Add test@example.com to suppression list
+    await db.execute(sql`
+      INSERT INTO suppressions (tenant_id, email, reason, source)
+      VALUES (${testTenantId}::uuid, 'test@example.com', 'unsubscribe', 'one_click')
+      ON CONFLICT DO NOTHING
+    `);
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "msg-id" }),
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: { email: "test@example.com" },
+      });
+      expect(res.statusCode).toBe(200);
+
+      // Email was still sent despite suppression
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const reqBody = JSON.parse(fetchMock.mock.calls[0]![1].body as string);
+      expect(reqBody.to).toEqual(["test@example.com"]);
+
+      await app.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+      // Clean up suppression
+      await db.execute(sql`
+        DELETE FROM suppressions WHERE tenant_id = ${testTenantId} AND email = 'test@example.com'
+      `);
+    }
   });
 });

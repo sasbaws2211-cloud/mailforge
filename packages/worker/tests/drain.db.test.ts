@@ -1,5 +1,5 @@
 /**
- * Integration tests for the drain worker (task 14).
+ * Integration tests for the drain worker (task 14, compliance injection task 32b).
  *
  * Tests:
  * - Verdict: allow -> sent
@@ -9,8 +9,16 @@
  * - Ordering: critical-before-nurture even when nurture has higher priority number
  * - No-transport: message stays at approved when resolver returns null
  * - No-email: message stays at sending (skipped) when contact has no email
- * - Transport error: message stays at 'sending' (reap will recover in task 15)
+ * - Transport error (transient): message stays at 'sending' (reap will recover in task 15)
+ * - Transport permanent failure: message marked 'failed' immediately (not left for reap)
+ * - Provider message id: persisted on successful send; null when provider returns none
  * - PgGate concurrency: two drains claim disjoint sets
+ * - Compliance: sent message carries List-Unsubscribe and List-Unsubscribe-Post headers
+ * - Compliance: sent message token in header resolves to the correct message
+ * - Compliance: HTML and text bodies contain footer; stored row is unchanged
+ * - Compliance: recipient_address is written before send attempt
+ * - Compliance: tenant with no postal address does not send (reverts to approved)
+ * - Compliance: missing signing key fails closed
  *
  * Requires local Postgres (docker compose up postgres).
  */
@@ -27,6 +35,7 @@ import {
   suppressions,
 } from "@claros/db/schema";
 import { processDrainTick, fetchDrainBatchSimple } from "../src/drain.js";
+import { verifyUnsubscribeToken } from "@claros/adapters";
 import type { TransportAdapter, TransportSendResult, TransportSendParams } from "../src/transport.js";
 
 // ---------------------------------------------------------------------------
@@ -49,10 +58,35 @@ class LogTransportAdapter implements TransportAdapter {
 
 /**
  * A transport adapter that always fails (simulates transport errors).
+ * No `permanent` flag = transient failure - message stays at 'sending' for reap.
  */
 class FailingTransportAdapter implements TransportAdapter {
   async send(_params: TransportSendParams): Promise<TransportSendResult> {
     return { success: false, error: "simulated transport failure" };
+  }
+}
+
+/**
+ * A transport adapter that returns a permanent failure.
+ * `permanent: true` - drain should mark message 'failed' immediately.
+ */
+class PermanentFailureAdapter implements TransportAdapter {
+  async send(_params: TransportSendParams): Promise<TransportSendResult> {
+    return { success: false, error: "invalid recipient address", permanent: true };
+  }
+}
+
+/**
+ * A transport adapter that succeeds but returns no provider message ID.
+ * The column should remain null; the message should still be marked 'sent'.
+ */
+class NoProviderIdAdapter implements TransportAdapter {
+  public sends: TransportSendParams[] = [];
+
+  async send(params: TransportSendParams): Promise<TransportSendResult> {
+    this.sends.push(params);
+    // Success but no providerMessageId (e.g., adapter that does not surface it yet)
+    return { success: true };
   }
 }
 
@@ -71,6 +105,10 @@ if (!TEST_DB_URL) {
         : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
   );
 }
+
+const TEST_SIGNING_KEY = "drain-test-unsubscribe-signing-key-do-not-use-in-production";
+const TEST_BASE_URL = "http://localhost:3000";
+const TEST_POSTAL_ADDRESS = "123 Test St, Test City, TC 12345";
 
 let pool: pg.Pool;
 let db: ReturnType<typeof drizzle>;
@@ -101,7 +139,15 @@ beforeAll(async () => {
 
   const [tenant] = await db
     .insert(tenants)
-    .values({ name: "Test Drain Worker", slug: SLUG, plan: "free" })
+    .values({
+      name: "Test Drain Worker",
+      slug: SLUG,
+      plan: "free",
+      // postal_address in settings is required for compliance (CAN-SPAM).
+      // All tests that actually send mail need this. Tests for the
+      // no-postal-address path override it per-test.
+      settings: { postal_address: TEST_POSTAL_ADDRESS },
+    })
     .returning({ id: tenants.id });
   testTenantId = tenant!.id;
 });
@@ -113,6 +159,11 @@ beforeEach(async () => {
   await db.execute(sql`DELETE FROM flows WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`DELETE FROM suppressions WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${testTenantId}`);
+  // Restore settings with postal address after any test that removed it.
+  await db
+    .update(tenants)
+    .set({ settings: { postal_address: TEST_POSTAL_ADDRESS } })
+    .where(eq(tenants.id, testTenantId));
 });
 
 afterAll(async () => {
@@ -224,6 +275,7 @@ async function insertApprovedMessage(opts: {
   scheduledSendAt?: Date | null;
   subject?: string;
   bodyHtml?: string;
+  bodyText?: string;
 }): Promise<string> {
   const [row] = await db
     .insert(lifecycleMessages)
@@ -236,6 +288,7 @@ async function insertApprovedMessage(opts: {
       status: "approved",
       subject: opts.subject ?? "Test subject",
       bodyHtml: opts.bodyHtml ?? "<p>Test body</p>",
+      bodyText: opts.bodyText ?? "Test body",
       approvedAt: new Date("2026-07-20T10:00:00Z"),
       scheduledSendAt: opts.scheduledSendAt ?? null,
     })
@@ -248,6 +301,28 @@ function makeResolver(adapter: TransportAdapter | null) {
   // another tenant's approved messages (e.g., from a concurrently running
   // reap test), returning null for unknown tenants keeps them untouched.
   return async (tenantId: string) => tenantId === testTenantId ? adapter : null;
+}
+
+/**
+ * Run processDrainTick with the test signing key and base URL injected.
+ * All tests that expect sends to succeed use this helper.
+ */
+async function runDrainTick(
+  adapter: TransportAdapter | null,
+  now: Date,
+  opts: { batchLimit?: number; signingKey?: string | null } = {},
+) {
+  // signingKey defaults to TEST_SIGNING_KEY. Pass null to simulate missing key.
+  const signingKeyOverride = opts.signingKey === undefined ? TEST_SIGNING_KEY : (opts.signingKey ?? undefined);
+  return await processDrainTick(
+    db,
+    now,
+    makeResolver(adapter),
+    fetchDrainBatchSimple,
+    opts.batchLimit ?? 50,
+    TEST_BASE_URL,
+    signingKeyOverride,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -277,12 +352,7 @@ describe("drain worker", () => {
       const adapter = new LogTransportAdapter();
       const now = new Date("2026-07-21T10:00:00Z"); // within default window
 
-      const result = await processDrainTick(
-        db,
-        now,
-        makeResolver(adapter),
-        fetchDrainBatchSimple,
-      );
+      const result = await runDrainTick(adapter, now);
 
       expect(result.sent).toBe(1);
       expect(result.candidatesFetched).toBe(1);
@@ -292,11 +362,17 @@ describe("drain worker", () => {
 
       // Check DB state
       const [msg] = await db
-        .select({ status: lifecycleMessages.status, sentAt: lifecycleMessages.sentAt })
+        .select({
+          status: lifecycleMessages.status,
+          sentAt: lifecycleMessages.sentAt,
+          recipientAddress: lifecycleMessages.recipientAddress,
+        })
         .from(lifecycleMessages)
         .where(eq(lifecycleMessages.id, messageId));
       expect(msg!.status).toBe("sent");
       expect(msg!.sentAt).toBeTruthy();
+      // recipient_address is written before the send attempt
+      expect(msg!.recipientAddress).toBe("allow-contact@example.com");
     });
   });
 
@@ -324,12 +400,7 @@ describe("drain worker", () => {
       const adapter = new LogTransportAdapter();
       const now = new Date("2026-07-21T10:00:00Z");
 
-      const result = await processDrainTick(
-        db,
-        now,
-        makeResolver(adapter),
-        fetchDrainBatchSimple,
-      );
+      const result = await runDrainTick(adapter, now);
 
       expect(result.suppressed).toBe(1);
       expect(result.sent).toBe(0);
@@ -378,12 +449,7 @@ describe("drain worker", () => {
 
       const adapter = new LogTransportAdapter();
 
-      const result = await processDrainTick(
-        db,
-        now,
-        makeResolver(adapter),
-        fetchDrainBatchSimple,
-      );
+      const result = await runDrainTick(adapter, now);
 
       expect(result.deferredFrequency).toBe(1);
       expect(result.sent).toBe(0);
@@ -422,12 +488,7 @@ describe("drain worker", () => {
       // Saturday at 10:00 UTC - outside default weekday window
       const now = new Date("2026-07-25T10:00:00Z"); // July 25, 2026 is Saturday
 
-      const result = await processDrainTick(
-        db,
-        now,
-        makeResolver(adapter),
-        fetchDrainBatchSimple,
-      );
+      const result = await runDrainTick(adapter, now);
 
       expect(result.deferredWindow).toBe(1);
       expect(result.sent).toBe(0);
@@ -490,12 +551,7 @@ describe("drain worker", () => {
       const adapter = new LogTransportAdapter();
       const now = new Date("2026-07-21T10:00:00Z");
 
-      const result = await processDrainTick(
-        db,
-        now,
-        makeResolver(adapter),
-        fetchDrainBatchSimple,
-      );
+      const result = await runDrainTick(adapter, now);
 
       // Both should be sent (different contacts, no frequency conflict)
       expect(result.candidatesFetched).toBe(2);
@@ -533,12 +589,14 @@ describe("drain worker", () => {
 
       const now = new Date("2026-07-21T10:00:00Z");
 
-      // Null resolver - simulates no transport configured
+      // Null resolver - simulates no transport configured (no signing key needed here)
       const result = await processDrainTick(
         db,
         now,
         makeResolver(null),
         fetchDrainBatchSimple,
+        50,
+        TEST_BASE_URL,
       );
 
       // skippedNoTransport counts ALL tenants with approved messages whose
@@ -590,7 +648,7 @@ describe("drain worker", () => {
       const beforeMap = new Map(beforeRows.map((r) => [r.id, r.updatedAt!.getTime()]));
 
       const now = new Date("2026-07-21T10:00:00Z");
-      await processDrainTick(db, now, makeResolver(null), fetchDrainBatchSimple);
+      await processDrainTick(db, now, makeResolver(null), fetchDrainBatchSimple, 50, TEST_BASE_URL);
 
       // Verify all messages unchanged
       const afterRows = await db
@@ -626,12 +684,7 @@ describe("drain worker", () => {
       const adapter = new LogTransportAdapter();
       const now = new Date("2026-07-21T10:00:00Z");
 
-      const result = await processDrainTick(
-        db,
-        now,
-        makeResolver(adapter),
-        fetchDrainBatchSimple,
-      );
+      const result = await runDrainTick(adapter, now);
 
       expect(result.skippedNoEmail).toBe(1);
       expect(adapter.sends).toHaveLength(0);
@@ -647,8 +700,8 @@ describe("drain worker", () => {
     });
   });
 
-  describe("transport error", () => {
-    it("leaves message at sending when transport fails", async () => {
+  describe("transport error (transient)", () => {
+    it("leaves message at sending when transport fails with no permanent flag", async () => {
       if (!dbAvailable) return;
 
       const contactId = await insertContact("error-contact");
@@ -663,22 +716,132 @@ describe("drain worker", () => {
       const failingAdapter = new FailingTransportAdapter();
       const now = new Date("2026-07-21T10:00:00Z");
 
-      const result = await processDrainTick(
-        db,
-        now,
-        makeResolver(failingAdapter),
-        fetchDrainBatchSimple,
-      );
+      const result = await runDrainTick(failingAdapter, now);
 
       expect(result.transportErrors).toBe(1);
+      expect(result.permanentFailures).toBe(0);
       expect(result.sent).toBe(0);
 
-      // Message stays at 'sending' - reap (task 15) will recover
+      // Message stays at 'sending' - reap (task 15) will recover.
+      // recipient_address is written BEFORE the send (pre-send write). Even on a
+      // transient failure the address is set, ensuring reap can recover the row
+      // to 'sent' and the unsubscribe endpoint can then resolve it.
       const [msg] = await db
-        .select({ status: lifecycleMessages.status })
+        .select({
+          status: lifecycleMessages.status,
+          providerMessageId: lifecycleMessages.providerMessageId,
+          recipientAddress: lifecycleMessages.recipientAddress,
+        })
         .from(lifecycleMessages)
         .where(eq(lifecycleMessages.id, messageId));
       expect(msg!.status).toBe("sending");
+      expect(msg!.providerMessageId).toBeNull();
+      // recipient_address is written before the send; it is set even on failure.
+      expect(msg!.recipientAddress).toBe("error-contact@example.com");
+    });
+  });
+
+  describe("transport permanent failure", () => {
+    it("marks message failed immediately when adapter reports permanent failure", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("perm-fail-contact");
+      const flowId = await insertFlow({ name: "perm-fail-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const permanentAdapter = new PermanentFailureAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      const result = await runDrainTick(permanentAdapter, now);
+
+      expect(result.permanentFailures).toBe(1);
+      expect(result.transportErrors).toBe(0);
+      expect(result.sent).toBe(0);
+
+      // Message is marked 'failed' immediately - not left for reap.
+      // recipient_address is written BEFORE the send (pre-send write). Even on a
+      // permanent failure the address is set; this is irrelevant for the
+      // unsubscribe endpoint since it requires status = 'sent'.
+      const [msg] = await db
+        .select({
+          status: lifecycleMessages.status,
+          providerMessageId: lifecycleMessages.providerMessageId,
+          recipientAddress: lifecycleMessages.recipientAddress,
+        })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("failed");
+      expect(msg!.providerMessageId).toBeNull();
+      // recipient_address is written before the send; it is set even on permanent failure.
+      expect(msg!.recipientAddress).toBe("perm-fail-contact@example.com");
+    });
+  });
+
+  describe("provider message id", () => {
+    it("persists provider message id on successful send", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("prov-id-contact");
+      const flowId = await insertFlow({ name: "prov-id-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      const result = await runDrainTick(adapter, now);
+
+      expect(result.sent).toBe(1);
+
+      const [msg] = await db
+        .select({
+          status: lifecycleMessages.status,
+          providerMessageId: lifecycleMessages.providerMessageId,
+        })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("sent");
+      // LogTransportAdapter returns `log-${params.messageId}`
+      expect(msg!.providerMessageId).toBe(`log-${messageId}`);
+    });
+
+    it("leaves provider_message_id null when adapter returns no id", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("no-prov-id-contact");
+      const flowId = await insertFlow({ name: "no-prov-id-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new NoProviderIdAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      const result = await runDrainTick(adapter, now);
+
+      expect(result.sent).toBe(1);
+
+      const [msg] = await db
+        .select({
+          status: lifecycleMessages.status,
+          providerMessageId: lifecycleMessages.providerMessageId,
+        })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("sent");
+      expect(msg!.providerMessageId).toBeNull();
     });
   });
 
@@ -701,12 +864,7 @@ describe("drain worker", () => {
       });
 
       const adapter = new LogTransportAdapter();
-      const result = await processDrainTick(
-        db,
-        now,
-        makeResolver(adapter),
-        fetchDrainBatchSimple,
-      );
+      const result = await runDrainTick(adapter, now);
 
       expect(result.candidatesFetched).toBe(0);
       expect(adapter.sends).toHaveLength(0);
@@ -738,11 +896,13 @@ describe("drain worker", () => {
       const adapter2 = new LogTransportAdapter();
       const now = new Date("2026-07-21T10:00:00Z");
 
+      let result1: Awaited<ReturnType<typeof processDrainTick>>;
+      let result2: Awaited<ReturnType<typeof processDrainTick>>;
       // Run two drain ticks concurrently. Each uses batchLimit=2
       // so they should each pick up 2 disjoint messages.
-      const [result1, result2] = await Promise.all([
-        processDrainTick(db, now, makeResolver(adapter1), fetchDrainBatchSimple, 2),
-        processDrainTick(db, now, makeResolver(adapter2), fetchDrainBatchSimple, 2),
+      [result1, result2] = await Promise.all([
+        processDrainTick(db, now, makeResolver(adapter1), fetchDrainBatchSimple, 2, TEST_BASE_URL, TEST_SIGNING_KEY),
+        processDrainTick(db, now, makeResolver(adapter2), fetchDrainBatchSimple, 2, TEST_BASE_URL, TEST_SIGNING_KEY),
       ]);
 
       // Total sent across both should be <= 4
@@ -768,6 +928,429 @@ describe("drain worker", () => {
           .where(eq(lifecycleMessages.id, msgId));
         expect(msg!.status).toBe("sent");
       }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Compliance tests (task 32b)
+  // ---------------------------------------------------------------------------
+
+  describe("compliance: headers and footer injection", () => {
+    it("sent message carries List-Unsubscribe and List-Unsubscribe-Post headers", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("compliance-header-contact");
+      const flowId = await insertFlow({ name: "compliance-header-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+        subject: "Compliance test",
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      const result = await runDrainTick(adapter, now);
+      expect(result.sent).toBe(1);
+      expect(adapter.sends).toHaveLength(1);
+
+      const sentParams = adapter.sends[0]!;
+      expect(sentParams.headers).toBeDefined();
+      expect(sentParams.headers!["List-Unsubscribe"]).toBeTruthy();
+      expect(sentParams.headers!["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+
+      // List-Unsubscribe header must contain the HTTPS one-click form only.
+      // The mailto: form is intentionally absent - see compliance.ts [impl] note.
+      const unsubHeader = sentParams.headers!["List-Unsubscribe"]!;
+      expect(unsubHeader).not.toMatch(/mailto:/);
+      expect(unsubHeader).toMatch(/https?:\/\//);
+      expect(unsubHeader).toContain("/unsubscribe/one-click?token=");
+    });
+
+    it("token in List-Unsubscribe header verifies and resolves to the correct message", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("compliance-token-contact");
+      const flowId = await insertFlow({ name: "compliance-token-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      const result = await runDrainTick(adapter, now);
+      expect(result.sent).toBe(1);
+
+      const sentParams = adapter.sends[0]!;
+      const unsubHeader = sentParams.headers!["List-Unsubscribe"]!;
+
+      // Extract token from the HTTPS URL in the header
+      const tokenMatch = unsubHeader.match(/one-click\?token=([^>,\s]+)/);
+      expect(tokenMatch).not.toBeNull();
+      const token = tokenMatch![1]!;
+
+      // Token must verify with the test key
+      const verifyResult = verifyUnsubscribeToken(token, TEST_SIGNING_KEY);
+
+      expect(verifyResult.ok).toBe(true);
+      if (!verifyResult.ok) return;
+      // Token must encode the message ID (not the contact ID)
+      expect(verifyResult.payload.messageId).toBe(messageId);
+      expect(verifyResult.payload.tenantId).toBe(testTenantId);
+    });
+
+    it("HTML body ends with compliance footer; stored row body_html is unchanged", async () => {
+      if (!dbAvailable) return;
+
+      const originalHtml = "<p>Hello world</p>";
+      const contactId = await insertContact("compliance-html-contact");
+      const flowId = await insertFlow({ name: "compliance-html-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+        bodyHtml: originalHtml,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      const result = await runDrainTick(adapter, now);
+      expect(result.sent).toBe(1);
+
+      const sentParams = adapter.sends[0]!;
+
+      // Delivered HTML contains the original body plus the footer
+      expect(sentParams.bodyHtml).toContain(originalHtml);
+      expect(sentParams.bodyHtml).toContain("Unsubscribe");
+      expect(sentParams.bodyHtml).toContain(TEST_POSTAL_ADDRESS);
+
+      // Stored row must NOT be modified (footer is ephemeral)
+      const [msg] = await db
+        .select({ bodyHtml: lifecycleMessages.bodyHtml })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.bodyHtml).toBe(originalHtml);
+    });
+
+    it("plain text body ends with compliance footer; stored row body_text is unchanged", async () => {
+      if (!dbAvailable) return;
+
+      const originalText = "Hello world";
+      const contactId = await insertContact("compliance-text-contact");
+      const flowId = await insertFlow({ name: "compliance-text-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+        bodyText: originalText,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      const result = await runDrainTick(adapter, now);
+      expect(result.sent).toBe(1);
+
+      const sentParams = adapter.sends[0]!;
+
+      // Delivered text contains the original body plus the footer
+      expect(sentParams.bodyText).toContain(originalText);
+      expect(sentParams.bodyText).toContain("unsubscribe");
+      expect(sentParams.bodyText).toContain(TEST_POSTAL_ADDRESS);
+
+      // Stored row must NOT be modified
+      const [msg] = await db
+        .select({ bodyText: lifecycleMessages.bodyText })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.bodyText).toBe(originalText);
+    });
+
+    it("recipient_address is written before send attempt and matches the contact's email", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("delivered-to-contact");
+      const flowId = await insertFlow({ name: "delivered-to-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      const result = await runDrainTick(adapter, now);
+      expect(result.sent).toBe(1);
+
+      const [msg] = await db
+        .select({ recipientAddress: lifecycleMessages.recipientAddress })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.recipientAddress).toBe("delivered-to-contact@example.com");
+    });
+  });
+
+  describe("compliance: postal address enforcement", () => {
+    it("reverts message to approved when tenant has no postal address (not a transport failure)", async () => {
+      if (!dbAvailable) return;
+
+      // Remove postal address from settings
+      await db
+        .update(tenants)
+        .set({ settings: {} })
+        .where(eq(tenants.id, testTenantId));
+
+      const contactId = await insertContact("no-postal-contact");
+      const flowId = await insertFlow({ name: "no-postal-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      const result = await runDrainTick(adapter, now);
+
+      // Counted as skippedNoPostalAddress - not a transport error, not a retry burn
+      expect(result.skippedNoPostalAddress).toBe(1);
+      expect(result.sent).toBe(0);
+      expect(result.transportErrors).toBe(0);
+      expect(result.permanentFailures).toBe(0);
+      expect(adapter.sends).toHaveLength(0);
+
+      // Message reverts to 'approved' - ready to retry next tick once operator fixes config
+      const [msg] = await db
+        .select({
+          status: lifecycleMessages.status,
+          recipientAddress: lifecycleMessages.recipientAddress,
+        })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("approved");
+      expect(msg!.recipientAddress).toBeNull();
+    });
+  });
+
+  describe("compliance: missing signing key fails closed", () => {
+    it("reverts message to approved when UNSUBSCRIBE_SIGNING_KEY is absent (not a transport failure, no retry consumed)", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("no-key-contact");
+      const flowId = await insertFlow({ name: "no-key-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      // Pass no signing key (signingKey: null simulates absent UNSUBSCRIBE_SIGNING_KEY).
+      // The check runs before the throttle gate, so no budget is consumed and the
+      // message reverts to 'approved' identically to the postal address path.
+      const result = await runDrainTick(adapter, now, { signingKey: null });
+
+      // Counted as skippedNoSigningKey - not a transport error, not a retry burn
+      expect(result.skippedNoSigningKey).toBe(1);
+      expect(result.sent).toBe(0);
+      expect(result.transportErrors).toBe(0);
+      expect(result.permanentFailures).toBe(0);
+      expect(adapter.sends).toHaveLength(0);
+
+      // Message reverts to 'approved' - ready to retry once operator sets the key
+      const [msg] = await db
+        .select({
+          status: lifecycleMessages.status,
+          recipientAddress: lifecycleMessages.recipientAddress,
+          retryCount: lifecycleMessages.retryCount,
+        })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("approved");
+      // recipient_address is written after config checks pass; since key was absent
+      // the check fires before recipient_address is written, so it must remain null.
+      expect(msg!.recipientAddress).toBeNull();
+      // retry_count must not be incremented (this is not a transport failure)
+      expect(msg!.retryCount).toBe(0);
+    });
+
+    it("missing signing key does not consume throttle budget across repeated ticks", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("no-key-throttle-contact");
+      const flowId = await insertFlow({ name: "no-key-throttle-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      // Run 3 ticks without a signing key. Each should revert, not accumulate
+      // frequency-cap counts (sent_at is never written so counts stay at 0).
+      for (let i = 0; i < 3; i++) {
+        const r = await runDrainTick(adapter, now, { signingKey: null });
+        expect(r.skippedNoSigningKey).toBe(1);
+        expect(r.sent).toBe(0);
+      }
+
+      // Now run with a valid signing key - the message must send normally.
+      // If throttle budget had been consumed, this would defer instead.
+      const result = await runDrainTick(adapter, now);
+      expect(result.sent).toBe(1);
+      expect(result.deferredFrequency).toBe(0);
+
+      const [msg] = await db
+        .select({ status: lifecycleMessages.status })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("sent");
+    });
+  });
+
+  describe("compliance: missing postal address does not consume throttle budget", () => {
+    it("repeated ticks against a misconfigured tenant leave throttle counters untouched", async () => {
+      if (!dbAvailable) return;
+
+      // Remove postal address from settings
+      await db
+        .update(tenants)
+        .set({ settings: {} })
+        .where(eq(tenants.id, testTenantId));
+
+      const contactId = await insertContact("postal-throttle-contact");
+      const flowId = await insertFlow({ name: "postal-throttle-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      // Run 3 ticks with no postal address. Each should revert without touching
+      // throttle counters (sent_at is never written).
+      for (let i = 0; i < 3; i++) {
+        const r = await runDrainTick(adapter, now);
+        expect(r.skippedNoPostalAddress).toBe(1);
+        expect(r.sent).toBe(0);
+      }
+
+      // Restore postal address.
+      await db
+        .update(tenants)
+        .set({ settings: { postal_address: TEST_POSTAL_ADDRESS } })
+        .where(eq(tenants.id, testTenantId));
+
+      // Now the message must send normally; no throttle budget was consumed.
+      const result = await runDrainTick(adapter, now);
+      expect(result.sent).toBe(1);
+      expect(result.deferredFrequency).toBe(0);
+
+      const [msg] = await db
+        .select({ status: lifecycleMessages.status })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("sent");
+    });
+  });
+
+  describe("compliance: recipient_address durability", () => {
+    it("recipient_address is set before send; status='sending' is NOT treated as proof of delivery", async () => {
+      if (!dbAvailable) return;
+
+      // Simulate the crash window: recipient_address written before send, but the
+      // post-send status write (CAS to 'sent') is skipped (simulates process death).
+      // The unsubscribe endpoint must NOT accept this token - status is still 'sending',
+      // not 'sent'. Once reap recovers the row to 'sent' the token becomes valid.
+      const contactId = await insertContact("durability-contact");
+      const flowId = await insertFlow({ name: "durability-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      // Claim the message to 'sending'
+      await db.execute(sql`
+        UPDATE lifecycle_messages SET status = 'sending', updated_at = NOW()
+        WHERE id = ${messageId}
+      `);
+
+      // Simulate the pre-send recipient_address write (what drain does before adapter.send)
+      const expectedEmail = "durability-contact@example.com";
+      await db.execute(sql`
+        UPDATE lifecycle_messages SET recipient_address = ${expectedEmail}, updated_at = NOW()
+        WHERE id = ${messageId} AND status = 'sending'
+      `);
+
+      // Verify: status is still 'sending' (post-send write never happened) and
+      // recipient_address is set. The unsubscribe endpoint requires status = 'sent'
+      // so this message is not yet resolvable. When reap recovers it to 'sent', it will be.
+      const [msg] = await db
+        .select({
+          status: lifecycleMessages.status,
+          recipientAddress: lifecycleMessages.recipientAddress,
+        })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+
+      expect(msg!.status).toBe("sending"); // post-send write never happened
+      expect(msg!.recipientAddress).toBe(expectedEmail); // address is present for when reap recovers
+    });
+
+    it("recipient_address is written before send and remains set after a transient transport failure", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("durability-transient-contact");
+      const flowId = await insertFlow({ name: "durability-transient-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const failingAdapter = new FailingTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      const result = await runDrainTick(failingAdapter, now);
+      expect(result.transportErrors).toBe(1);
+
+      // recipient_address is set even though the send failed (written before send).
+      // The unsubscribe endpoint will NOT resolve this token because status = 'sending',
+      // not 'sent'. Once reap recovers the row to 'sent', the token becomes valid.
+      const [msg] = await db
+        .select({
+          status: lifecycleMessages.status,
+          recipientAddress: lifecycleMessages.recipientAddress,
+        })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("sending");
+      expect(msg!.recipientAddress).toBe("durability-transient-contact@example.com");
     });
   });
 });

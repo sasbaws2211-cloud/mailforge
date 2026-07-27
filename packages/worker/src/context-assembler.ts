@@ -6,8 +6,7 @@
  * and draft LLM calls, then applies budget truncation (slice 18.4).
  *
  * This is the single entry point the content worker uses to get populated
- * contexts from a claimed candidate. It replaces the stub contexts that were
- * previously constructed inline in content.ts.
+ * contexts from a claimed candidate.
  *
  * Design decisions:
  *

@@ -409,20 +409,32 @@ async function processOneContentMessage(
       return "value_gated";
     }
 
-    // assessResult.assessment.verdict === "pass" - proceed to pending_approval.
+    // assessResult.assessment.verdict === "pass" - proceed to pending_approval (or approved).
 
     // 9. Render markdown to HTML and derive plain text
     const bodyHtml = renderMarkdownToHtml(body_markdown);
     const bodyText = markdownToText(body_markdown);
 
-    // 10. Write content and advance to pending_approval (CAS: awaiting_content)
+    // 9b. Check flow's approval_mode to determine target status.
+    // If the flow has approval_mode = 'auto', skip pending_approval and go
+    // directly to 'approved'. This avoids blocking auto-approved flows on
+    // human review while preserving the default require-approval path.
+    const flowRow = await db.execute<{ approval_mode: string | null }>(sql`
+      SELECT approval_mode FROM flows WHERE id = ${candidate.flowId}
+    `);
+    const approvalMode = flowRow.rows[0]?.approval_mode ?? "require";
+    const targetStatus = approvalMode === "auto" ? "approved" : "pending_approval";
+    const approvedAt = approvalMode === "auto" ? now : null;
+
+    // 10. Write content and advance to target status (CAS: awaiting_content)
     const finalResult = await db.execute<{ id: string }>(sql`
       UPDATE lifecycle_messages
       SET
-        status = 'pending_approval',
+        status = ${targetStatus},
         subject = ${subject},
         body_html = ${bodyHtml},
         body_text = ${bodyText},
+        approved_at = ${approvedAt},
         updated_at = ${now}
       WHERE id = ${candidate.id}
         AND status = 'awaiting_content'

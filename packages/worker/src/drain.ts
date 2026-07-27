@@ -10,25 +10,43 @@
  *   1. Resolve transport adapter for the tenant.
  *      - If null (no transport configured): skip, message stays approved.
  *   2. Claim the message (status = 'sending') via CAS.
- *   3. Evaluate the throttle gate.
+ *   3. Resolve tenant postal address (required for CAN-SPAM compliance).
+ *      - If absent: revert to 'approved' and log operator error. Not a transport
+ *        failure; no retry count consumed. No throttle budget consumed (check
+ *        runs before the throttle gate).
+ *   4. Verify UNSUBSCRIBE_SIGNING_KEY is configured.
+ *      - If absent: revert to 'approved' and log operator error. Same treatment
+ *        as a missing postal address - configuration fault, not transport fault.
+ *        No retry count consumed, no throttle budget consumed.
+ *   5. Evaluate the throttle gate.
  *      - allow: hand to transport.
  *      - suppress: mark as 'suppressed' (terminal).
  *      - defer_frequency / defer_window: revert to 'approved' with scheduled_send_at.
- *   4. On transport success: mark 'sent', record sent_at.
- *   5. On transport error: message stays at 'sending'.
+ *   6. Write recipient_address = contact email (before send).
+ *      The unsubscribe endpoint uses this column together with status = 'sent'
+ *      to confirm delivery. Writing it before the send covers the crash window:
+ *      if the process dies after the provider accepts the message but before
+ *      the post-send DB write, the address is still present once reap recovers
+ *      the row to 'sent'. The column is NOT a send confirmation by itself.
+ *   7. Generate compliance headers and footer. Inject footer into bodies.
+ *      The stored message row is NOT updated - the injected footer is ephemeral.
+ *   8. On transport success: mark 'sent', record sent_at, write provider_message_id.
+ *   9. On transport permanent failure: mark 'failed' immediately (not left for reap).
+ *  10. On transport transient failure: message stays at 'sending' for reap to retry.
  *
  * NOTE: After task 14, the drain sends nothing in any real deployment. The
  * transport resolver returns null until Phase 4 builds real adapters (tasks
- * 26-28). Messages that pass the throttle gate remain at 'approved' and are
+ * 26-32b). Messages that pass the throttle gate remain at 'approved' and are
  * re-evaluated each tick. "Drain implemented" means scheduling, batch
  * selection, throttle evaluation, and transport seam are wired - not
  * "email works."
  *
- * NOTE: message remains at 'sending' after transport error. Recovery is
- * handled by the reap worker (task 15), which finds messages stuck in
+ * NOTE: On transient transport failure, message remains at 'sending'. Recovery
+ * is handled by the reap worker (task 15), which finds messages stuck in
  * 'sending' for > REAP_STUCK_THRESHOLD_HOURS and either retries
- * (retry_count < MAX_RETRY_COUNT) or marks failed. Until task 15 is
- * implemented, errored messages are stranded.
+ * (retry_count < MAX_RETRY_COUNT) or marks failed. On permanent transport
+ * failure (sendResult.permanent = true), the drain marks the message failed
+ * immediately without waiting for reap.
  *
  * Per-tenant fairness (Cloud-only, EDITIONS.md):
  *   Community is single-tenant, so the simple batch query suffices.
@@ -54,6 +72,13 @@ import {
   type ThrottleVerdict,
 } from "@claros/core";
 import type { TransportAdapter, TransportResolver } from "./transport.js";
+import {
+  buildComplianceOutput,
+  injectHtmlFooter,
+  injectTextFooter,
+  resolveBaseUrl,
+  resolveSigningKey,
+} from "./compliance.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -87,11 +112,18 @@ export interface DrainTickResult {
   candidatesFetched: number;
   skippedNoTransport: number;
   skippedNoEmail: number;
+  /** Messages skipped because the tenant has no postal address configured. */
+  skippedNoPostalAddress: number;
+  /** Messages skipped because UNSUBSCRIBE_SIGNING_KEY is not set. */
+  skippedNoSigningKey: number;
   sent: number;
   suppressed: number;
   deferredFrequency: number;
   deferredWindow: number;
+  /** Transient transport failures (message stays at 'sending' for reap). */
   transportErrors: number;
+  /** Permanent transport failures (message immediately marked 'failed'). */
+  permanentFailures: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +248,8 @@ export const fetchDrainBatchSimple: FetchDrainBatch = async (
  * @param fetchBatch - Strategy for selecting messages (default: simple priority+FIFO).
  * @param batchLimit - Max messages per tick (default from throttle config is per-tenant,
  *   but for Community single-tenant this is effectively global).
+ * @param baseUrlOverride - Base URL override for tests. Production reads BASE_URL env.
+ * @param signingKeyOverride - Signing key override for tests. Production reads UNSUBSCRIBE_SIGNING_KEY env.
  */
 export async function processDrainTick(
   db: Db,
@@ -223,16 +257,21 @@ export async function processDrainTick(
   resolveTransport: TransportResolver,
   fetchBatch: FetchDrainBatch = fetchDrainBatchSimple,
   batchLimit: number = 50,
+  baseUrlOverride?: string,
+  signingKeyOverride?: string,
 ): Promise<DrainTickResult> {
   const stats: DrainTickResult = {
     candidatesFetched: 0,
     skippedNoTransport: 0,
     skippedNoEmail: 0,
+    skippedNoPostalAddress: 0,
+    skippedNoSigningKey: 0,
     sent: 0,
     suppressed: 0,
     deferredFrequency: 0,
     deferredWindow: 0,
     transportErrors: 0,
+    permanentFailures: 0,
   };
 
   // Step 1: Find tenants that have approved messages ready to drain.
@@ -269,13 +308,21 @@ export async function processDrainTick(
 
   if (candidates.length === 0) return stats;
 
+  const baseUrl = resolveBaseUrl(baseUrlOverride);
+
   // Step 4: Process each claimed message.
   for (const candidate of candidates) {
     const adapter = tenantsWithTransport.get(candidate.tenantId)!;
-    const result = await processOneMessage(db, candidate, now, adapter);
+    const result = await processOneMessage(db, candidate, now, adapter, baseUrl, signingKeyOverride);
     switch (result) {
       case "no_email":
         stats.skippedNoEmail++;
+        break;
+      case "no_postal_address":
+        stats.skippedNoPostalAddress++;
+        break;
+      case "no_signing_key":
+        stats.skippedNoSigningKey++;
         break;
       case "sent":
         stats.sent++;
@@ -292,6 +339,9 @@ export async function processDrainTick(
       case "transport_error":
         stats.transportErrors++;
         break;
+      case "permanent_failure":
+        stats.permanentFailures++;
+        break;
     }
   }
 
@@ -304,17 +354,22 @@ export async function processDrainTick(
 
 type MessageOutcome =
   | "no_email"
+  | "no_postal_address"
+  | "no_signing_key"
   | "sent"
   | "suppressed"
   | "deferred_frequency"
   | "deferred_window"
-  | "transport_error";
+  | "transport_error"
+  | "permanent_failure";
 
 async function processOneMessage(
   db: Db,
   candidate: DrainCandidate,
   now: Date,
   adapter: TransportAdapter,
+  baseUrl: string,
+  signingKeyOverride?: string,
 ): Promise<MessageOutcome> {
   // Messages arrive here already at status = 'sending' (claimed by fetchBatch).
   // Transport is already resolved (per-tenant, before claiming).
@@ -338,7 +393,39 @@ async function processOneMessage(
   const contactProps = contactRow[0]!.properties as Record<string, unknown> | null;
   const contactTimezone = (contactProps?.timezone as string) ?? null;
 
-  // Step 2: Gather throttle gate inputs and evaluate.
+  // Step 2: Resolve tenant postal address for CAN-SPAM compliance.
+  // If absent, revert the message to 'approved' and surface an operator error.
+  // This is NOT a transport failure - the message is not broken, the tenant
+  // configuration is incomplete. No retry count consumed.
+  const postalAddress = await resolvePostalAddress(db, candidate.tenantId);
+  if (!postalAddress) {
+    console.error(
+      `[drain] tenant ${candidate.tenantId} has no postal_address in settings. ` +
+        `Message ${candidate.id} cannot be sent without a CAN-SPAM compliant postal address. ` +
+        `Configure tenants.settings.postal_address to unblock sending.`,
+    );
+    await revertToApproved(db, candidate.id, now);
+    return "no_postal_address";
+  }
+
+  // Step 3: Verify UNSUBSCRIBE_SIGNING_KEY is configured.
+  // A missing key is a configuration fault, not a transport fault - treated
+  // identically to a missing postal address: revert to 'approved', no retry
+  // consumed, operator-facing log error. Nothing may send without a valid key.
+  const signingKey = resolveSigningKey(signingKeyOverride);
+  if (signingKey === null) {
+    console.error(
+      `[drain] UNSUBSCRIBE_SIGNING_KEY is not set. ` +
+        `Message ${candidate.id} (tenant ${candidate.tenantId}) cannot be sent without a signing key for unsubscribe tokens. ` +
+        `Set UNSUBSCRIBE_SIGNING_KEY to unblock sending.`,
+    );
+    await revertToApproved(db, candidate.id, now);
+    return "no_signing_key";
+  }
+
+  // Step 4: Gather throttle gate inputs and evaluate.
+  // Configuration checks (postal address, signing key) run before this gate
+  // so a misconfigured tenant does not consume any throttle budget on each tick.
   const gateInput = await buildThrottleGateInput(
     db,
     candidate,
@@ -349,7 +436,7 @@ async function processOneMessage(
 
   const verdict = evaluateThrottleGate(gateInput);
 
-  // Step 3: Act on verdict.
+  // Step 5: Act on verdict.
   switch (verdict.outcome) {
     case "suppress":
       // CAS: only write if the row is still at 'sending'. If reap concurrently
@@ -389,44 +476,102 @@ async function processOneMessage(
       break; // Fall through to transport
   }
 
-  // Step 4: Resolve sender info.
+  // Step 6: Resolve sender info.
   const senderInfo = await resolveSenderInfo(db, candidate.tenantId);
 
-  // Step 5: Send via transport.
+  // Step 7: Build compliance headers and footer.
+  // signingKey is already confirmed non-null (checked in Step 3).
+  const compliance = buildComplianceOutput({
+    tenantId: candidate.tenantId,
+    messageId: candidate.id,
+    postalAddress,
+    baseUrl,
+    signingKey,
+  });
+
+  // Step 8: Inject footer into bodies. Stored row is NOT modified.
+  const deliveredHtml = candidate.bodyHtml
+    ? injectHtmlFooter(candidate.bodyHtml, compliance.htmlFooter)
+    : compliance.htmlFooter;
+  const deliveredText = candidate.bodyText
+    ? injectTextFooter(candidate.bodyText, compliance.textFooter)
+    : compliance.textFooter.trimStart(); // strip leading newline if no body
+
+  // Step 9: Write recipient_address BEFORE sending.
+  //
+  // recipient_address records the address this message was prepared to send to.
+  // Writing it here, before the adapter call, covers the crash window where the
+  // process dies after the provider accepts the message but before the post-send
+  // DB write completes. When reap later recovers the row to 'sent', the
+  // unsubscribe endpoint can resolve the address correctly.
+  //
+  // NOTE: recipient_address being non-null is NOT a send confirmation. The
+  // unsubscribe endpoint requires status = 'sent' in addition to this column
+  // being set. A message at status = 'sending' or 'failed' with recipient_address
+  // set was not successfully delivered and must not be treated as such.
+  //
+  // CAS: includes status = 'sending' so that if reap has already moved the row
+  // while this message was being processed, this write hits 0 rows and the reap
+  // outcome wins. In that case the send below will also have its status write hit
+  // 0 rows, and the message is safely retried by reap.
+  await db
+    .update(lifecycleMessages)
+    .set({ recipientAddress: contactEmail, updatedAt: now })
+    .where(and(eq(lifecycleMessages.id, candidate.id), eq(lifecycleMessages.status, "sending")));
+
+  // Step 10: Send via transport.
   try {
     const sendResult = await adapter.send({
       to: contactEmail,
       from: senderInfo.fromEmail,
       fromName: senderInfo.fromName ?? undefined,
       subject: candidate.subject ?? "(no subject)",
-      bodyHtml: candidate.bodyHtml ?? "",
-      bodyText: candidate.bodyText ?? undefined,
+      bodyHtml: deliveredHtml,
+      bodyText: deliveredText,
       messageId: candidate.id,
+      headers: {
+        "List-Unsubscribe": compliance.listUnsubscribeHeader,
+        "List-Unsubscribe-Post": compliance.listUnsubscribePostHeader,
+      },
     });
 
     if (sendResult.success) {
       // CAS: only mark sent if the row is still at 'sending'. If reap reverted
       // it to 'approved' (or 'failed') while a slow transport call was in flight,
       // this update hits 0 rows. The reap outcome wins; the contact gets a retry.
+      //
+      // recipient_address was already written before the send (Step 9). This write
+      // only updates status, sentAt, and providerMessageId.
       await db
         .update(lifecycleMessages)
-        .set({ status: "sent", sentAt: now, updatedAt: now })
+        .set({
+          status: "sent",
+          sentAt: now,
+          providerMessageId: sendResult.providerMessageId ?? null,
+          updatedAt: now,
+        })
         .where(and(eq(lifecycleMessages.id, candidate.id), eq(lifecycleMessages.status, "sending")));
       return "sent";
+    } else if (sendResult.permanent === true) {
+      // Permanent failure: mark failed immediately without waiting for reap.
+      // CAS: same guard as suppress. If reap already moved the row, this hits
+      // 0 rows and the reap outcome wins.
+      await db
+        .update(lifecycleMessages)
+        .set({ status: "failed", updatedAt: now })
+        .where(and(eq(lifecycleMessages.id, candidate.id), eq(lifecycleMessages.status, "sending")));
+      return "permanent_failure";
     } else {
-      // Transport returned failure but did not throw.
-      // NOTE: message remains at 'sending' after transport error.
+      // Transient failure: message stays at 'sending'.
       // Recovery is handled by the reap worker (task 15), which finds messages
       // stuck in 'sending' for > REAP_STUCK_THRESHOLD_HOURS and either retries
       // (retry_count < MAX_RETRY_COUNT) or marks failed.
-      // Until task 15 is implemented, errored messages are stranded.
       return "transport_error";
     }
   } catch {
-    // Transport threw. Same as above: message stays at 'sending'.
-    // NOTE: message remains at 'sending' after transport error.
-    // Recovery is handled by the reap worker (task 15).
-    // Until task 15 is implemented, errored messages are stranded.
+    // Transport threw (network error, timeout, etc.). This is always transient -
+    // a thrown exception means no response was received, so we cannot know the
+    // provider's intent. Message stays at 'sending' for reap to retry.
     return "transport_error";
   }
 }
@@ -437,7 +582,8 @@ async function processOneMessage(
 
 /**
  * Reverts a message from 'sending' back to 'approved'. Used when the drain
- * cannot proceed (no transport, no email) after the atomic batch claim.
+ * cannot proceed (no transport, no email, no postal address) after the atomic
+ * batch claim.
  *
  * CAS: includes status = 'sending' in the WHERE clause so that if reap has
  * already moved the row to 'failed' (or another terminal state) while drain
@@ -566,13 +712,13 @@ interface SenderInfo {
 }
 
 /**
- * Resolves the sender email/name for a tenant. Phase 4 implements real
- * transport_config lookup. For now, returns a placeholder that will never
- * be reached in production (transport resolver returns null first).
+ * Resolves the sender email/name for a tenant from the active transport_configs row.
+ * Returns a localhost fallback if no row exists (should not be reached in production
+ * because the transport resolver would have returned null first; tests may reach
+ * this path when they provide an adapter without a transport_configs row).
  */
 async function resolveSenderInfo(db: Db, tenantId: string): Promise<SenderInfo> {
   // Look up the active transport config for from address.
-  // This query is meaningful once Phase 4 populates transport_configs.
   const configRow = await db.execute<{
     from_email: string;
     from_name: string | null;
@@ -595,4 +741,28 @@ async function resolveSenderInfo(db: Db, tenantId: string): Promise<SenderInfo> 
   // would have returned null). Tests may reach here if they provide an
   // adapter but no transport_configs row.
   return { fromEmail: "noreply@localhost", fromName: null };
+}
+
+// ---------------------------------------------------------------------------
+// Postal address resolver
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolves the tenant's physical postal address from tenants.settings.
+ *
+ * Returns null if not configured. The caller is responsible for blocking
+ * the send and surfacing an operator-facing error.
+ */
+async function resolvePostalAddress(db: Db, tenantId: string): Promise<string | null> {
+  const tenantRow = await db
+    .select({ settings: tenants.settings })
+    .from(tenants)
+    .where(eq(tenants.id, tenantId))
+    .limit(1);
+
+  if (tenantRow.length === 0) return null;
+  const settings = tenantRow[0]!.settings as Record<string, unknown> | null;
+  const addr = settings?.postal_address;
+  if (typeof addr !== "string" || addr.trim().length === 0) return null;
+  return addr.trim();
 }

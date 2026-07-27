@@ -30,7 +30,7 @@ export const lifecycleMessages = pgTable(
       .notNull()
       .references(() => flowMemberships.id),
     flowStepOrder: integer("flow_step_order"),
-    status: text("status").notNull(), // pending_generation|generating|awaiting_content|pending_approval|approved|sending|sent|failed|suppressed|skipped|value_gated
+    status: text("status").notNull(), // pending_generation|generating|awaiting_content|pending_approval|approved|sending|sent|failed|suppressed|skipped|value_gated|rejected
     feedback: text("feedback"), // opened|clicked|bounced|complained - ADVANCE-ONLY (see BACKLOG.md "Advance-only feedback guards")
     subject: text("subject"),
     bodyHtml: text("body_html"),
@@ -41,6 +41,16 @@ export const lifecycleMessages = pgTable(
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     retryCount: integer("retry_count").default(0),
+    providerMessageId: text("provider_message_id"), // nullable; written on successful send with the ID returned by the provider
+    // [impl] recipient_address (task 28, step 0): written by the drain BEFORE the send attempt,
+    // recording the address this message was prepared for. It is set even on messages that
+    // subsequently failed or were left in 'sending' by reap. It is NOT a send confirmation -
+    // the unsubscribe endpoint requires status = 'sent' in addition to this column being
+    // non-null. The pre-send write covers the crash window: if the process dies after the
+    // provider accepts the message but before the post-send DB write, the recipient address
+    // is still resolvable. Column was originally named delivered_to; renamed before migration
+    // 0015 was ever applied to production.
+    recipientAddress: text("recipient_address"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -70,5 +80,11 @@ export const lifecycleMessages = pgTable(
     index("idx_messages_generation")
       .on(table.tenantId, table.status, table.createdAt)
       .where(sql`status IN ('pending_generation', 'generating')`),
+    // Webhook correlation: look up message by provider_message_id on every
+    // inbound bounce/open/click event. Partial index excludes NULLs (most rows
+    // before send). Added for task 29 (webhook ingestion).
+    index("idx_messages_provider_id")
+      .on(table.providerMessageId)
+      .where(sql`provider_message_id IS NOT NULL`),
   ]
 );

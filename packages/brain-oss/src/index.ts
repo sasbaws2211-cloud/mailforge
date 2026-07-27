@@ -3,11 +3,14 @@
  * Provides the Brain contract that brain-cloud also implements.
  *
  * Exports:
- *   - Brain interface (decide + draft) - task 17
+ *   - Brain interface (decide + draft + assess) - tasks 17, 20
  *   - compile() - task 11 (flow prompt -> deterministic plan)
+ *   - decide()  - task 17 (contact context -> send/skip/wait decision)
+ *   - draft()   - task 17 (contact context -> email subject + body_markdown)
+ *   - assess()  - task 20 (context + draft -> pass/fail value gate)
  *   - LLM provider interface + OpenAI-compatible implementation
- *   - Prompt builders for compile/decide/draft
- *   - Zod output schemas for decide and draft (task 17.1)
+ *   - Prompt builders for compile/decide/draft/assess
+ *   - Zod output schemas for decide, draft, and assess
  *
  * Mirror side: PUBLIC (packages/brain-oss is mirrored).
  */
@@ -19,8 +22,9 @@
 /**
  * Context passed to brain.decide().
  * Carries the information the Brain needs to make a send/skip/wait decision
- * for a specific contact at a specific flow step. Populated by the context
- * packet builder (task 18). Empty at this slice - placeholder for now.
+ * for a specific contact at a specific flow step. The concrete populated type
+ * used at runtime is DecidePromptContext (packages/brain-oss/src/prompts/decide.ts).
+ * This interface exists for the Brain contract used by the edition system.
  */
 export interface DecideContext {
   [key: string]: unknown;
@@ -29,7 +33,9 @@ export interface DecideContext {
 /**
  * Context passed to brain.draft().
  * Carries the information the Brain needs to generate email content.
- * Populated by the context packet builder (task 18). Empty at this slice.
+ * The concrete populated type used at runtime is DraftPromptContext
+ * (packages/brain-oss/src/prompts/draft.ts). This interface exists for the
+ * Brain contract used by the edition system.
  */
 export interface DraftContext {
   [key: string]: unknown;
@@ -90,22 +96,33 @@ export interface Brain {
 // Community Brain implementation (BYO LLM key)
 // ---------------------------------------------------------------------------
 
-/** Create the community Brain implementation (BYO LLM key) */
+/** Create the community Brain implementation (BYO LLM key).
+ *
+ * Note: this factory implements the Brain interface used by the edition system
+ * (apps/server/src/edition.ts loadBrain). It returns no-ops because the worker
+ * does NOT use this interface at runtime - it imports decide(), draft(), and
+ * assess() directly from brain-oss and calls them with fully-typed
+ * DecidePromptContext / DraftPromptContext / AssessPromptContext. The Brain
+ * interface exists so brain-cloud can plug in as a drop-in replacement for
+ * future server-side uses (e.g. streaming, agent integration). Until such a
+ * use case exists, createOssBrain() returns skip/empty stubs that no production
+ * code path reaches.
+ */
 export function createOssBrain(_cfg: BrainConfig): Brain {
   return {
     async decide(_context) {
-      // Stub - returns skip so no email is sent until real prompts are wired (task 17).
-      return { action: "skip", reasoning: "stub: Brain prompts not yet wired" };
+      // Not reached by the worker - the worker calls decide() directly.
+      return { action: "skip", reasoning: "createOssBrain: use decide() directly" };
     },
     async draft(_context) {
-      // Stub - real implementation wired in task 17.
+      // Not reached by the worker - the worker calls draft() directly.
       return { subject: "", body_markdown: "" };
     },
   };
 }
 
 // ---------------------------------------------------------------------------
-// Zod output schemas for decide and draft (task 17.1)
+// Zod output schemas for decide, draft, and assess (tasks 17.1, 20)
 // ---------------------------------------------------------------------------
 
 export {

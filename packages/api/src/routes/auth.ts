@@ -20,13 +20,17 @@
  */
 import { randomBytes, createHash } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, sql } from "drizzle-orm";
 import {
   users,
   sessions,
   magicLinkTokens,
   transportConfigs,
 } from "@claros/db/schema";
+import {
+  resolveTransportAdapter,
+  type TransportAdapter,
+} from "@claros/adapters";
 import type { Db } from "../plugins/db.js";
 
 /** Token TTL in minutes. */
@@ -73,6 +77,103 @@ export function isConsoleLoginAllowed(): boolean {
 
 export interface AuthRouteOptions {
   baseUrl: string;
+}
+
+// ---------------------------------------------------------------------------
+// Magic link email delivery
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a TransportAdapter for a tenant. Returns { adapter, fromEmail, fromName }
+ * or null if the tenant has no usable transport. This is a lightweight version of
+ * the worker's transport-resolver, kept here because packages/api cannot import
+ * from packages/worker (dependency direction: worker <- api, not the reverse).
+ *
+ * Why direct and not through the drain:
+ *   A magic link is transactional authentication email initiated by the user.
+ *   It must never be subject to the throttle gate (frequency caps, send windows)
+ *   because suppressing a login email locks an operator out. It bypasses the drain
+ *   entirely and calls the adapter directly.
+ *
+ * Why no compliance headers or footer:
+ *   CAN-SPAM (16 CFR 316.3) distinguishes "commercial" from "transactional or
+ *   relationship" messages. A magic link is a direct response to the recipient's
+ *   own action (login request) with no commercial content. Transactional email
+ *   does not require List-Unsubscribe, postal address footer, or opt-out mechanism.
+ *   Adding an unsubscribe link to auth email would let a user permanently block
+ *   their own login path, which is a lockout - not a compliance feature.
+ *
+ * Why suppression is bypassed:
+ *   The suppression list blocks marketing email. A dashboard user who unsubscribed
+ *   from lifecycle email (or whose address bounced from a lifecycle send) must still
+ *   be able to log in. Authentication is not marketing. Suppressing auth email would
+ *   create an unrecoverable lockout for the operator. Login links bypass suppression
+ *   entirely. This is stated plainly: suppression does not apply to auth email.
+ */
+async function resolveAuthTransport(
+  db: Db,
+  tenantId: string,
+): Promise<{ adapter: TransportAdapter; fromEmail: string; fromName: string | null } | null> {
+  // Read active transport config
+  const rows = await db.execute<{
+    provider: string;
+    config: string;
+    from_email: string;
+    from_name: string | null;
+  }>(sql`
+    SELECT provider, config::text AS config, from_email, from_name
+    FROM transport_configs
+    WHERE tenant_id = ${tenantId}::uuid
+      AND is_active = true
+    LIMIT 1
+  `);
+
+  if (rows.rows.length === 0) return null;
+  const row = rows.rows[0]!;
+
+  // Delegate credential decryption + adapter construction to the shared function
+  // in @claros/adapters. Same code path as the drain worker.
+  const result = resolveTransportAdapter(row.provider, row.config);
+  if (!result.ok) return null;
+
+  return {
+    adapter: result.transport.adapter,
+    fromEmail: row.from_email,
+    fromName: row.from_name,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Login email templates (plain, no marketing content, no compliance footer)
+// ---------------------------------------------------------------------------
+
+function buildLoginEmailHtml(loginUrl: string): string {
+  return [
+    "<div style=\"font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;\">",
+    "  <p>You requested a login link. Click below to sign in:</p>",
+    `  <p><a href="${escapeHtmlAttr(loginUrl)}" style="display:inline-block;padding:12px 24px;background:#111;color:#fff;text-decoration:none;border-radius:4px;">Sign in to Claros</a></p>`,
+    `  <p style="font-size:13px;color:#666;">Or copy this URL: ${escapeHtml(loginUrl)}</p>`,
+    `  <p style="font-size:13px;color:#666;">This link expires in ${TOKEN_TTL_MINUTES} minutes and can only be used once.</p>`,
+    "</div>",
+  ].join("\n");
+}
+
+function buildLoginEmailText(loginUrl: string): string {
+  return [
+    "You requested a login link. Open this URL to sign in:",
+    "",
+    loginUrl,
+    "",
+    `This link expires in ${TOKEN_TTL_MINUTES} minutes and can only be used once.`,
+  ].join("\n");
+}
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeHtmlAttr(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
@@ -190,18 +291,57 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
         return { message: "If that email is registered, a login link has been sent." };
       }
 
-      // Has transport: send the link via email.
-      // TODO(task-26-transport): actually send the email via the configured transport.
-      // For now, log a warning. The transport layer is task 26 (Phase 4).
-      request.log.warn(
-        { loginUrl, email: normalizedEmail },
-        "Transport send not yet implemented - login link logged here for development",
-      );
-      // In development, also print to console since transport is not implemented
+      // Has transport: attempt to send the login link via email.
+      // This is transactional auth email - bypasses drain, throttle, suppression,
+      // and compliance headers. See resolveAuthTransport() for reasoning.
+      const transport = await resolveAuthTransport(db, user.tenantId);
+
+      if (transport) {
+        // Attempt direct send through the adapter (no drain, no throttle).
+        // A unique message ID for idempotency - use the token hash (unique per request).
+        const messageId = `auth-login-${hash}`;
+        try {
+          const result = await transport.adapter.send({
+            to: normalizedEmail,
+            from: transport.fromEmail,
+            fromName: transport.fromName ?? undefined,
+            subject: "Your login link",
+            bodyHtml: buildLoginEmailHtml(loginUrl),
+            bodyText: buildLoginEmailText(loginUrl),
+            // No List-Unsubscribe, no compliance headers - transactional email.
+            headers: {},
+            messageId,
+          });
+
+          if (result.success) {
+            // Email accepted by provider. Do NOT log the URL or token.
+            request.log.info(
+              { email: normalizedEmail },
+              "Login link sent via email",
+            );
+            return { message: "If that email is registered, a login link has been sent." };
+          }
+
+          // Send failed - fall through to console fallback below.
+          request.log.warn(
+            { email: normalizedEmail, error: result.error, permanent: result.permanent },
+            "Login link email send failed, falling back to console",
+          );
+        } catch (err) {
+          // Unexpected error (network, etc.) - fall through to console fallback.
+          request.log.warn(
+            { email: normalizedEmail, error: err instanceof Error ? err.message : String(err) },
+            "Login link email send threw, falling back to console",
+          );
+        }
+      }
+
+      // Fallback: transport not resolvable or send failed.
+      // Print to console if allowed; otherwise return generic message.
       if (isConsoleLoginAllowed()) {
         console.log("");
         console.log("========================================");
-        console.log("  MAGIC LINK LOGIN (transport TODO)");
+        console.log("  MAGIC LINK LOGIN");
         console.log("========================================");
         console.log(`  Email: ${normalizedEmail}`);
         console.log(`  URL:   ${loginUrl}`);

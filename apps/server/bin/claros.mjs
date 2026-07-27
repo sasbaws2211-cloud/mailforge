@@ -1,0 +1,1331 @@
+#!/usr/bin/env node
+/**
+ * claros - Operator CLI for the Claros lifecycle email engine.
+ *
+ * One CLI for every operator task: login links, credential setup, and
+ * guided first-run configuration.
+ *
+ * Usage (local checkout, after pnpm build):
+ *   node apps/server/bin/claros.mjs <command> [options]
+ *
+ * Usage (Docker Compose, app container running):
+ *   docker compose exec app claros <command> [options]
+ *
+ * Commands:
+ *   login-link <email>               Generate a one-time login URL (no transport required)
+ *   setup [tenant_slug]              Guided first-run: postal address, LLM, transport
+ *   transport set <tenant_slug>      Write transport credentials
+ *   transport show <tenant_slug>     Show active transport config (no credentials)
+ *   llm set <tenant_slug>            Write LLM credentials
+ *   llm show <tenant_slug>           Show active LLM config (no credentials)
+ *   postal-address set <slug>        Set the CAN-SPAM postal address
+ *   postal-address show <slug>       Show the current postal address
+ *   help [command]                   Show help for a command
+ *
+ * Options:
+ *   --prod   Target PRODUCTION_DATABASE_URL instead of DATABASE_URL (local).
+ *            Requires typed confirmation before any write in interactive mode.
+ *            Production writes in non-interactive mode are confirmed by the flag itself.
+ *
+ * Prerequisites:
+ *   Run `pnpm build` once first. This script imports from built dist/ directories:
+ *     packages/adapters/dist/  (crypto)
+ *     drizzle/dist/            (@claros/db schema)
+ *
+ * [impl] Shared write path:
+ *   transport set / llm set: use encrypt() + parseEncryptionKey() from
+ *     packages/adapters/src/crypto.ts, the same functions as PUT /v1/settings/transport
+ *     and PUT /v1/settings/llm in packages/api/src/routes/settings.ts.
+ *   postal-address set: read-modify-write on tenants.settings JSONB, the same
+ *     pattern as PATCH /v1/settings/tenant (packages/api/src/routes/settings.ts:582-600).
+ *   login-link: uses generateToken() + magicLinkTokens table, the same logic as
+ *     POST /auth/login in packages/api/src/routes/auth.ts. No HTTP server required.
+ *
+ * Mirror side: PUBLIC (apps/server is mirrored).
+ */
+import { createInterface } from "node:readline";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { randomBytes, createHash } from "node:crypto";
+import { Pool } from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { eq, and, sql } from "drizzle-orm";
+
+// Resolve repo root (apps/server/bin -> apps/server -> apps -> repo root)
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+
+// Import from built dist directories (run `pnpm build` first).
+const { encrypt, parseEncryptionKey } = await import(
+  resolve(repoRoot, "packages/adapters/dist/index.js")
+);
+const {
+  tenants,
+  transportConfigs,
+  llmConfigs,
+  users,
+  magicLinkTokens,
+} = await import(resolve(repoRoot, "drizzle/dist/schema/index.js"));
+
+// ---------------------------------------------------------------------------
+// Argument parsing
+// ---------------------------------------------------------------------------
+
+const args = process.argv.slice(2);
+const isProd = args.includes("--prod");
+const filteredArgs = args.filter((a) => a !== "--prod");
+
+const [topCommand, ...restArgs] = filteredArgs;
+
+// ---------------------------------------------------------------------------
+// .env loading (line-by-line, no shell eval, no override of existing env vars)
+// Mirrors the loader in scripts/migrate.sh
+// ---------------------------------------------------------------------------
+
+const envFile = resolve(repoRoot, ".env");
+if (existsSync(envFile)) {
+  for (const line of readFileSync(envFile, "utf8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx < 0) continue;
+    const key = trimmed.slice(0, eqIdx);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    if (process.env[key] !== undefined) continue;
+    let value = trimmed.slice(eqIdx + 1);
+    if ((value.startsWith("'") && value.endsWith("'")) ||
+        (value.startsWith('"') && value.endsWith('"'))) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Database URL resolution (mirrors scripts/migrate.sh conventions)
+// ---------------------------------------------------------------------------
+
+function parseDbTarget(url) {
+  const stripped = url.replace(/^postgres(?:ql)?:\/\//, "");
+  const hostDb = stripped.replace(/^[^@]*@/, "");
+  const hostPort = hostDb.split("/")[0] ?? "";
+  const dbAndParams = hostDb.split("/")[1] ?? "";
+  const dbName = dbAndParams.split("?")[0] || "(none)";
+
+  let type;
+  if (/neon\.tech/i.test(hostPort)) {
+    type = "Neon (production)";
+  } else if (/localhost|127\.0\.0\.|::1/.test(hostPort)) {
+    type = "local";
+  } else {
+    type = "remote (unknown)";
+  }
+
+  if (!isProd && /neon\.tech/i.test(hostPort)) {
+    console.error("\nERROR: DATABASE_URL points to a Neon endpoint but --prod was not passed.");
+    console.error(`  Host: ${hostPort}`);
+    console.error("Use --prod to target production.\n");
+    process.exit(1);
+  }
+
+  if (/-pooler/i.test(hostPort)) {
+    console.error("\nERROR: Target URL points to a pooled endpoint. Use the direct endpoint.\n");
+    process.exit(1);
+  }
+
+  return { hostPort, dbName, type };
+}
+
+function resolveDbUrl() {
+  if (isProd) {
+    const url = process.env.PRODUCTION_DATABASE_URL;
+    if (!url) {
+      console.error("\nERROR: --prod requires PRODUCTION_DATABASE_URL to be set.\n");
+      process.exit(1);
+    }
+    return url;
+  }
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    console.error("\nERROR: DATABASE_URL is not set. Set it in .env.\n");
+    process.exit(1);
+  }
+  return url;
+}
+
+// ---------------------------------------------------------------------------
+// TTY detection
+// ---------------------------------------------------------------------------
+//
+// process.stdin.isTTY is true on a real terminal, undefined/false on a pipe.
+//
+// CLAROS_SETTINGS_INTERACTIVE=1 forces interactive mode for tests that pipe
+// scripted input but need to exercise the prompts path.
+
+const isInteractive = !!process.stdin.isTTY || process.env.CLAROS_SETTINGS_INTERACTIVE === "1";
+
+// ---------------------------------------------------------------------------
+// Line queue for interactive reading
+// ---------------------------------------------------------------------------
+//
+// When input is piped, all lines arrive buffered. A queue serializes sequential
+// readLine calls so each call gets exactly one line in arrival order regardless
+// of how many lines arrived simultaneously.
+
+const _lineQueue = [];
+const _lineReaders = [];
+let _lineRlClosed = false;
+let _lineRl = null;
+
+function ensureLineRl() {
+  if (_lineRl) return;
+  _lineRl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+  _lineRl.on("line", (line) => {
+    if (_lineReaders.length > 0) {
+      _lineReaders.shift()(line);
+    } else {
+      _lineQueue.push(line);
+    }
+  });
+  _lineRl.on("close", () => {
+    _lineRlClosed = true;
+    while (_lineReaders.length > 0) _lineReaders.shift()("");
+  });
+}
+
+function closeLineRl() {
+  if (_lineRl) { _lineRl.close(); _lineRl = null; }
+}
+
+function readLineInteractive(prompt) {
+  ensureLineRl();
+  return new Promise((resolve) => {
+    process.stdout.write(prompt);
+    if (_lineQueue.length > 0) {
+      resolve(_lineQueue.shift());
+    } else if (_lineRlClosed) {
+      resolve("");
+    } else {
+      _lineReaders.push(resolve);
+    }
+  });
+}
+
+/**
+ * Read a secret without echoing.
+ * On a real TTY: uses raw mode to suppress echo.
+ * On a pipe (CLAROS_SETTINGS_INTERACTIVE=1): reads a normal line.
+ *
+ * Secret fields: api_key (transport and LLM), webhook_secret (transport).
+ * None appear in stdout, stderr, or the pre-write summary; only presence
+ * and character count are shown.
+ */
+function readSecretInteractive(prompt) {
+  if (process.stdin.isTTY) {
+    return new Promise((resolve) => {
+      process.stdout.write(prompt);
+      closeLineRl();
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+      process.stdin.setEncoding("utf8");
+      let value = "";
+      const onData = (char) => {
+        if (char === "\n" || char === "\r" || char === "\u0004") {
+          process.stdin.setRawMode(false);
+          process.stdin.pause();
+          process.stdin.removeListener("data", onData);
+          _lineRlClosed = false;
+          resolve(value);
+        } else if (char === "\u007f" || char === "\b") {
+          value = value.slice(0, -1);
+        } else if (char >= " ") {
+          value += char;
+        }
+      };
+      process.stdin.on("data", onData);
+    });
+  }
+  return readLineInteractive(prompt);
+}
+
+async function readStdinJson() {
+  return new Promise((resolve, reject) => {
+    const rl = createInterface({ input: process.stdin, terminal: false });
+    const lines = [];
+    rl.on("line", (line) => lines.push(line));
+    rl.on("close", () => {
+      const raw = lines.join("\n").trim();
+      if (!raw) {
+        reject(new Error("No input received. Pipe JSON to stdin or run interactively."));
+        return;
+      }
+      try { resolve(JSON.parse(raw)); }
+      catch { reject(new Error(`Invalid JSON: ${raw.slice(0, 200)}`)); }
+    });
+    rl.on("error", reject);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Prompt helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Prompt for a single field interactively.
+ * Required fields re-prompt on empty input. Optional fields accept Enter for
+ * the default. Secret fields are read without echoing.
+ */
+async function promptField(opts) {
+  const { name, description, required, defaultValue, allowed, secret, validate } = opts;
+  while (true) {
+    const parts = [];
+    if (description) parts.push(description);
+    if (allowed && allowed.length > 0) parts.push(`Allowed: ${allowed.join(", ")}`);
+    if (!required) {
+      if (defaultValue !== undefined && defaultValue !== null && defaultValue !== "") {
+        parts.push(`Default: ${defaultValue}`);
+      } else {
+        parts.push("Optional, press Enter to skip");
+      }
+    } else {
+      parts.push("Required");
+    }
+    const prompt = `  ${name} (${parts.join(". ")}): `;
+
+    let answer;
+    if (secret) {
+      answer = await readSecretInteractive(prompt);
+      process.stdout.write("\n");
+    } else {
+      answer = await readLineInteractive(prompt);
+    }
+    answer = answer.trim();
+
+    if (answer === "") {
+      if (defaultValue !== undefined && defaultValue !== null && defaultValue !== "") {
+        return String(defaultValue);
+      }
+      if (!required) return "";
+      console.error(`  ERROR: ${name} is required. Please enter a value.`);
+      continue;
+    }
+    if (allowed && allowed.length > 0 && !allowed.includes(answer)) {
+      console.error(`  ERROR: "${answer}" is not valid. Allowed: ${allowed.join(", ")}`);
+      continue;
+    }
+    if (validate) {
+      const err = validate(answer);
+      if (err) { console.error(`  ERROR: ${err}`); continue; }
+    }
+    return answer;
+  }
+}
+
+async function confirmProduction(hostPort, dbName) {
+  if (!isInteractive) return true;
+  const answer = await readLineInteractive(
+    `\nWrite to PRODUCTION (${hostPort}/${dbName})? Type "yes" to confirm: `,
+  );
+  return answer.trim().toLowerCase() === "yes";
+}
+
+async function confirmWrite(summaryLines) {
+  console.log("\n--- Summary: what will be stored ---\n");
+  for (const line of summaryLines) console.log(`  ${line}`);
+  console.log("");
+  if (!isInteractive) return true;
+  const answer = await readLineInteractive("Write this configuration? [y/N] ");
+  const yes = answer.trim().toLowerCase();
+  return yes === "y" || yes === "yes";
+}
+
+// ---------------------------------------------------------------------------
+// Tenant lookup
+// ---------------------------------------------------------------------------
+
+async function findTenant(db, slug) {
+  const rows = await db
+    .select({ id: tenants.id, name: tenants.name, settings: tenants.settings })
+    .from(tenants).where(eq(tenants.slug, slug)).limit(1);
+  if (rows.length === 0) {
+    console.error(`\nERROR: Tenant "${slug}" not found.\n`);
+    process.exit(1);
+  }
+  return rows[0];
+}
+
+// ---------------------------------------------------------------------------
+// ENCRYPTION_KEY
+// ---------------------------------------------------------------------------
+
+function resolveEncryptionKey() {
+  const keyEnv = process.env.ENCRYPTION_KEY;
+  if (!keyEnv) {
+    console.error("\nERROR: ENCRYPTION_KEY is not set. Set it in .env.\n");
+    process.exit(1);
+  }
+  try { return parseEncryptionKey(keyEnv); }
+  catch (err) {
+    console.error(`\nERROR: ENCRYPTION_KEY is invalid: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Known providers
+// ---------------------------------------------------------------------------
+
+const KNOWN_TRANSPORT_PROVIDERS = ["resend", "ses", "smtp"];
+const KNOWN_LLM_PROVIDERS = ["openai", "anthropic", "ollama", "custom"];
+
+/**
+ * Default base_url for known LLM providers.
+ * custom has no sensible default - operator must supply it.
+ */
+const LLM_DEFAULT_BASE_URL = {
+  openai:    "https://api.openai.com/v1",
+  anthropic: "https://api.anthropic.com/v1",
+  ollama:    "http://localhost:11434/v1",
+  custom:    null,
+};
+
+function validateEmail(value) {
+  if (!value.includes("@")) return "Must be a valid email address (missing @)";
+  const [local, domain] = value.split("@");
+  if (!local || local.length === 0) return "Must be a valid email address (empty local part)";
+  if (!domain || !domain.includes(".")) return "Must be a valid email address (domain must contain a dot)";
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// login-link
+//
+// Generates a one-time magic link login URL without requiring a running server
+// or a configured email transport. Writes a token to the DB and prints the URL.
+//
+// [impl] Same logic as POST /auth/login in packages/api/src/routes/auth.ts:
+// - randomBytes(32) token, SHA-256 hash stored in magic_link_tokens
+// - 10-minute TTL
+// - URL: <BASE_URL>/auth/verify?token=<raw>
+// ---------------------------------------------------------------------------
+
+async function cmdLoginLink(db, email) {
+  const normalized = email.toLowerCase().trim();
+
+  const userRows = await db
+    .select({ id: users.id, tenantId: users.tenantId, email: users.email })
+    .from(users).where(eq(users.email, normalized)).limit(1);
+
+  if (userRows.length === 0) {
+    console.error(`\nERROR: No user with email "${normalized}" found in the database.`);
+    console.error("If this is a fresh install, ensure SEED_ADMIN_EMAIL is set and the server has run once.\n");
+    process.exit(1);
+  }
+
+  const user = userRows[0];
+  const raw = randomBytes(32).toString("base64url");
+  const hash = createHash("sha256").update(raw).digest("hex");
+  const TTL_MINUTES = 10;
+  const expiresAt = new Date(Date.now() + TTL_MINUTES * 60 * 1000);
+
+  await db.insert(magicLinkTokens).values({
+    tenantId: user.tenantId,
+    userId: user.id,
+    tokenHash: hash,
+    expiresAt,
+  });
+
+  const baseUrl = (process.env.BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  const loginUrl = `${baseUrl}/auth/verify?token=${raw}`;
+
+  console.log("");
+  console.log("========================================");
+  console.log("  CLAROS LOGIN LINK");
+  console.log("========================================");
+  console.log(`  Email:   ${normalized}`);
+  console.log(`  URL:     ${loginUrl}`);
+  console.log(`  Expires: ${TTL_MINUTES} minutes`);
+  console.log("========================================");
+  console.log("");
+  console.log("Open the URL in a browser. It is single-use and expires in 10 minutes.");
+  console.log("");
+}
+
+// ---------------------------------------------------------------------------
+// transport set
+// ---------------------------------------------------------------------------
+
+async function transportSet(db, tenantSlug, dbInfo) {
+  const tenant = await findTenant(db, tenantSlug);
+  console.log(`\nTenant: ${tenant.name} (${tenantSlug})`);
+  console.log(`Target: ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`);
+
+  let payload;
+  if (isInteractive) {
+    console.log("\nEnter transport configuration. Required fields are marked Required.");
+    console.log("Secret fields will not be echoed.\n");
+    const provider = await promptField({
+      name: "provider", description: "Email provider", required: true,
+      allowed: KNOWN_TRANSPORT_PROVIDERS,
+    });
+    const from_email = await promptField({
+      name: "from_email", description: "Sender address (From: header)", required: true,
+      validate: validateEmail,
+    });
+    const from_name = await promptField({
+      name: "from_name", description: "Sender display name", required: false,
+    });
+    const api_key = await promptField({
+      name: "api_key", description: "Provider API key", required: true, secret: true,
+    });
+    const webhook_secret = await promptField({
+      name: "webhook_secret", description: "Webhook signing secret (for event verification)",
+      required: false, secret: true,
+    });
+    const daily_limit_str = await promptField({
+      name: "daily_limit", description: "Maximum emails per day (blank = provider default)",
+      required: false,
+    });
+    payload = {
+      provider, from_email,
+      from_name: from_name || undefined,
+      api_key,
+      webhook_secret: webhook_secret || undefined,
+      daily_limit: daily_limit_str ? parseInt(daily_limit_str, 10) : undefined,
+    };
+  } else {
+    try { payload = await readStdinJson(); }
+    catch (err) { console.error(`\nERROR: ${err.message}\n`); process.exit(1); }
+  }
+
+  const { provider, from_email, from_name, api_key, webhook_secret, daily_limit } = payload;
+
+  if (!provider || !from_email || !api_key) {
+    console.error("\nERROR: Required fields: provider, from_email, api_key\n"); process.exit(1);
+  }
+  if (!KNOWN_TRANSPORT_PROVIDERS.includes(provider)) {
+    console.error(`\nERROR: Unknown provider "${provider}". Valid: ${KNOWN_TRANSPORT_PROVIDERS.join(", ")}\n`);
+    process.exit(1);
+  }
+  const emailErr = validateEmail(from_email);
+  if (emailErr) {
+    console.error(`\nERROR: from_email: ${emailErr}\n`); process.exit(1);
+  }
+
+  if (isProd) {
+    const confirmed = await confirmProduction(dbInfo.hostPort, dbInfo.dbName);
+    if (!confirmed) { console.log("\nAborted.\n"); process.exit(0); }
+  }
+
+  const summaryLines = [
+    `Tenant:          ${tenant.name} (${tenantSlug})`,
+    `Database:        ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`,
+    `provider:        ${provider}`,
+    `from_email:      ${from_email}`,
+    `from_name:       ${from_name || "(not set)"}`,
+    `api_key:         (present, ${api_key.length} chars)`,
+    `webhook_secret:  ${webhook_secret ? `(present, ${webhook_secret.length} chars)` : "(not set)"}`,
+    `daily_limit:     ${daily_limit ?? "(not set)"}`,
+  ];
+  if (isProd) summaryLines.push("Mode:            PRODUCTION (--prod)");
+
+  const ok = await confirmWrite(summaryLines);
+  if (!ok) { console.log("\nAborted.\n"); process.exit(0); }
+
+  const key = resolveEncryptionKey();
+  const credentials = { apiKey: api_key };
+  if (webhook_secret) credentials.webhookSecret = webhook_secret;
+  const encryptedConfig = encrypt(JSON.stringify(credentials), key);
+
+  await db.update(transportConfigs).set({ isActive: false })
+    .where(and(eq(transportConfigs.tenantId, tenant.id), eq(transportConfigs.isActive, true)));
+
+  const [inserted] = await db.insert(transportConfigs).values({
+    tenantId: tenant.id, provider,
+    config: sql`${encryptedConfig}::jsonb`,
+    isActive: true, fromEmail: from_email,
+    fromName: from_name ?? null, dailyLimit: daily_limit ?? null,
+  }).returning({
+    id: transportConfigs.id,
+    provider: transportConfigs.provider,
+    fromEmail: transportConfigs.fromEmail,
+    createdAt: transportConfigs.createdAt,
+  });
+
+  console.log("\nTransport configuration written.");
+  console.log(`  id:         ${inserted.id}`);
+  console.log(`  provider:   ${inserted.provider}`);
+  console.log(`  from_email: ${inserted.fromEmail}`);
+  console.log(`  created_at: ${inserted.createdAt}`);
+  console.log("  api_key:    (stored encrypted)\n");
+}
+
+// ---------------------------------------------------------------------------
+// transport show
+// ---------------------------------------------------------------------------
+
+async function transportShow(db, tenantSlug) {
+  const tenant = await findTenant(db, tenantSlug);
+  const rows = await db.select({
+    id: transportConfigs.id, provider: transportConfigs.provider,
+    fromEmail: transportConfigs.fromEmail, fromName: transportConfigs.fromName,
+    dailyLimit: transportConfigs.dailyLimit, dkimVerified: transportConfigs.dkimVerified,
+    isActive: transportConfigs.isActive, createdAt: transportConfigs.createdAt,
+  }).from(transportConfigs)
+    .where(and(eq(transportConfigs.tenantId, tenant.id), eq(transportConfigs.isActive, true)))
+    .limit(1);
+
+  if (rows.length === 0) {
+    console.log(`\nNo active transport configuration for tenant "${tenantSlug}".\n`); return;
+  }
+  const row = rows[0];
+  console.log(`\nActive transport for "${tenant.name}" (${tenantSlug}):`);
+  console.log(`  id:            ${row.id}`);
+  console.log(`  provider:      ${row.provider}`);
+  console.log(`  from_email:    ${row.fromEmail}`);
+  console.log(`  from_name:     ${row.fromName ?? "(not set)"}`);
+  console.log(`  daily_limit:   ${row.dailyLimit ?? "(not set)"}`);
+  console.log(`  dkim_verified: ${row.dkimVerified}`);
+  console.log(`  is_active:     ${row.isActive}`);
+  console.log(`  created_at:    ${row.createdAt}`);
+  console.log("  api_key:       (stored encrypted - not shown)\n");
+}
+
+// ---------------------------------------------------------------------------
+// llm set
+// ---------------------------------------------------------------------------
+
+async function llmSet(db, tenantSlug, dbInfo) {
+  const tenant = await findTenant(db, tenantSlug);
+  console.log(`\nTenant: ${tenant.name} (${tenantSlug})`);
+  console.log(`Target: ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`);
+
+  let payload;
+  if (isInteractive) {
+    console.log("\nEnter LLM configuration. Required fields are marked Required.");
+    console.log("The api_key will not be echoed.\n");
+    const provider = await promptField({
+      name: "provider", description: "LLM provider", required: true,
+      allowed: KNOWN_LLM_PROVIDERS,
+    });
+    const api_key = await promptField({
+      name: "api_key", description: "Provider API key", required: true, secret: true,
+    });
+    const defaultBaseUrl = LLM_DEFAULT_BASE_URL[provider] ?? null;
+    const base_url = await promptField({
+      name: "base_url", description: "OpenAI-compatible API base URL",
+      required: defaultBaseUrl === null, // required only for custom
+      defaultValue: defaultBaseUrl,
+    });
+    const model = await promptField({
+      name: "model", description: "Model identifier (e.g. gpt-4o, claude-3-5-sonnet-20241022)",
+      required: true,
+    });
+    const embedding_model = await promptField({
+      name: "embedding_model", description: "Embedding model (must produce vector(1536))",
+      required: false, defaultValue: "text-embedding-3-small",
+    });
+    payload = {
+      provider, api_key, base_url, model,
+      embedding_model: embedding_model || undefined,
+    };
+  } else {
+    try { payload = await readStdinJson(); }
+    catch (err) { console.error(`\nERROR: ${err.message}\n`); process.exit(1); }
+  }
+
+  const { provider, api_key, model, embedding_model } = payload;
+  // Apply per-provider base_url default when the caller omitted it.
+  const base_url = payload.base_url || LLM_DEFAULT_BASE_URL[provider] || null;
+
+  if (!provider || !api_key || !base_url || !model) {
+    console.error("\nERROR: Required fields: provider, api_key, model (base_url defaults for openai/anthropic/ollama)\n"); process.exit(1);
+  }
+  if (!KNOWN_LLM_PROVIDERS.includes(provider)) {
+    console.error(`\nERROR: Unknown provider "${provider}". Valid: ${KNOWN_LLM_PROVIDERS.join(", ")}\n`);
+    process.exit(1);
+  }
+
+  if (isProd) {
+    const confirmed = await confirmProduction(dbInfo.hostPort, dbInfo.dbName);
+    if (!confirmed) { console.log("\nAborted.\n"); process.exit(0); }
+  }
+
+  const summaryLines = [
+    `Tenant:          ${tenant.name} (${tenantSlug})`,
+    `Database:        ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`,
+    `provider:        ${provider}`,
+    `api_key:         (present, ${api_key.length} chars)`,
+    `base_url:        ${base_url}`,
+    `model:           ${model}`,
+    `embedding_model: ${embedding_model || "(default: text-embedding-3-small)"}`,
+  ];
+  if (isProd) summaryLines.push("Mode:            PRODUCTION (--prod)");
+
+  const ok = await confirmWrite(summaryLines);
+  if (!ok) { console.log("\nAborted.\n"); process.exit(0); }
+
+  const key = resolveEncryptionKey();
+  const credentials = { apiKey: api_key, baseUrl: base_url, model };
+  if (embedding_model) credentials.embedding_model = embedding_model;
+  const encryptedConfig = encrypt(JSON.stringify(credentials), key);
+
+  await db.update(llmConfigs).set({ isActive: false })
+    .where(and(eq(llmConfigs.tenantId, tenant.id), eq(llmConfigs.isActive, true)));
+
+  const [inserted] = await db.insert(llmConfigs).values({
+    tenantId: tenant.id, provider, config: encryptedConfig, isActive: true,
+  }).returning({
+    id: llmConfigs.id, provider: llmConfigs.provider, createdAt: llmConfigs.createdAt,
+  });
+
+  console.log("\nLLM configuration written.");
+  console.log(`  id:              ${inserted.id}`);
+  console.log(`  provider:        ${inserted.provider}`);
+  console.log(`  created_at:      ${inserted.createdAt}`);
+  console.log("  api_key:         (stored encrypted)");
+  console.log("  base_url:        (stored encrypted)");
+  console.log("  model:           (stored encrypted)");
+  if (embedding_model) console.log("  embedding_model: (stored encrypted)");
+  console.log("");
+}
+
+// ---------------------------------------------------------------------------
+// llm show
+// ---------------------------------------------------------------------------
+
+async function llmShow(db, tenantSlug) {
+  const tenant = await findTenant(db, tenantSlug);
+  const rows = await db.select({
+    id: llmConfigs.id, provider: llmConfigs.provider,
+    isActive: llmConfigs.isActive, createdAt: llmConfigs.createdAt,
+  }).from(llmConfigs)
+    .where(and(eq(llmConfigs.tenantId, tenant.id), eq(llmConfigs.isActive, true)))
+    .limit(1);
+
+  if (rows.length === 0) {
+    console.log(`\nNo active LLM configuration for tenant "${tenantSlug}".\n`); return;
+  }
+  const row = rows[0];
+  console.log(`\nActive LLM config for "${tenant.name}" (${tenantSlug}):`);
+  console.log(`  id:              ${row.id}`);
+  console.log(`  provider:        ${row.provider}`);
+  console.log(`  is_active:       ${row.isActive}`);
+  console.log(`  created_at:      ${row.createdAt}`);
+  console.log("  api_key:         (stored encrypted - not shown)");
+  console.log("  base_url:        (stored encrypted - not shown)");
+  console.log("  model:           (stored encrypted - not shown)");
+  console.log("  embedding_model: (stored encrypted - not shown)\n");
+}
+
+// ---------------------------------------------------------------------------
+// postal-address set
+//
+// [impl] Same read-modify-write as PATCH /v1/settings/tenant in
+// packages/api/src/routes/settings.ts (lines 582-600).
+// Merges over existing settings so lifecycle/throttle/brain_context keys
+// set by the templates route are preserved.
+// ---------------------------------------------------------------------------
+
+async function postalAddressSet(db, tenantSlug, dbInfo) {
+  const tenant = await findTenant(db, tenantSlug);
+  console.log(`\nTenant: ${tenant.name} (${tenantSlug})`);
+  console.log(`Target: ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`);
+
+  let postalAddress;
+  if (isInteractive) {
+    console.log("\nEnter the physical postal address required by CAN-SPAM.");
+    console.log("This address appears in the footer of every outgoing email.\n");
+    postalAddress = await promptField({
+      name: "postal_address",
+      description: "Physical mailing address of the sending organization",
+      required: true,
+    });
+  } else {
+    let p;
+    try { p = await readStdinJson(); }
+    catch (err) { console.error(`\nERROR: ${err.message}\n`); process.exit(1); }
+    postalAddress = p.postal_address;
+  }
+
+  if (!postalAddress || postalAddress.trim().length === 0) {
+    console.error("\nERROR: postal_address is required.\n"); process.exit(1);
+  }
+  const trimmed = postalAddress.trim();
+
+  if (isProd) {
+    const confirmed = await confirmProduction(dbInfo.hostPort, dbInfo.dbName);
+    if (!confirmed) { console.log("\nAborted.\n"); process.exit(0); }
+  }
+
+  const ok = await confirmWrite([
+    `Tenant:          ${tenant.name} (${tenantSlug})`,
+    `Database:        ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`,
+    `postal_address:  ${trimmed}`,
+    ...(isProd ? ["Mode:            PRODUCTION (--prod)"] : []),
+  ]);
+  if (!ok) { console.log("\nAborted.\n"); process.exit(0); }
+
+  const existing = (tenant.settings ?? {});
+  const updated = { ...existing, postal_address: trimmed };
+  await db.update(tenants).set({ settings: updated }).where(eq(tenants.id, tenant.id));
+
+  console.log("\nPostal address written.");
+  console.log(`  postal_address: ${trimmed}\n`);
+}
+
+// ---------------------------------------------------------------------------
+// postal-address show
+// ---------------------------------------------------------------------------
+
+async function postalAddressShow(db, tenantSlug) {
+  const tenant = await findTenant(db, tenantSlug);
+  const settings = (tenant.settings ?? {});
+  const pa = settings.postal_address ?? null;
+  if (!pa) {
+    console.log(`\nNo postal address configured for "${tenantSlug}".`);
+    console.log("  The drain will skip all messages until this is set.");
+    console.log(`  Set it: claros postal-address set ${tenantSlug}\n`);
+    return;
+  }
+  console.log(`\nPostal address for "${tenant.name}" (${tenantSlug}):`);
+  console.log(`  ${pa}\n`);
+}
+
+// ---------------------------------------------------------------------------
+// setup - guided first-run wizard
+//
+// Walks through postal address, LLM provider, and transport provider in the
+// order the system requires them. Shows what is already configured and leaves
+// it alone unless the operator chooses to change it. Safe to re-run.
+//
+// Order:
+//   1. Postal address (required before any email can leave; no credentials)
+//   2. LLM provider   (required for flow compilation; api_key is a secret)
+//   3. Transport      (required to send email; api_key is a secret)
+//
+// What happens when a step is skipped:
+//   The wizard prints what would be blocked without that step and moves on.
+//   The operator can tell what remains unconfigured from the skipped summary
+//   and from the "what's still missing" block at the end.
+// ---------------------------------------------------------------------------
+
+async function cmdSetup(db, tenantSlug, dbInfo) {
+  const tenant = await findTenant(db, tenantSlug);
+  const settings = (tenant.settings ?? {});
+  const existingPostal = settings.postal_address ?? null;
+
+  const existingLlm = await db.select({
+    id: llmConfigs.id, provider: llmConfigs.provider,
+  }).from(llmConfigs)
+    .where(and(eq(llmConfigs.tenantId, tenant.id), eq(llmConfigs.isActive, true)))
+    .limit(1);
+
+  const existingTransport = await db.select({
+    id: transportConfigs.id, provider: transportConfigs.provider,
+    fromEmail: transportConfigs.fromEmail,
+  }).from(transportConfigs)
+    .where(and(eq(transportConfigs.tenantId, tenant.id), eq(transportConfigs.isActive, true)))
+    .limit(1);
+
+  console.log("");
+  console.log("=== Claros Setup Wizard ===");
+  console.log(`Tenant: ${tenant.name} (${tenantSlug})`);
+  console.log(`Target: ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`);
+  console.log("");
+  console.log("This wizard walks through the three required configuration steps.");
+  console.log("Anything already configured is shown; you can keep it or replace it.");
+  console.log("Press Enter to skip any optional prompt or accept its default.");
+  console.log("");
+
+  const stillMissing = [];
+
+  // -------------------------------------------------------------------------
+  // Step 1: Postal address
+  // -------------------------------------------------------------------------
+
+  console.log("--- Step 1 of 3: Postal address ---");
+  console.log("");
+  console.log("Why: CAN-SPAM requires a physical mailing address in every outgoing email.");
+  console.log("     No email leaves the system until this is set.");
+  console.log("");
+
+  if (existingPostal) {
+    console.log(`  Current: ${existingPostal}`);
+    const change = await readLineInteractive("  Replace it? [y/N] ");
+    if (change.trim().toLowerCase() === "y" || change.trim().toLowerCase() === "yes") {
+      await postalAddressSet(db, tenantSlug, dbInfo);
+    } else {
+      console.log("  Keeping existing postal address.\n");
+    }
+  } else {
+    console.log("  Not configured. Enter one now, or press Enter to skip.");
+    console.log("  (Skipping blocks all email sending until you set it.)\n");
+    const addr = await promptField({
+      name: "postal_address", description: "Physical mailing address", required: false,
+    });
+    if (addr) {
+      const trimmed = addr.trim();
+      const merged = { ...(tenant.settings ?? {}), postal_address: trimmed };
+      await db.update(tenants).set({ settings: merged }).where(eq(tenants.id, tenant.id));
+      console.log(`  Saved: ${trimmed}\n`);
+    } else {
+      console.log("  Skipped. Run: claros postal-address set " + tenantSlug);
+      console.log("");
+      stillMissing.push("postal-address set " + tenantSlug + "  (blocks all email sending)");
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 2: LLM provider
+  // -------------------------------------------------------------------------
+
+  console.log("--- Step 2 of 3: LLM provider ---");
+  console.log("");
+  console.log("Why: required for flow compilation (converts prompt-defined flows into");
+  console.log("     deterministic execution plans) and KB entry embedding.");
+  console.log("     Email can be sent without this, but no content is generated.");
+  console.log("");
+
+  if (existingLlm.length > 0) {
+    const l = existingLlm[0];
+    console.log(`  Current: ${l.provider} (id: ${l.id})`);
+    const change = await readLineInteractive("  Replace it? [y/N] ");
+    if (change.trim().toLowerCase() === "y" || change.trim().toLowerCase() === "yes") {
+      await llmSet(db, tenantSlug, dbInfo);
+    } else {
+      console.log("  Keeping existing LLM configuration.\n");
+    }
+  } else {
+    console.log("  Not configured. Enter credentials now, or press Enter at provider to skip.");
+    console.log("  (Skipping means flows cannot be compiled.)\n");
+
+    const provider = await promptField({
+      name: "provider", description: "LLM provider (press Enter to skip)",
+      required: false, allowed: KNOWN_LLM_PROVIDERS,
+    });
+
+    if (provider) {
+      const api_key = await promptField({
+        name: "api_key", description: "Provider API key", required: true, secret: true,
+      });
+      const defaultBaseUrl = LLM_DEFAULT_BASE_URL[provider] ?? null;
+      const base_url = await promptField({
+        name: "base_url", description: "OpenAI-compatible API base URL",
+        required: defaultBaseUrl === null,
+        defaultValue: defaultBaseUrl,
+      });
+      const model = await promptField({
+        name: "model", description: "Model identifier (e.g. gpt-4o)", required: true,
+      });
+      const embedding_model = await promptField({
+        name: "embedding_model", description: "Embedding model (must produce vector(1536))",
+        required: false, defaultValue: "text-embedding-3-small",
+      });
+
+      if (isProd) {
+        const confirmed = await confirmProduction(dbInfo.hostPort, dbInfo.dbName);
+        if (!confirmed) {
+          console.log("\nAborted LLM step.\n");
+          stillMissing.push("llm set " + tenantSlug + "  (required for flow compilation)");
+        } else {
+          const ok = await confirmWrite([
+            `provider:        ${provider}`,
+            `api_key:         (present, ${api_key.length} chars)`,
+            `base_url:        ${base_url}`,
+            `model:           ${model}`,
+            `embedding_model: ${embedding_model || "(default)"}`,
+          ]);
+          if (ok) {
+            const encKey = resolveEncryptionKey();
+            const creds = { apiKey: api_key, baseUrl: base_url, model };
+            if (embedding_model) creds.embedding_model = embedding_model;
+            const enc = encrypt(JSON.stringify(creds), encKey);
+            await db.update(llmConfigs).set({ isActive: false })
+              .where(and(eq(llmConfigs.tenantId, tenant.id), eq(llmConfigs.isActive, true)));
+            const [ins] = await db.insert(llmConfigs).values({
+              tenantId: tenant.id, provider, config: enc, isActive: true,
+            }).returning({ id: llmConfigs.id });
+            console.log(`  LLM saved (id: ${ins.id})\n`);
+          } else {
+            console.log("  Skipped.\n");
+            stillMissing.push("llm set " + tenantSlug + "  (required for flow compilation)");
+          }
+        }
+      } else {
+        const ok = await confirmWrite([
+          `provider:        ${provider}`,
+          `api_key:         (present, ${api_key.length} chars)`,
+          `base_url:        ${base_url}`,
+          `model:           ${model}`,
+          `embedding_model: ${embedding_model || "(default)"}`,
+        ]);
+        if (ok) {
+          const encKey = resolveEncryptionKey();
+          const creds = { apiKey: api_key, baseUrl: base_url, model };
+          if (embedding_model) creds.embedding_model = embedding_model;
+          const enc = encrypt(JSON.stringify(creds), encKey);
+          await db.update(llmConfigs).set({ isActive: false })
+            .where(and(eq(llmConfigs.tenantId, tenant.id), eq(llmConfigs.isActive, true)));
+          const [ins] = await db.insert(llmConfigs).values({
+            tenantId: tenant.id, provider, config: enc, isActive: true,
+          }).returning({ id: llmConfigs.id });
+          console.log(`  LLM saved (id: ${ins.id})\n`);
+        } else {
+          console.log("  Skipped.\n");
+          stillMissing.push("llm set " + tenantSlug + "  (required for flow compilation)");
+        }
+      }
+    } else {
+      console.log("  Skipped. Run: claros llm set " + tenantSlug);
+      console.log("");
+      stillMissing.push("llm set " + tenantSlug + "  (required for flow compilation)");
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 3: Transport provider
+  // -------------------------------------------------------------------------
+
+  console.log("--- Step 3 of 3: Transport provider (email delivery) ---");
+  console.log("");
+  console.log("Why: required to send email. Without this, approved messages queue up");
+  console.log("     but nothing is delivered. You will also need to verify your sender");
+  console.log("     domain with your provider (outside Claros).");
+  console.log("");
+
+  if (existingTransport.length > 0) {
+    const t = existingTransport[0];
+    console.log(`  Current: ${t.provider}, from ${t.fromEmail}`);
+    const change = await readLineInteractive("  Replace it? [y/N] ");
+    if (change.trim().toLowerCase() === "y" || change.trim().toLowerCase() === "yes") {
+      await transportSet(db, tenantSlug, dbInfo);
+    } else {
+      console.log("  Keeping existing transport configuration.\n");
+    }
+  } else {
+    console.log("  Not configured. Enter credentials now, or press Enter at provider to skip.");
+    console.log("  (Skipping means no email is sent.)\n");
+
+    const provider = await promptField({
+      name: "provider", description: "Email provider (press Enter to skip)",
+      required: false, allowed: KNOWN_TRANSPORT_PROVIDERS,
+    });
+
+    if (provider) {
+      const from_email = await promptField({
+        name: "from_email", description: "Sender address (From: header)", required: true,
+        validate: validateEmail,
+      });
+      const from_name = await promptField({
+        name: "from_name", description: "Sender display name", required: false,
+      });
+      const api_key = await promptField({
+        name: "api_key", description: "Provider API key", required: true, secret: true,
+      });
+      const webhook_secret = await promptField({
+        name: "webhook_secret", description: "Webhook signing secret (optional)",
+        required: false, secret: true,
+      });
+
+      const writeTransport = async () => {
+        const encKey = resolveEncryptionKey();
+        const creds = { apiKey: api_key };
+        if (webhook_secret) creds.webhookSecret = webhook_secret;
+        const enc = encrypt(JSON.stringify(creds), encKey);
+        await db.update(transportConfigs).set({ isActive: false })
+          .where(and(eq(transportConfigs.tenantId, tenant.id), eq(transportConfigs.isActive, true)));
+        const [ins] = await db.insert(transportConfigs).values({
+          tenantId: tenant.id, provider,
+          config: sql`${enc}::jsonb`,
+          isActive: true, fromEmail: from_email,
+          fromName: from_name ?? null, dailyLimit: null,
+        }).returning({ id: transportConfigs.id });
+        console.log(`  Transport saved (id: ${ins.id})`);
+        console.log(`  NOTE: Verify your sender domain (${from_email}) with ${provider}.\n`);
+      };
+
+      if (isProd) {
+        const confirmed = await confirmProduction(dbInfo.hostPort, dbInfo.dbName);
+        if (!confirmed) {
+          console.log("\nAborted transport step.\n");
+          stillMissing.push("transport set " + tenantSlug + "  (required to send email)");
+        } else {
+          const ok = await confirmWrite([
+            `provider:        ${provider}`,
+            `from_email:      ${from_email}`,
+            `api_key:         (present, ${api_key.length} chars)`,
+          ]);
+          if (ok) { await writeTransport(); }
+          else {
+            console.log("  Skipped.\n");
+            stillMissing.push("transport set " + tenantSlug + "  (required to send email)");
+          }
+        }
+      } else {
+        const ok = await confirmWrite([
+          `provider:        ${provider}`,
+          `from_email:      ${from_email}`,
+          `api_key:         (present, ${api_key.length} chars)`,
+        ]);
+        if (ok) { await writeTransport(); }
+        else {
+          console.log("  Skipped.\n");
+          stillMissing.push("transport set " + tenantSlug + "  (required to send email)");
+        }
+      }
+    } else {
+      console.log("  Skipped. Run: claros transport set " + tenantSlug);
+      console.log("");
+      stillMissing.push("transport set " + tenantSlug + "  (required to send email)");
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Summary
+  // -------------------------------------------------------------------------
+
+  console.log("=== Setup complete ===");
+  console.log("");
+  if (stillMissing.length === 0) {
+    console.log("All three configuration steps are done.");
+    console.log("Get your login link:");
+    console.log("");
+    console.log("  claros login-link <your-email>");
+    console.log("  docker compose exec app claros login-link <email>");
+    console.log("");
+  } else {
+    console.log("Steps still needed:");
+    for (const m of stillMissing) console.log(`  claros ${m}`);
+    console.log("");
+    console.log("Re-run `claros setup` at any time to complete the remaining steps.");
+    console.log("");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// help
+// ---------------------------------------------------------------------------
+
+function printHelp(subcommand) {
+  if (subcommand === "login-link") {
+    console.log(`
+claros login-link <email>
+
+Generate a one-time login URL for the given email address. No running server
+or email transport is required. The URL is printed to stdout and expires in
+10 minutes.
+
+The user with that email must already exist in the database (created on first
+boot via SEED_ADMIN_EMAIL, or via the invite endpoint).
+
+Example:
+  claros login-link admin@example.com
+  docker compose exec app claros login-link admin@example.com
+`);
+    return;
+  }
+
+  if (subcommand === "setup") {
+    console.log(`
+claros setup [tenant_slug]
+
+Guided first-run configuration wizard. Walks through:
+  1. Postal address (required by CAN-SPAM; blocks all sending if absent)
+  2. LLM provider   (required for flow compilation)
+  3. Transport      (required to send email)
+
+Shows what is already configured and leaves it in place unless you choose to
+replace it. Safe to re-run.
+
+When a step is skipped, the wizard prints what would be blocked and lists the
+remaining command at the end so the operator knows exactly what to run next.
+
+Default tenant slug: "default"
+
+Example:
+  claros setup
+  claros setup my-tenant
+  docker compose exec app claros setup
+`);
+    return;
+  }
+
+  if (subcommand === "transport") {
+    console.log(`
+claros transport set <tenant_slug>
+claros transport show <tenant_slug>
+
+Manage the email transport configuration for a tenant.
+
+"transport set" encrypts the provider API key and stores it in the database.
+"transport show" displays metadata only; credentials are never shown.
+
+Non-interactive (piped JSON):
+  echo '{"provider":"resend","from_email":"hi@co.com","api_key":"re_..."}' \\
+    | claros transport set my-tenant
+
+Fields for "transport set":
+  provider        Required. One of: resend, ses, smtp
+  from_email      Required. Sender address (must be verified with the provider)
+  from_name       Optional. Display name in the From: header
+  api_key         Required. Provider API key (never shown after write)
+  webhook_secret  Optional. For verifying inbound event webhooks
+  daily_limit     Optional. Maximum emails per day (blank = provider default)
+`);
+    return;
+  }
+
+  if (subcommand === "llm") {
+    console.log(`
+claros llm set <tenant_slug>
+claros llm show <tenant_slug>
+
+Manage the LLM provider configuration for a tenant.
+
+"llm set" encrypts the API key and stores the full config (key, base URL, model)
+in the database. "llm show" displays the provider name only.
+
+Non-interactive (piped JSON):
+  echo '{"provider":"openai","api_key":"sk-...","base_url":"https://api.openai.com/v1","model":"gpt-4o"}' \\
+    | claros llm set my-tenant
+
+Fields for "llm set":
+  provider         Required. One of: openai, anthropic, ollama, custom
+  api_key          Required. Provider API key
+  base_url         Optional for openai/anthropic/ollama (defaults applied). Required for custom.
+                   openai:    https://api.openai.com/v1
+                   anthropic: https://api.anthropic.com/v1
+                   ollama:    http://localhost:11434/v1
+  model            Required. Model identifier (e.g. gpt-4o)
+  embedding_model  Optional. Must produce vector(1536). Default: text-embedding-3-small
+`);
+    return;
+  }
+
+  if (subcommand === "postal-address") {
+    console.log(`
+claros postal-address set <tenant_slug>
+claros postal-address show <tenant_slug>
+
+Manage the CAN-SPAM required physical postal address for a tenant.
+
+This address appears in the footer of every outgoing email. The drain stops
+sending until it is set.
+
+Non-interactive:
+  echo '{"postal_address":"123 Main St, City, ST 12345"}' \\
+    | claros postal-address set my-tenant
+`);
+    return;
+  }
+
+  // Default help
+  console.log(`
+claros - Operator CLI for the Claros lifecycle email engine
+
+Usage:
+  claros <command> [options]
+  node apps/server/bin/claros.mjs <command> [options]
+  docker compose exec app claros <command> [options]
+
+Commands:
+  login-link <email>           Generate a one-time login URL (no transport needed)
+  setup [tenant_slug]          Guided first-run: postal address, LLM, transport
+  transport set <slug>         Write transport credentials
+  transport show <slug>        Show active transport config (no credentials)
+  llm set <slug>               Write LLM credentials
+  llm show <slug>              Show active LLM config (no credentials)
+  postal-address set <slug>    Set the CAN-SPAM postal address
+  postal-address show <slug>   Show the current postal address
+  help [command]               Show detailed help for a command
+
+Options:
+  --prod   Target PRODUCTION_DATABASE_URL. Requires typed confirmation.
+
+Credential input:
+  Interactive (TTY): prompts for each field; secrets not echoed.
+  Non-interactive (pipe): reads JSON from stdin; confirmation is automatic.
+
+Requires pnpm build to have been run (imports from dist/).
+`);
+}
+
+// ---------------------------------------------------------------------------
+// Command dispatch
+// ---------------------------------------------------------------------------
+
+if (!topCommand || topCommand === "help") {
+  const helpTarget = restArgs[0];
+  printHelp(helpTarget);
+  process.exit(0);
+}
+
+const dbUrl = resolveDbUrl();
+const dbInfo = parseDbTarget(dbUrl);
+const pool = new Pool({ connectionString: dbUrl });
+const db = drizzle(pool);
+
+if (topCommand !== "login-link") {
+  console.log("");
+  console.log("=== Claros CLI ===");
+  console.log(`Target:  ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`);
+  if (isProd) console.log("Mode:    PRODUCTION (--prod)");
+}
+
+try {
+  switch (topCommand) {
+    case "login-link": {
+      const email = restArgs[0];
+      if (!email) {
+        console.error("\nERROR: claros login-link <email>\n"); process.exit(1);
+      }
+      await cmdLoginLink(db, email);
+      break;
+    }
+    case "setup": {
+      const slug = restArgs[0] ?? "default";
+      await cmdSetup(db, slug, dbInfo);
+      break;
+    }
+    case "transport": {
+      const [sub, slug] = restArgs;
+      if (!sub || !slug) {
+        console.error("\nERROR: claros transport set|show <tenant_slug>\n"); process.exit(1);
+      }
+      if (sub === "set") await transportSet(db, slug, dbInfo);
+      else if (sub === "show") await transportShow(db, slug);
+      else { console.error(`\nUnknown subcommand: transport ${sub}\n`); process.exit(1); }
+      break;
+    }
+    case "llm": {
+      const [sub, slug] = restArgs;
+      if (!sub || !slug) {
+        console.error("\nERROR: claros llm set|show <tenant_slug>\n"); process.exit(1);
+      }
+      if (sub === "set") await llmSet(db, slug, dbInfo);
+      else if (sub === "show") await llmShow(db, slug);
+      else { console.error(`\nUnknown subcommand: llm ${sub}\n`); process.exit(1); }
+      break;
+    }
+    case "postal-address": {
+      const [sub, slug] = restArgs;
+      if (!sub || !slug) {
+        console.error("\nERROR: claros postal-address set|show <tenant_slug>\n"); process.exit(1);
+      }
+      if (sub === "set") await postalAddressSet(db, slug, dbInfo);
+      else if (sub === "show") await postalAddressShow(db, slug);
+      else { console.error(`\nUnknown subcommand: postal-address ${sub}\n`); process.exit(1); }
+      break;
+    }
+    default:
+      console.error(`\nUnknown command: "${topCommand}". Run "claros help" for usage.\n`);
+      process.exit(1);
+  }
+} catch (err) {
+  console.error(`\nERROR: ${err.message}\n`);
+  process.exit(1);
+} finally {
+  closeLineRl();
+  await pool.end();
+}

@@ -37,12 +37,23 @@ import { processCounterRollover } from "./counter-rollover.js";
 import { processPartitionMaintenance } from "./partition-maintenance.js";
 import { processContentTick } from "./content.js";
 import { nullTransportResolver, type TransportResolver } from "./transport.js";
+import { buildTenantTransportResolver } from "./transport-resolver.js";
 
 export { fromDrizzle };
 export { nullTransportResolver } from "./transport.js";
 export type { TransportAdapter, TransportResolver, TransportSendResult, TransportSendParams } from "./transport.js";
+export { buildTenantTransportResolver } from "./transport-resolver.js";
 export { processDrainTick, fetchDrainBatchSimple } from "./drain.js";
 export type { FetchDrainBatch, DrainTickResult, DrainCandidate } from "./drain.js";
+export {
+  buildComplianceOutput,
+  injectHtmlFooter,
+  injectTextFooter,
+  resolveBaseUrl,
+  resolveSigningKey,
+  type ComplianceInput,
+  type ComplianceOutput,
+} from "./compliance.js";
 export { processReapTick } from "./reap.js";
 export type { ReapTickResult } from "./reap.js";
 export { processCounterRollover } from "./counter-rollover.js";
@@ -116,7 +127,6 @@ export function createBoss(
  *
  * Pattern: one createQueue() + work() pair per queue constant. Add both in the
  * same commit as the queue name in @claros/core and the handler logic.
- * Handler bodies are stubs until the Phase 2 task that implements them.
  */
 export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
   // Ensure queue rows exist before any boss.schedule() call can reference them.
@@ -222,15 +232,16 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
     QUEUE.DRAIN,
     { pollingIntervalSeconds: 5 },
     async (jobs: Job<DrainJobData>[]) => {
-      // Drain runs as a single cron-triggered job. Uses the null transport
-      // resolver by default (no messages actually send until Phase 4).
-      // Cloud overrides via startWorkerWithDrain() passing a real resolver
-      // and fairness-aware batch fetcher.
+      // Drain uses the real transport resolver (reads and decrypts transport_configs
+      // per tick). On a fresh install with no transport configured, the resolver
+      // returns null for every tenant and zero messages are sent or written -
+      // identical to the previous nullTransportResolver behavior.
+      const resolveTransport = buildTenantTransportResolver(db);
       const now = new Date();
       const result = await processDrainTick(
         db,
         now,
-        nullTransportResolver,
+        resolveTransport,
         fetchDrainBatchSimple,
       );
 
@@ -318,9 +329,9 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
     QUEUE.CONTENT_GENERATION,
     { pollingIntervalSeconds: 5 },
     async (jobs: Job<ContentGenerationJobData>[]) => {
-      // Content generation runs every 5 min. Claims pending_generation
-      // messages, runs Brain decide+draft (stubbed in this slice), and
-      // advances to awaiting_content.
+      // Content generation: claims pending_generation messages, runs
+      // Brain decide+draft+assess pipeline, and advances to
+      // awaiting_content (decide: contact) or pending_approval (after assess pass).
       const now = new Date();
       const result = await processContentTick(db, now);
 

@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "packageManager": "pnpm@9.15.4",
   "scripts": {
@@ -18,7 +18,7 @@
     "release:dry": "bash scripts/release/assemble.sh && bash scripts/release/verify.sh"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@types/node": "^22.0.0",
     "@types/pg": "^8.20.0",
     "drizzle-kit": "^0.31.10",
     "pg": "^8.22.0",

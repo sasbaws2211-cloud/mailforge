@@ -1,10 +1,11 @@
 /**
  * Brain decide: send context to LLM, validate output against decideOutputSchema.
  *
- * This is the second of three Brain functions:
+ * This is the second of four Brain functions:
  *   - compile() - task 11: prompt -> deterministic plan (runs once per prompt change)
  *   - decide()  - task 17: context -> action decision (runs per contact per step)
- *   - draft()   - task 17: context -> email content (future)
+ *   - draft()   - task 17: context -> email content (runs per contact per step)
+ *   - assess()  - task 20: (context + draft) -> pass/fail verdict (value gate)
  *
  * The function is pure: provider and context are parameters, no database access,
  * no tenant or crypto knowledge in brain-oss.

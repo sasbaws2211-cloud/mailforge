@@ -28,6 +28,10 @@ import flowsRoutes from "./routes/flows.js";
 import kbRoutes from "./routes/kb.js";
 import suppressionRoutes from "./routes/suppressions.js";
 import templatesRoutes from "./routes/templates.js";
+import messagesRoutes from "./routes/messages.js";
+import unsubscribeRoutes from "./routes/unsubscribe.js";
+import resendWebhookRoute from "./routes/webhooks/resend.js";
+import settingsRoutes from "./routes/settings.js";
 
 export interface BuildAppOptions {
   /**
@@ -108,6 +112,20 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     await app.register(authRoutes, { prefix: "/auth", baseUrl });
   }
 
+  // /unsubscribe/*: public one-click (RFC 8058) + browser unsubscribe page.
+  // No authentication. Token carries tenant + contact by ID; email resolved server-side.
+  if (opts.db) {
+    await app.register(unsubscribeRoutes, { prefix: "/unsubscribe" });
+  }
+
+  // /webhooks/resend/:tenantId: Resend provider webhook (bounces, opens, clicks, complaints).
+  // Public, unauthenticated by session. Signature-verified via Svix/HMAC using
+  // the per-tenant webhook secret stored in transport_configs. The tenant UUID
+  // in the path is used to load the correct secret before the body is verified.
+  if (opts.db) {
+    await app.register(resendWebhookRoute, { prefix: "/webhooks/resend" });
+  }
+
   // --- Authenticated scope (dashboard) ----------------------------------------
   // All routes that require a resolved tenant go here, under the /v1 prefix.
   // A preHandler rejects requests where request.tenant is null (returning 401).
@@ -117,10 +135,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   //   v1.register(contactsRoutes,  { prefix: "/contacts" });   // task 8+
   //   v1.register(flowsRoutes,     { prefix: "/flows" });       // task 10 ✓
   //   v1.register(kbRoutes,        { prefix: "/kb" });          // task 21 ✓
-  //   v1.register(messagesRoutes,  { prefix: "/messages" });
-  //   v1.register(templatesRoutes, { prefix: "/templates" });
-  //   v1.register(analyticsRoutes, { prefix: "/analytics" });
-  //   v1.register(settingsRoutes,  { prefix: "/settings" });
+  //   v1.register(messagesRoutes,  { prefix: "/messages" });    // task 40 (partial) ✓
+  //   v1.register(templatesRoutes, { prefix: "/templates" });   // task 25 ✓
+   //   v1.register(analyticsRoutes, { prefix: "/analytics" });
   await app.register(
     async (v1) => {
       // Enforce authentication: reject requests without a resolved tenant.
@@ -149,6 +166,16 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       // task 25: business model templates (dashboard operators only)
       if (opts.db) {
         await v1.register(templatesRoutes, { prefix: "/templates" });
+      }
+
+      // task 40 (partial): message approval/rejection (dashboard operators only)
+      if (opts.db) {
+        await v1.register(messagesRoutes, { prefix: "/messages" });
+      }
+
+      // settings: transport configuration and tenant settings
+      if (opts.db) {
+        await v1.register(settingsRoutes, { prefix: "/settings" });
       }
     },
     { prefix: "/v1" },

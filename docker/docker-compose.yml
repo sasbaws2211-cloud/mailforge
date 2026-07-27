@@ -3,28 +3,43 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      # Use the dev stage: all deps including tsx, entrypoint is tsx watch.
+      # node_modules in the image are Linux binaries - the source volume mount
+      # below overlays only the source files, leaving node_modules untouched.
+      target: dev
     ports:
       - "${PORT:-3000}:3000"
     environment:
-      - CLAROS_EDITION=${CLAROS_EDITION:-community}
+      # DATABASE_URL overrides the localhost URL in .env: inside the compose
+      # network the Postgres service is reachable as "postgres", not localhost.
       - DATABASE_URL=postgres://claros:claros@postgres:5432/claros
-      - PORT=3000
+      # Bind to all interfaces inside the container.
       - HOST=0.0.0.0
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      # NODE_ENV must be "development" (not "production" and not absent) so the
-      # console login fallback fires when no transport is configured.
-      # isConsoleLoginAllowed() returns false if NODE_ENV is absent or "production".
-      - NODE_ENV=${NODE_ENV:-development}
-      # First-boot seed: creates the default tenant and owner user when the
-      # database is empty. Set this to the email you will use to log in.
-      # Required on first boot; ignored once a tenant exists.
-      - SEED_ADMIN_EMAIL=${SEED_ADMIN_EMAIL:-admin@example.com}
-      # Opt-in auto-migrate: applies pending schema migrations on startup.
+      # Opt-in auto-migrate: applies pending community schema migrations on boot.
       # This is the ONLY context where CLAROS_MIGRATE_ON_BOOT should be true.
       # Cloud deployments (Neon) must never set this - migrations run via
       # scripts/migrate.sh under Umut's control.
       - CLAROS_MIGRATE_ON_BOOT=true
-    command: ["--role=all"]
+      # Keep NODE_ENV as development so the console login fallback works.
+      - NODE_ENV=development
+      # Pass-through from .env (docker/.env is a symlink to ../.env, loaded
+      # automatically by Docker Compose when present in the same directory as
+      # docker-compose.yml).
+      - CLAROS_EDITION=${CLAROS_EDITION:-community}
+      - PORT=${PORT:-3000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SEED_ADMIN_EMAIL=${SEED_ADMIN_EMAIL:-admin@example.com}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - UNSUBSCRIBE_SIGNING_KEY=${UNSUBSCRIBE_SIGNING_KEY}
+      - BASE_URL=${BASE_URL:-http://localhost:3000}
+    volumes:
+      # Mount source directories so file changes are reflected immediately.
+      # node_modules is NOT mounted - it stays from the image (Linux binaries).
+      # Mounting the macOS node_modules would break platform-specific packages
+      # like esbuild (@esbuild/darwin-arm64 vs @esbuild/linux-arm64).
+      - ../apps:/app/apps
+      - ../packages:/app/packages
+      - ../drizzle:/app/drizzle
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,10 +1,11 @@
 /**
  * Flow compilation: send prompt to LLM, validate output against schema.
  *
- * This is the first of three Brain functions:
+ * This is the first of four Brain functions:
  *   - compile() - task 11: prompt -> deterministic plan (runs once per prompt change)
- *   - decide()  - task 17: context -> action decision (future)
- *   - draft()   - task 17: context -> email content (future)
+ *   - decide()  - task 17: context -> action decision (runs per contact per step)
+ *   - draft()   - task 17: context -> email content (runs per contact per step)
+ *   - assess()  - task 20: (context + draft) -> pass/fail verdict (value gate)
  *
  * Mirror side: PUBLIC (packages/brain-oss is mirrored).
  */

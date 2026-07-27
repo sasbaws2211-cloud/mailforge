@@ -1,5 +1,5 @@
-# Stage 1: Builder
-FROM node:20-alpine AS builder
+# Stage 1: Builder - installs all deps (including devDeps) and builds dist files.
+FROM node:22-alpine AS builder
 
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
@@ -30,8 +30,41 @@ COPY drizzle/ drizzle/
 
 RUN pnpm build
 
-# Stage 2: Runner
-FROM node:20-alpine AS runner
+# Stage 2: Dev - keeps all deps (including tsx) for hot reload.
+# docker-compose.yml mounts the source over /app so file changes are visible
+# immediately; node_modules stays from this image layer (Linux binaries).
+FROM node:22-alpine AS dev
+
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+
+WORKDIR /app
+
+# All deps including devDeps (tsx, vitest, etc.) - needed for `tsx watch`.
+COPY --from=builder /app/node_modules node_modules
+COPY --from=builder /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
+COPY --from=builder /app/tsconfig.base.json ./
+COPY --from=builder /app/packages/ packages/
+COPY --from=builder /app/apps/ apps/
+COPY --from=builder /app/drizzle/ drizzle/
+
+RUN chmod +x /app/apps/server/bin/claros.mjs \
+    && ln -s /app/apps/server/bin/claros.mjs /usr/local/bin/claros
+
+COPY .env.example .env.example
+
+EXPOSE 3000
+
+# Hot reload: Node's built-in --watch with tsx as the TypeScript loader.
+# tsx watch uses its own file watcher; node --watch uses inotify on Linux.
+# On macOS Docker Desktop with grpcFUSE, inotify events from volume mounts
+# are not reliably delivered. Switch Docker Desktop to VirtioFS (Settings ->
+# General -> Virtual Machine Options -> VirtioFS) for reliable hot reload.
+# The server starts correctly either way; only reload-on-save is affected.
+ENTRYPOINT ["node", "--import", "/app/node_modules/tsx/dist/esm/index.mjs", "--watch", "apps/server/src/main.ts"]
+CMD ["--role=all"]
+
+# Stage 3: Runner - production image, prod deps only.
+FROM node:22-alpine AS runner
 
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
@@ -51,6 +84,10 @@ COPY --from=builder /app/drizzle/dist drizzle/dist
 COPY --from=builder /app/drizzle/migrations drizzle/migrations
 
 RUN pnpm install --frozen-lockfile --prod
+
+# Make the claros CLI available as a short command in PATH.
+RUN chmod +x /app/apps/server/bin/claros.mjs \
+    && ln -s /app/apps/server/bin/claros.mjs /usr/local/bin/claros
 
 COPY .env.example .env.example
 

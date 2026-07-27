@@ -49,7 +49,7 @@ export type ProviderResolutionResult = ProviderResolved | ProviderResolutionFail
  * 4. Construct and return an OpenAICompatibleProvider.
  *
  * Returns a ProviderResolutionFailure with a descriptive reason on any failure.
- * The caller (compile worker, future content worker) writes the reason to the
+ * The caller (compile worker, content worker) writes the reason to the
  * relevant error field and returns early.
  */
 export async function resolveTenantProvider(

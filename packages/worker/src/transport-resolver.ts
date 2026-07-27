@@ -1,0 +1,114 @@
+/**
+ * Transport resolver - reads a tenant's active transport configuration and
+ * delegates credential decryption + adapter construction to the shared
+ * resolveTransportAdapter() in @claros/adapters.
+ *
+ * Called once per drain tick per tenant. No caching - per the recorded
+ * [impl] decision: "Transport configuration is read and decrypted per drain
+ * tick. No caching." This is a correctness tradeoff; the deferred cache
+ * design is in BACKLOG.md "transport resolver caching".
+ *
+ * Behavior by case:
+ *
+ *   - Tenant has no active transport_configs row:
+ *       Returns null. The drain skips this tenant's messages without any write.
+ *       This is the normal state on a fresh install before transport is
+ *       configured. Nothing is sent, nothing is written.
+ *
+ *   - Tenant has an active row for provider = 'resend':
+ *       Decrypts the config, reads the API key, constructs and returns a
+ *       ResendTransportAdapter.
+ *
+ *   - Tenant has an active row for an unimplemented provider ('ses', 'smtp'):
+ *       Returns null with a logged operator warning. The tenant's messages
+ *       are untouched - same behavior as "no configuration." This is the
+ *       safe failure: the operator chose a provider that is not yet built.
+ *       Messages stay at 'approved' and will be retried on future ticks.
+ *       When the provider is implemented, the same config row will start
+ *       working without any operator action.
+ *
+ *   - ENCRYPTION_KEY is missing or invalid:
+ *       Returns null with a logged operator error. Same safe fallback.
+ *
+ *   - Decryption fails (wrong key, corrupted envelope):
+ *       Returns null with a logged operator error. Same safe fallback.
+ *
+ * Mirror side: PUBLIC (packages/worker is mirrored).
+ */
+import { sql } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { resolveTransportAdapter } from "@claros/adapters";
+import type { TransportAdapter, TransportResolver } from "./transport.js";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type Db = NodePgDatabase<Record<string, never>>;
+
+/** A transport_configs row (raw SQL result). */
+interface TransportConfigRow extends Record<string, unknown> {
+  provider: string;
+  config: string;
+  from_email: string;
+  from_name: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// buildTenantTransportResolver
+// ---------------------------------------------------------------------------
+
+/**
+ * Constructs a TransportResolver that reads tenant transport configuration
+ * and uses the shared resolveTransportAdapter() for credential handling.
+ *
+ * @param db - Drizzle database instance.
+ * @returns A TransportResolver function.
+ */
+export function buildTenantTransportResolver(db: Db): TransportResolver {
+  return async (tenantId: string): Promise<TransportAdapter | null> => {
+    // Step 1: Read the active transport config for this tenant.
+    const rows = await db.execute<TransportConfigRow>(sql`
+      SELECT provider, config::text AS config, from_email, from_name
+      FROM transport_configs
+      WHERE tenant_id = ${tenantId}::uuid
+        AND is_active = true
+      LIMIT 1
+    `);
+
+    if (rows.rows.length === 0) {
+      // No active transport configured. Messages stay at 'approved'.
+      return null;
+    }
+
+    const row = rows.rows[0]!;
+
+    // Step 2: Resolve adapter via the shared function in @claros/adapters.
+    const result = resolveTransportAdapter(row.provider, row.config);
+
+    if (!result.ok) {
+      const { failure } = result;
+      if (failure.reason === "no_encryption_key") {
+        console.error(
+          `[transport-resolver] ENCRYPTION_KEY is not set. ` +
+            `Cannot decrypt transport config for tenant ${tenantId}. ` +
+            `Messages will remain at 'approved' until the key is configured.`,
+        );
+      } else if (failure.reason === "decryption_failed") {
+        console.error(
+          `[transport-resolver] Failed to decrypt transport config for tenant ${tenantId}: ` +
+            `${failure.error}. Messages will remain at 'approved'.`,
+        );
+      } else if (failure.reason === "unsupported_provider") {
+        console.warn(
+          `[transport-resolver] Provider '${failure.provider}' is not yet implemented. ` +
+            `Tenant ${tenantId} messages will remain at 'approved'. ` +
+            `Currently implemented: resend. Pending: ses, smtp.`,
+        );
+      }
+      return null;
+    }
+
+    return result.transport.adapter;
+  };
+}

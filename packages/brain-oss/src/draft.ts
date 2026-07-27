@@ -1,10 +1,11 @@
 /**
  * Email content drafting: send context to LLM, validate output against schema.
  *
- * This is the third of three Brain functions:
+ * This is the third of four Brain functions:
  *   - compile() - task 11: prompt -> deterministic plan (runs once per prompt change)
  *   - decide()  - task 17: context -> action decision
  *   - draft()   - task 17: context -> email content (this file)
+ *   - assess()  - task 20: (context + draft) -> pass/fail verdict
  *
  * Mirror side: PUBLIC (packages/brain-oss is mirrored).
  */

@@ -1,0 +1,1 @@
+ALTER TABLE "lifecycle_messages" ADD COLUMN "delivered_to" text;
