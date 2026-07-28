@@ -310,18 +310,20 @@ function makeResolver(adapter: TransportAdapter | null) {
 async function runDrainTick(
   adapter: TransportAdapter | null,
   now: Date,
-  opts: { batchLimit?: number; signingKey?: string | null } = {},
+  opts: { batchLimit?: number; signingKey?: string | null; baseUrl?: string; isProduction?: boolean } = {},
 ) {
   // signingKey defaults to TEST_SIGNING_KEY. Pass null to simulate missing key.
   const signingKeyOverride = opts.signingKey === undefined ? TEST_SIGNING_KEY : (opts.signingKey ?? undefined);
+  const baseUrl = opts.baseUrl !== undefined ? opts.baseUrl : TEST_BASE_URL;
   return await processDrainTick(
     db,
     now,
     makeResolver(adapter),
     fetchDrainBatchSimple,
     opts.batchLimit ?? 50,
-    TEST_BASE_URL,
+    baseUrl,
     signingKeyOverride,
+    opts.isProduction,
   );
 }
 
@@ -1351,6 +1353,153 @@ describe("drain worker", () => {
         .where(eq(lifecycleMessages.id, messageId));
       expect(msg!.status).toBe("sending");
       expect(msg!.recipientAddress).toBe("durability-transient-contact@example.com");
+    });
+  });
+
+  describe("compliance: bad BASE_URL fails closed in production", () => {
+    it("reverts message to approved when BASE_URL is localhost in production (not a transport failure, no retry consumed)", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("bad-url-contact");
+      const flowId = await insertFlow({ name: "bad-url-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      // isProduction: true forces the production check even in the test environment.
+      // TEST_BASE_URL (http://localhost:3000) is a loopback URL, so the check must fail.
+      const result = await runDrainTick(adapter, now, { isProduction: true });
+
+      // Counted as skippedBadBaseUrl - not a transport error, not a retry burn.
+      // The wrong value would be permanently baked into delivered email bodies.
+      expect(result.skippedBadBaseUrl).toBe(1);
+      expect(result.sent).toBe(0);
+      expect(result.transportErrors).toBe(0);
+      expect(result.permanentFailures).toBe(0);
+      expect(adapter.sends).toHaveLength(0);
+
+      // Message reverts to 'approved' - ready to retry once operator fixes BASE_URL.
+      const [msg] = await db
+        .select({
+          status: lifecycleMessages.status,
+          recipientAddress: lifecycleMessages.recipientAddress,
+          retryCount: lifecycleMessages.retryCount,
+        })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("approved");
+      // recipient_address is written after config checks pass; the base URL check
+      // fires before recipient_address is written, so it must remain null.
+      expect(msg!.recipientAddress).toBeNull();
+      // retry_count must not be incremented (this is not a transport failure).
+      expect(msg!.retryCount).toBe(0);
+    });
+
+    it("allows localhost BASE_URL outside production so the quickstart is unaffected", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("local-url-contact");
+      const flowId = await insertFlow({ name: "local-url-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      // isProduction: false = development mode. Localhost base URL must be allowed.
+      // This is the docker compose quickstart path.
+      const result = await runDrainTick(adapter, now, { isProduction: false });
+
+      expect(result.sent).toBe(1);
+      expect(result.skippedBadBaseUrl).toBe(0);
+      expect(adapter.sends).toHaveLength(1);
+
+      const [msg] = await db
+        .select({ status: lifecycleMessages.status })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("sent");
+    });
+
+    it("sends normally when BASE_URL is a valid https URL in production", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("good-url-contact");
+      const flowId = await insertFlow({ name: "good-url-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      // isProduction: true, but base URL is a valid https URL - must send.
+      const result = await runDrainTick(adapter, now, {
+        baseUrl: "https://mail.example.com",
+        isProduction: true,
+      });
+
+      expect(result.sent).toBe(1);
+      expect(result.skippedBadBaseUrl).toBe(0);
+      expect(adapter.sends).toHaveLength(1);
+
+      const [msg] = await db
+        .select({ status: lifecycleMessages.status })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("sent");
+    });
+
+    it("bad BASE_URL in production does not consume throttle budget across repeated ticks", async () => {
+      if (!dbAvailable) return;
+
+      const contactId = await insertContact("bad-url-throttle-contact");
+      const flowId = await insertFlow({ name: "bad-url-throttle-flow", windowPolicy: "immediate" });
+      const membershipId = await insertMembership(contactId, flowId);
+      const messageId = await insertApprovedMessage({
+        contactId,
+        flowId,
+        membershipId,
+      });
+
+      const adapter = new LogTransportAdapter();
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      // Run 3 ticks with a bad base URL (production mode). Each must revert
+      // without touching throttle counters (sent_at is never written).
+      for (let i = 0; i < 3; i++) {
+        const r = await runDrainTick(adapter, now, { isProduction: true });
+        expect(r.skippedBadBaseUrl).toBe(1);
+        expect(r.sent).toBe(0);
+      }
+
+      // Now run with a valid https URL in production - the message must send
+      // normally. If throttle budget had been consumed, this would defer instead.
+      const result = await runDrainTick(adapter, now, {
+        baseUrl: "https://mail.example.com",
+        isProduction: true,
+      });
+      expect(result.sent).toBe(1);
+      expect(result.deferredFrequency).toBe(0);
+
+      const [msg] = await db
+        .select({ status: lifecycleMessages.status })
+        .from(lifecycleMessages)
+        .where(eq(lifecycleMessages.id, messageId));
+      expect(msg!.status).toBe("sent");
     });
   });
 });

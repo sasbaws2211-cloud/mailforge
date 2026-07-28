@@ -12,6 +12,7 @@
  *   docker compose exec app claros <command> [options]
  *
  * Commands:
+ *   doctor [--url <url>] [--session <token>]   Read-only deployment diagnostic
  *   login-link <email>               Generate a one-time login URL (no transport required)
  *   setup [tenant_slug]              Guided first-run: postal address, LLM, transport
  *   transport set <tenant_slug>      Write transport credentials
@@ -48,6 +49,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes, createHash } from "node:crypto";
+import { execSync } from "node:child_process";
 import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, and, sql } from "drizzle-orm";
@@ -55,8 +57,13 @@ import { eq, and, sql } from "drizzle-orm";
 // Resolve repo root (apps/server/bin -> apps/server -> apps -> repo root)
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
+// Comparison logic extracted for testability (see doctor-compare.mjs).
+const { compareCommits, compareKeyFingerprints, formatCommitVerdict, formatKeyVerdict } = await import(
+  resolve(dirname(fileURLToPath(import.meta.url)), "doctor-compare.mjs")
+);
+
 // Import from built dist directories (run `pnpm build` first).
-const { encrypt, parseEncryptionKey } = await import(
+const { encrypt, decrypt, parseEncryptionKey } = await import(
   resolve(repoRoot, "packages/adapters/dist/index.js")
 );
 const {
@@ -1087,8 +1094,31 @@ async function cmdSetup(db, tenantSlug, dbInfo) {
 
   console.log("=== Setup complete ===");
   console.log("");
+
+  // Check whether UNSUBSCRIBE_SIGNING_KEY is set. This key is not written by
+  // the wizard (it is an environment variable, not a database credential), but
+  // if it is absent the drain will block all sending regardless of how the
+  // database configuration looks. Alert the operator here so they do not finish
+  // setup and then wonder why no mail leaves.
+  const signingKeySet = !!(process.env.UNSUBSCRIBE_SIGNING_KEY ?? "").trim();
+  if (!signingKeySet) {
+    console.log("IMPORTANT: UNSUBSCRIBE_SIGNING_KEY is not set in your environment.");
+    console.log("  Without this key, the drain blocks all sending. Set it in .env:");
+    console.log("");
+    console.log("  Generate (run once, store permanently, never rotate):");
+    console.log("    node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"");
+    console.log("  Then add to .env:");
+    console.log("    UNSUBSCRIBE_SIGNING_KEY=<generated-value>");
+    console.log("  Then restart the server.");
+    console.log("");
+  }
+
   if (stillMissing.length === 0) {
-    console.log("All three configuration steps are done.");
+    if (signingKeySet) {
+      console.log("All three configuration steps are done.");
+    } else {
+      console.log("Database configuration steps are done (see key warning above).");
+    }
     console.log("Get your login link:");
     console.log("");
     console.log("  claros login-link <your-email>");
@@ -1107,7 +1137,409 @@ async function cmdSetup(db, tenantSlug, dbInfo) {
 // help
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// doctor
+//
+// Read-only diagnostic command. NEVER writes to the database.
+//
+// Sections:
+//   Deployment  - local HEAD (git) vs. deployed commit (GET /version)
+//   Database    - connection target, migration count and name
+//   Transport   - resend row counts, decryption check, credential key names,
+//                 webhookSecret fingerprint
+//   Environment - for each secret key: LOCAL fingerprint (this machine's env),
+//                 CONTAINER fingerprint (from GET /v1/diagnostics), MATCH/MISMATCH.
+//                 BASE_URL and edition are shown from the container's perspective.
+//
+// Authentication for /v1/diagnostics:
+//   The endpoint is behind the /v1 session-cookie preHandler. Doctor passes the
+//   session token supplied via --session <token> or CLAROS_DOCTOR_SESSION env var
+//   as a claros_session cookie. Without a token the Environment section is skipped.
+//
+// All failures are non-fatal. The command always finishes and prints what it could.
+//
+// Security invariant: no secret, key, credential, or password is printed anywhere.
+// Fingerprints (first 8 hex chars of SHA-256) and byte lengths only.
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch JSON from a URL using the built-in http/https modules.
+ * Optionally passes a session cookie for authenticated endpoints.
+ * Returns { ok: true, data } or { ok: false, error: string }.
+ */
+async function fetchJson(url, sessionToken) {
+  try {
+    const m = url.startsWith("https") ? await import("node:https") : await import("node:http");
+    return await new Promise((resolve) => {
+      const headers = {};
+      if (sessionToken) headers["Cookie"] = `claros_session=${sessionToken}`;
+      const req = m.get(url, { timeout: 5000, headers }, (res) => {
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf8");
+          if (res.statusCode === 401 || res.statusCode === 403) {
+            resolve({ ok: false, error: `HTTP ${res.statusCode} (session token invalid or expired)` });
+            return;
+          }
+          try {
+            resolve({ ok: true, data: JSON.parse(body), status: res.statusCode });
+          } catch {
+            resolve({ ok: false, error: `Non-JSON response (status ${res.statusCode}): ${body.slice(0, 80)}` });
+          }
+        });
+      });
+      req.on("error", (err) => resolve({ ok: false, error: err.message }));
+      req.on("timeout", () => { req.destroy(); resolve({ ok: false, error: "Request timed out (5s)" }); });
+    });
+  } catch (err) {
+    return { ok: false, error: String(err.message ?? err) };
+  }
+}
+
+/**
+ * Compute first 8 hex chars of SHA-256 of a raw string (the env var value as-is).
+ * Used as a non-reversible fingerprint: two machines can compare values without
+ * either one learning the other's value.
+ */
+function fpOfRaw(val) {
+  return createHash("sha256").update(Buffer.from(val, "utf8")).digest("hex").slice(0, 8);
+}
+
+/**
+ * Validate the /version URL when --prod is in effect.
+ * Returns an error string if the URL is unsafe, or null if it is acceptable.
+ * With --prod, localhost and non-https targets are refused to prevent doctor
+ * from silently querying the wrong server.
+ */
+function validateProdVersionUrl(url) {
+  if (!url) return "BASE_URL is not set; pass --url or set CLAROS_DOCTOR_URL";
+  let parsed;
+  try { parsed = new URL(url); } catch { return `Not a valid URL: ${url}`; }
+  const host = parsed.hostname;
+  const isLoopback = host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    /^127\./.test(host);
+  if (isLoopback) return `URL points at localhost (${url}). With --prod, doctor refuses localhost targets to avoid querying the wrong server. Set CLAROS_DOCTOR_URL to the production URL.`;
+  if (parsed.protocol !== "https:") return `URL is not https (${url}). With --prod, doctor refuses non-https targets. Set CLAROS_DOCTOR_URL to the https production URL.`;
+  return null;
+}
+
+async function cmdDoctor(db, dbInfo, sessionToken) {
+  const lines = [];
+  const out = (s = "") => lines.push(s);
+  const section = (title) => { out(); out(`  ${title}`); out(`  ${"─".repeat(title.length)}`); };
+
+  out("╔══════════════════════════════════════════════════════════╗");
+  out("║            claros doctor - deployment diagnostic          ║");
+  out("╚══════════════════════════════════════════════════════════╝");
+
+  // -------------------------------------------------------------------------
+  // Deployment: local HEAD vs. deployed commit
+  // -------------------------------------------------------------------------
+  section("Deployment");
+
+  let localHead = "UNKNOWN";
+  try {
+    localHead = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf8", timeout: 5000 }).trim();
+    out(`    local HEAD:      ${localHead}`);
+  } catch (err) {
+    // git is not available inside the container image (node:22-alpine has no git).
+    // When running inside a container, the deployed commit is visible via the
+    // /version endpoint below; the local HEAD comparison does not apply there.
+    const isGitMissing = /not found|ENOENT|No such file/i.test(err.message);
+    if (isGitMissing) {
+      out(`    local HEAD:      git not available (running inside container - see deployed commit below)`);
+    } else {
+      out(`    local HEAD:      ERROR - ${err.message.trim()}`);
+    }
+  }
+
+  // Determine the /version URL to query.
+  // --prod requires https and non-localhost; refused otherwise.
+  // Without --prod defaults to http://localhost:3000.
+  const rawDoctorUrl = (process.env.CLAROS_DOCTOR_URL
+    ?? (isProd ? (process.env.BASE_URL ?? "").replace(/\/$/, "") : "http://localhost:3000")) || "";
+
+  let versionUrl = rawDoctorUrl;
+  if (isProd) {
+    const urlErr = validateProdVersionUrl(rawDoctorUrl);
+    if (urlErr) {
+      out(`    version URL:     REFUSED - ${urlErr}`);
+      out("    deployed commit: UNKNOWN");
+      versionUrl = "";
+    }
+  }
+
+  let deployedCommit = null;
+  let deployedBuiltAt = null;
+  if (versionUrl) {
+    const versionEndpoint = `${versionUrl}/version`;
+    out(`    version URL:     ${versionEndpoint}`);
+    const result = await fetchJson(versionEndpoint);
+    if (result.ok) {
+      deployedCommit  = result.data.commit  ?? "unknown";
+      deployedBuiltAt = result.data.builtAt ?? null;
+      out(`    deployed commit: ${deployedCommit}`);
+      if (deployedBuiltAt) out(`    built at:        ${deployedBuiltAt}`);
+    } else {
+      out(`    deployed commit: UNREACHABLE (${result.error})`);
+      out("    (database sections will still run)");
+    }
+  }
+
+  // The single most important line in the output.
+  // Uses compareCommits() from doctor-compare.mjs (tested independently).
+  if (deployedCommit !== null || versionUrl === "") {
+    const commitResult = compareCommits(localHead, deployedCommit);
+    for (const line of formatCommitVerdict(commitResult)) out(line);
+  }
+
+  // -------------------------------------------------------------------------
+  // Database
+  // -------------------------------------------------------------------------
+  section("Database");
+  out(`    host/db:    ${dbInfo.hostPort}/${dbInfo.dbName}`);
+  out(`    type:       ${dbInfo.type}`);
+
+  // Detect SSL from the connection URL
+  let sslInUse = "unknown";
+  try {
+    const rawUrl = resolveDbUrl();
+    const parsed = new URL(rawUrl);
+    const sslParam = parsed.searchParams.get("ssl") ?? parsed.searchParams.get("sslmode") ?? "";
+    if (/require|verify|true/i.test(sslParam) || /neon\.tech/i.test(parsed.hostname)) {
+      sslInUse = "yes";
+    } else if (sslParam === "" && /localhost|127\.0\.0\.|::1/.test(parsed.hostname)) {
+      sslInUse = "no (localhost)";
+    } else {
+      sslInUse = sslParam || "not specified in URL";
+    }
+  } catch { /* leave as unknown */ }
+  out(`    SSL:        ${sslInUse}`);
+
+  // Migration state: query drizzle_migrations table directly.
+  // Drizzle uses "drizzle"."__drizzle_migrations" table (schema "drizzle").
+  // The table stores only hash and created_at (bigint epoch ms). The migration
+  // name/tag lives only in the journal file on disk. Correlate by timestamp.
+  try {
+    const migResult = await db.execute(
+      sql`SELECT hash, created_at FROM drizzle.__drizzle_migrations ORDER BY created_at ASC`
+    );
+    const rows = migResult.rows ?? [];
+    if (rows.length === 0) {
+      out("    migrations: 0 applied (table exists but is empty)");
+    } else {
+      // Load journal for name lookup. Journal path is relative to repo root.
+      // If the journal is absent (e.g. inside a container that did not copy it),
+      // fall back to the hash so the line is still informative.
+      let tagByTs = {};
+      try {
+        const journalPath = resolve(repoRoot, "drizzle/migrations/meta/_journal.json");
+        const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+        for (const entry of (journal.entries ?? [])) {
+          tagByTs[String(entry.when)] = entry.tag;
+        }
+      } catch { /* journal absent - tags stay empty */ }
+
+      const latest = rows[rows.length - 1];
+      const latestTs = String(latest.created_at);
+      const latestName = tagByTs[latestTs] ?? latest.hash ?? "(unknown)";
+      out(`    migrations: ${rows.length} applied`);
+      out(`    latest:     ${latestName}`);
+    }
+  } catch (err) {
+    out(`    migrations: ERROR - ${err.message.trim()}`);
+  }
+
+  // -------------------------------------------------------------------------
+  // Transport
+  // -------------------------------------------------------------------------
+  section("Transport");
+
+  try {
+    const allResend = await db
+      .select({
+        isActive: transportConfigs.isActive,
+        config:   transportConfigs.config,
+        id:       transportConfigs.id,
+      })
+      .from(transportConfigs)
+      .where(eq(transportConfigs.provider, "resend"));
+
+    const active   = allResend.filter((r) => r.isActive);
+    const inactive = allResend.filter((r) => !r.isActive);
+    out(`    resend rows:  active=${active.length}  inactive=${inactive.length}`);
+
+    if (active.length > 0) {
+      const row = active[0];
+      const encKey = process.env.ENCRYPTION_KEY;
+      if (!encKey) {
+        out("    active row:   decryption SKIPPED (LOCAL ENCRYPTION_KEY not set)");
+      } else {
+        try {
+          const key = parseEncryptionKey(encKey);
+          const configVal = typeof row.config === "string" ? row.config : JSON.stringify(row.config);
+          const plain = JSON.parse(decrypt(configVal, key));
+          const credKeys = Object.keys(plain).sort();
+          out("    active row:   decryption OK");
+          out(`    cred keys:    ${credKeys.join(", ")}`);
+          if (plain.webhookSecret) {
+            const fp = fpOfRaw(plain.webhookSecret);
+            out(`    webhookSecret fingerprint: ${fp}... (first 8 hex chars of SHA-256)`);
+          } else {
+            out("    webhookSecret: not present");
+          }
+        } catch (err) {
+          out(`    active row:   decryption ERROR - ${err.message}`);
+        }
+      }
+    }
+  } catch (err) {
+    out(`    transport:    ERROR - ${err.message.trim()}`);
+  }
+
+  // -------------------------------------------------------------------------
+  // Environment: LOCAL vs. CONTAINER comparison
+  //
+  // LOCAL values come from process.env on this machine (the operator's shell).
+  // CONTAINER values come from GET /v1/diagnostics on the running container.
+  //
+  // Without a session token the container section is skipped entirely, and the
+  // local values are printed with a LOCAL label so nobody mistakes them for
+  // the container's environment.
+  // -------------------------------------------------------------------------
+  section("Environment");
+
+  // --- LOCAL fingerprints (this machine) ---
+  // encoding: "base64" for ENCRYPTION_KEY, "hex" for UNSUBSCRIBE_SIGNING_KEY.
+  // Both sides (local and container) decode before fingerprinting so the
+  // comparison is meaningful: same decoded bytes -> same fingerprint.
+  function localKeyInfo(name, encoding) {
+    const val = process.env[name];
+    if (!val) return { present: false, byteLength: null, fingerprint: null, decodeError: null };
+    try {
+      const decoded = Buffer.from(val, encoding);
+      if (decoded.length === 0) {
+        return { present: true, byteLength: null, fingerprint: null, decodeError: `decoded to 0 bytes (encoding: ${encoding})` };
+      }
+      const fp = createHash("sha256").update(decoded).digest("hex").slice(0, 8);
+      return { present: true, byteLength: decoded.length, fingerprint: fp, decodeError: null };
+    } catch (err) {
+      return { present: true, byteLength: null, fingerprint: null, decodeError: err.message };
+    }
+  }
+
+  // ENCRYPTION_KEY is base64-encoded; UNSUBSCRIBE_SIGNING_KEY is hex-encoded.
+  const localEnc = localKeyInfo("ENCRYPTION_KEY",         "base64");
+  const localSig = localKeyInfo("UNSUBSCRIBE_SIGNING_KEY", "hex");
+
+  // --- CONTAINER fingerprints (from /v1/diagnostics) ---
+  let containerKeys = null;
+  let containerEdition = null;
+  let containerBaseUrl = null;
+  let diagnosticsSkipReason = null;
+
+  if (!sessionToken) {
+    diagnosticsSkipReason = "no session token (pass --session <token> or set CLAROS_DOCTOR_SESSION)";
+  } else if (!versionUrl) {
+    diagnosticsSkipReason = "version URL was refused or unset";
+  } else {
+    const diagEndpoint = `${versionUrl}/v1/diagnostics`;
+    const diagResult = await fetchJson(diagEndpoint, sessionToken);
+    if (diagResult.ok) {
+      containerKeys    = diagResult.data.keys ?? null;
+      containerEdition = diagResult.data.edition ?? null;
+      containerBaseUrl = null; // /v1/diagnostics does not expose BASE_URL (not a secret but not needed here)
+    } else {
+      diagnosticsSkipReason = `GET /v1/diagnostics: ${diagResult.error}`;
+    }
+  }
+
+  // Uses formatKeyVerdict() / compareKeyFingerprints() from doctor-compare.mjs (tested).
+  for (const line of formatKeyVerdict("ENCRYPTION_KEY",         localEnc, containerKeys ? containerKeys["ENCRYPTION_KEY"]         : null, diagnosticsSkipReason)) out(line);
+  for (const line of formatKeyVerdict("UNSUBSCRIBE_SIGNING_KEY", localSig, containerKeys ? containerKeys["UNSUBSCRIBE_SIGNING_KEY"] : null, diagnosticsSkipReason)) out(line);
+
+  // Edition and BASE_URL: container's view (from /version response data we already have)
+  out("");
+  if (deployedCommit !== null && versionUrl) {
+    // Re-fetch /version for edition - it was already fetched above; reuse deployedCommit data
+    // Edition is in /version response; we stored it but need to surface it here.
+    // We stored deployedCommit but not edition - fetch diagnostics has it if available.
+    if (containerEdition !== null) {
+      out(`    CLAROS_EDITION (container): ${containerEdition}`);
+    }
+  }
+  // Local BASE_URL
+  const localBaseUrl = process.env.BASE_URL ?? "(not set)";
+  const isHttps = localBaseUrl.startsWith("https://");
+  out(`    BASE_URL (local):  ${localBaseUrl}  ${isHttps ? "[https: OK]" : localBaseUrl === "(not set)" ? "" : "[WARNING: not https]"}`);
+
+  out("");
+  out("═".repeat(62));
+  out("  doctor complete");
+  out("═".repeat(62));
+  out("");
+
+  // Print all at once so the output is never interleaved with other log lines
+  for (const line of lines) console.log(line);
+}
+
 function printHelp(subcommand) {
+  if (subcommand === "doctor") {
+    console.log(`
+claros doctor [--url <base_url>] [--session <token>]
+
+Read-only deployment diagnostic. NEVER writes to the database.
+
+Prints a single report covering:
+  Deployment  local HEAD commit vs. deployed commit from GET /version.
+              MATCH or MISMATCH stated unmissably.
+  Database    connection host/db, SSL, migration count and latest migration.
+  Transport   resend row counts, decryption status, credential key names,
+              and the first 8 hex chars of SHA-256 of webhookSecret.
+  Environment for ENCRYPTION_KEY and UNSUBSCRIBE_SIGNING_KEY: the LOCAL
+              fingerprint (this machine's env) compared against the CONTAINER
+              fingerprint (from GET /v1/diagnostics). MATCH or MISMATCH.
+              BASE_URL (local) and CLAROS_EDITION (container).
+
+Security: no secret, key, credential, or password is printed.
+Fingerprints and byte lengths only.
+
+Failures are non-fatal. The command always finishes and prints what it could.
+
+How doctor authenticates to /v1/diagnostics:
+  /v1/diagnostics is behind the /v1 session-cookie preHandler. Doctor passes
+  the token from --session (or CLAROS_DOCTOR_SESSION env var) as the
+  claros_session cookie. Without a token the Environment comparison is skipped.
+  To get a token: log in via the browser and copy the claros_session cookie
+  value from your browser dev tools, or use claros login-link and visit the
+  URL to create a session.
+
+Options:
+  --prod              Target PRODUCTION_DATABASE_URL.
+                      Refuses localhost and non-https /version URLs.
+  --url <base>        Override the URL base for /version and /v1/diagnostics.
+                      Set CLAROS_DOCTOR_URL in the environment to persist.
+  --session <token>   Session token for GET /v1/diagnostics authentication.
+                      Set CLAROS_DOCTOR_SESSION in the environment to persist.
+
+Examples:
+  # Local database, no environment comparison:
+  node apps/server/bin/claros.mjs doctor
+
+  # Local database with environment comparison (session from browser):
+  node apps/server/bin/claros.mjs doctor --session <claros_session_cookie_value>
+
+  # Production database with environment comparison:
+  CLAROS_DOCTOR_URL=https://api.claros.org \\
+    node apps/server/bin/claros.mjs doctor --prod --session <token>
+`);
+    return;
+  }
+
   if (subcommand === "login-link") {
     console.log(`
 claros login-link <email>
@@ -1230,6 +1662,7 @@ Usage:
   docker compose exec app claros <command> [options]
 
 Commands:
+  doctor [--url <url>]         Read-only deployment diagnostic (commit, DB, transport, env)
   login-link <email>           Generate a one-time login URL (no transport needed)
   setup [tenant_slug]          Guided first-run: postal address, LLM, transport
   transport set <slug>         Write transport credentials
@@ -1266,7 +1699,7 @@ const dbInfo = parseDbTarget(dbUrl);
 const pool = new Pool({ connectionString: dbUrl });
 const db = drizzle(pool);
 
-if (topCommand !== "login-link") {
+if (topCommand !== "login-link" && topCommand !== "doctor") {
   console.log("");
   console.log("=== Claros CLI ===");
   console.log(`Target:  ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`);
@@ -1275,6 +1708,21 @@ if (topCommand !== "login-link") {
 
 try {
   switch (topCommand) {
+    case "doctor": {
+      // --url <base_url> overrides the /version target for this run.
+      const urlFlagIdx = restArgs.indexOf("--url");
+      if (urlFlagIdx >= 0 && restArgs[urlFlagIdx + 1]) {
+        process.env.CLAROS_DOCTOR_URL = restArgs[urlFlagIdx + 1];
+      }
+      // --session <token> supplies the claros_session cookie for GET /v1/diagnostics.
+      // Falls back to CLAROS_DOCTOR_SESSION env var.
+      const sessionFlagIdx = restArgs.indexOf("--session");
+      const sessionToken = (sessionFlagIdx >= 0 && restArgs[sessionFlagIdx + 1])
+        ? restArgs[sessionFlagIdx + 1]
+        : (process.env.CLAROS_DOCTOR_SESSION ?? null);
+      await cmdDoctor(db, dbInfo, sessionToken);
+      break;
+    }
     case "login-link": {
       const email = restArgs[0];
       if (!email) {

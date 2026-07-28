@@ -822,3 +822,43 @@ describe("POST /auth/login - email delivery via transport", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Quickstart contract: no keys = login still reachable
+// ---------------------------------------------------------------------------
+// ENCRYPTION_KEY and UNSUBSCRIBE_SIGNING_KEY are absent in a fresh install.
+// The server must still start and the login endpoint must respond successfully.
+// This test verifies that contract: no keys set, login returns 200.
+// (The console fallback path is used because no transport is configured.)
+
+describe("login without ENCRYPTION_KEY or UNSUBSCRIBE_SIGNING_KEY", () => {
+  it("POST /auth/login returns 200 when neither key is set (quickstart contract)", async () => {
+    if (!dbAvailable) return;
+    process.env.NODE_ENV = "test";
+
+    const savedEncKey = process.env.ENCRYPTION_KEY;
+    const savedSigningKey = process.env.UNSUBSCRIBE_SIGNING_KEY;
+    delete process.env.ENCRYPTION_KEY;
+    delete process.env.UNSUBSCRIBE_SIGNING_KEY;
+
+    try {
+      // No transport configured in this state, so the login falls back to
+      // the console path. In NODE_ENV=test that still returns 200 and logs
+      // the URL to stdout rather than attempting email delivery.
+      const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: { email: "test@example.com" },
+      });
+      // 200 - login is reachable even with no keys configured
+      expect(res.statusCode).toBe(200);
+      await app.close();
+    } finally {
+      if (savedEncKey !== undefined) process.env.ENCRYPTION_KEY = savedEncKey;
+      else delete process.env.ENCRYPTION_KEY;
+      if (savedSigningKey !== undefined) process.env.UNSUBSCRIBE_SIGNING_KEY = savedSigningKey;
+      else delete process.env.UNSUBSCRIBE_SIGNING_KEY;
+    }
+  });
+});

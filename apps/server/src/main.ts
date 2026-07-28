@@ -132,11 +132,71 @@ async function bootstrapSeed(db: ReturnType<typeof drizzle>): Promise<void> {
 }
 
 async function start(): Promise<void> {
+  // Edition safety check: if CLAROS_EDITION=cloud, verify the cloud brain is
+  // actually implemented. The brain-cloud package exports a BRAIN_READY sentinel
+  // that is false while the implementation is a stub. A stub brain returns
+  // action:"skip" for every message, producing a deployment that silently
+  // generates nothing. Refuse to start rather than fail silently.
+  if (edition === "cloud") {
+    try {
+      const pkg = "@claros/" + "brain-cloud"; // non-literal defeats static resolution
+      const mod = await import(pkg);
+      if (mod.BRAIN_READY !== true) {
+        console.error("");
+        console.error("==========================================================");
+        console.error(`  FATAL: CLAROS_EDITION=cloud but ${pkg} is not ready.`);
+        console.error("");
+        console.error("  The cloud brain is still a stub (BRAIN_READY=false).");
+        console.error("  A deployment with this edition would silently produce no");
+        console.error("  messages for any contact. Use CLAROS_EDITION=community");
+        console.error("  until the cloud brain implementation is wired.");
+        console.error("==========================================================");
+        console.error("");
+        process.exit(1);
+      }
+    } catch (err) {
+      const pkg = "@claros/" + "brain-cloud";
+      console.error("");
+      console.error("==========================================================");
+      console.error(`  FATAL: CLAROS_EDITION=cloud but ${pkg} cannot be loaded.`);
+      console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+      console.error("");
+      console.error(`  The cloud edition requires ${pkg} to be present`);
+      console.error("  in the image. Use CLAROS_EDITION=community or ensure the");
+      console.error("  package is included in the build.");
+      console.error("==========================================================");
+      console.error("");
+      process.exit(1);
+    }
+  }
+
   // Create database connection
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error("ERROR: DATABASE_URL is not set.");
     process.exit(1);
+  }
+
+  // Reject pooled/pgbouncer endpoints at startup. pg-boss depends on session
+  // persistence (prepared statements, LISTEN/NOTIFY, advisory locks). A pooled
+  // connection silently breaks all three, causing missed job notifications and
+  // potential double-processing. Fail loudly here rather than mysteriously later.
+  try {
+    const parsed = new URL(databaseUrl);
+    if (/-pooler/i.test(parsed.host)) {
+      console.error("ERROR: DATABASE_URL points to a pooled endpoint (hostname contains '-pooler').");
+      console.error("pg-boss requires a direct connection for session persistence, LISTEN/NOTIFY, and advisory locks.");
+      console.error("Use the direct (non-pooler) endpoint instead.");
+      process.exit(1);
+    }
+    if (parsed.searchParams.get("pgbouncer") === "true") {
+      console.error("ERROR: DATABASE_URL has ?pgbouncer=true query parameter.");
+      console.error("pg-boss requires a direct connection for session persistence, LISTEN/NOTIFY, and advisory locks.");
+      console.error("Remove the pgbouncer parameter and use a direct connection.");
+      process.exit(1);
+    }
+  } catch {
+    // If URL parsing fails, let pg.Pool surface the connection error downstream.
   }
 
   const pool = new pg.Pool({ connectionString: databaseUrl });
@@ -158,7 +218,7 @@ async function start(): Promise<void> {
   //   data integrity risk regardless of Drizzle's idempotency claim.
   //
   // Who sets it:
-  //   docker/docker-compose.yml sets CLAROS_MIGRATE_ON_BOOT=true.
+  //   docker-compose.yml sets CLAROS_MIGRATE_ON_BOOT=true.
   //   Cloud deploy (wrangler) does not set it. Local .env can set it for
   //   pnpm dev convenience, but never ships to production.
   //
@@ -186,6 +246,71 @@ async function start(): Promise<void> {
   // storage will fail at first use with a clear error message.
   if (!process.env.ENCRYPTION_KEY) {
     console.warn("[config] ENCRYPTION_KEY not set - LLM config storage and flow compilation will be unavailable until configured.");
+  }
+
+  // Warn (not fail) if UNSUBSCRIBE_SIGNING_KEY is absent. The server starts
+  // without it, but approved messages will not be sent: the drain reverts
+  // every message to 'approved' rather than producing tokens without a key.
+  // A missing key is a configuration fault that blocks sending, not a crash.
+  // Set UNSUBSCRIBE_SIGNING_KEY before sending real mail. Generate with:
+  //   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  // PERMANENT: once set and mail is delivered, this key must never change.
+  if (!process.env.UNSUBSCRIBE_SIGNING_KEY) {
+    console.warn("[config] UNSUBSCRIBE_SIGNING_KEY not set - sending is blocked until configured. Generate once and treat as permanent.");
+  }
+
+  // Warn (not fail) if BASE_URL is unusable in production.
+  //
+  // A localhost/loopback or non-https BASE_URL in production means every
+  // outgoing email would have its unsubscribe link permanently baked in with
+  // the wrong value. That cannot be corrected for messages already delivered.
+  // The drain enforces this as a hard block (messages revert to 'approved'),
+  // but the startup warning surfaces the problem at boot rather than at the
+  // first send attempt.
+  //
+  // Why warn rather than refuse to start: refusing would strand the self-host
+  // quickstart (docker compose up) which legitimately uses http://localhost:3000
+  // and does not set NODE_ENV=production. The drain-level check is the hard
+  // enforcement; this warning is the early signal for operators who do set
+  // NODE_ENV=production.
+  if (process.env.NODE_ENV === "production") {
+    const rawBaseUrl = process.env.BASE_URL;
+    if (!rawBaseUrl) {
+      console.warn(
+        "[config] BASE_URL is not set. In production the default (http://localhost:3000) is unusable: " +
+        "unsubscribe links baked into delivered emails would point at localhost and cannot be corrected. " +
+        "Set BASE_URL to the HTTPS domain where Claros is hosted before the first send.",
+      );
+    } else {
+      // Minimal parse check at startup. The drain checkBaseUrl() is the authoritative
+      // enforcement; this mirrors its logic without importing from packages/worker.
+      try {
+        const parsed = new URL(rawBaseUrl);
+        const loopback = parsed.hostname === "localhost" ||
+          parsed.hostname === "127.0.0.1" ||
+          parsed.hostname === "::1" ||
+          parsed.hostname === "[::1]" ||
+          /^127\.\d+\.\d+\.\d+$/.test(parsed.hostname);
+        if (loopback) {
+          console.warn(
+            `[config] BASE_URL is set to a loopback address ("${parsed.hostname}") in production. ` +
+            "Unsubscribe links baked into delivered emails would point at localhost and cannot be corrected. " +
+            "The drain will block all sends until BASE_URL is set to the HTTPS domain where Claros is hosted.",
+          );
+        } else if (parsed.protocol !== "https:") {
+          console.warn(
+            `[config] BASE_URL uses scheme "${parsed.protocol.replace(":", "")}" instead of https in production. ` +
+            "Unsubscribe links baked into delivered emails would use an insecure scheme. " +
+            "The drain will block all sends until BASE_URL is set to an https:// URL.",
+          );
+        }
+      } catch {
+        console.warn(
+          `[config] BASE_URL "${rawBaseUrl}" is not a valid URL in production. ` +
+          "The drain will block all sends until BASE_URL is set to the HTTPS domain where Claros is hosted.",
+        );
+      }
+    }
   }
 
   // Bootstrap seed: only relevant for roles that serve HTTP (api, all).

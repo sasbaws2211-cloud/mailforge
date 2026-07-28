@@ -241,7 +241,13 @@ async function insertApprovedMessage(contactId: string, flowId: string, membersh
 }
 
 async function runDrain(now: Date) {
-  const resolver = buildTenantTransportResolver(db);
+  const rawResolver = buildTenantTransportResolver(db);
+  // Scope to this test's tenant only to prevent cross-file test pollution when
+  // Vitest runs test files concurrently against the same Postgres instance.
+  const resolver = async (tenantId: string) => {
+    if (tenantId !== testTenantId) return null;
+    return rawResolver(tenantId);
+  };
   return processDrainTick(
     db,
     now,

@@ -17,20 +17,24 @@
  *   - token for message with null recipient_address returns 400 (never sent)
  *   - token for message at status != 'sent' returns 400 (not delivered)
  *   - token for non-existent message returns 400
+ *   - missing UNSUBSCRIBE_SIGNING_KEY returns 503 (not 500)
  *
  * GET /unsubscribe (confirmation page):
  *   - valid token renders the form (200 HTML) without writing a suppression
  *   - GET NEVER suppresses (link preview / scanner protection)
  *   - invalid token returns 400 HTML error page
+ *   - missing UNSUBSCRIBE_SIGNING_KEY returns 503
  *
  * POST /unsubscribe (browser form):
  *   - valid token suppresses via form body
  *   - valid token suppresses via JSON body
  *   - idempotent: second POST returns 200, no duplicate row
  *   - tampered token returns 400
+ *   - missing UNSUBSCRIBE_SIGNING_KEY returns 503
  *
  * Failure behavior:
  *   - Returns { error: "Invalid unsubscribe link." } (same shape for all failures)
+ *   - Missing UNSUBSCRIBE_SIGNING_KEY returns 503 (not 500, not 400)
  *
  * Requires local Postgres (docker compose up postgres).
  */
@@ -797,7 +801,15 @@ describe("POST /unsubscribe (browser form)", () => {
 
     const app = await buildApp({ db, logger: false });
     const token = generateUnsubscribeToken(tenantId, sentMessageId, TEST_SIGNING_KEY);
+    // Replace the last 5 chars of the signature with "XXXXX". X is a valid base64url
+    // character, so the tampered string decodes to a 32-byte buffer and exercises the
+    // timingSafeEqual path in verifyUnsubscribeToken (unsubscribe-token.ts:205-207).
+    // The probability that the original token already ends in "XXXXX" is 64^-5 (~9e-10),
+    // which is not a practical flake risk; the pre-assertion below makes it loud if it
+    // ever somehow happens.
     const tamperedToken = token.slice(0, -5) + "XXXXX";
+    // Confirm the tamper actually changed the token before handing it to the server.
+    expect(tamperedToken).not.toBe(token);
 
     const saved = process.env.UNSUBSCRIBE_SIGNING_KEY;
     process.env.UNSUBSCRIBE_SIGNING_KEY = TEST_SIGNING_KEY;
@@ -816,5 +828,86 @@ describe("POST /unsubscribe (browser form)", () => {
 
     const rows = await db.select().from(suppressions).where(eq(suppressions.tenantId, tenantId));
     expect(rows.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Missing UNSUBSCRIBE_SIGNING_KEY - server misconfiguration returns 503
+// ---------------------------------------------------------------------------
+// When UNSUBSCRIBE_SIGNING_KEY is absent, verifyUnsubscribeToken throws.
+// The routes must catch this and return 503 (service unavailable) rather than
+// letting it propagate as a 500. A 500 would imply the caller did something
+// wrong; a 503 correctly signals a server-side misconfiguration that the
+// provider or user cannot resolve by changing their request.
+
+describe("missing UNSUBSCRIBE_SIGNING_KEY returns 503", () => {
+  let savedSigningKey: string | undefined;
+
+  beforeAll(() => {
+    savedSigningKey = process.env.UNSUBSCRIBE_SIGNING_KEY;
+    delete process.env.UNSUBSCRIBE_SIGNING_KEY;
+  });
+
+  afterAll(() => {
+    if (savedSigningKey !== undefined) {
+      process.env.UNSUBSCRIBE_SIGNING_KEY = savedSigningKey;
+    } else {
+      delete process.env.UNSUBSCRIBE_SIGNING_KEY;
+    }
+  });
+
+  it("POST /unsubscribe/one-click returns 503 when signing key is absent", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+    const token = generateUnsubscribeToken(
+      "00000000-0000-0000-0000-000000000001",
+      "00000000-0000-0000-0000-000000000002",
+      "any-key-for-token-generation",
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/unsubscribe/one-click",
+      query: { token },
+    });
+
+    expect(res.statusCode).toBe(503);
+  });
+
+  it("GET /unsubscribe returns 503 when signing key is absent", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+    const token = generateUnsubscribeToken(
+      "00000000-0000-0000-0000-000000000001",
+      "00000000-0000-0000-0000-000000000002",
+      "any-key-for-token-generation",
+    );
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/unsubscribe",
+      query: { token },
+    });
+
+    expect(res.statusCode).toBe(503);
+  });
+
+  it("POST /unsubscribe (browser) returns 503 when signing key is absent", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+    const token = generateUnsubscribeToken(
+      "00000000-0000-0000-0000-000000000001",
+      "00000000-0000-0000-0000-000000000002",
+      "any-key-for-token-generation",
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/unsubscribe",
+      headers: { "content-type": "application/json" },
+      payload: { token },
+    });
+
+    expect(res.statusCode).toBe(503);
   });
 });

@@ -10,12 +10,11 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
-    "test": "bash scripts/test.sh",
+    "test": "turbo test",
     "typecheck": "turbo typecheck",
     "lint": "turbo lint",
     "db:generate": "drizzle-kit generate --config drizzle/drizzle.config.ts",
-    "db:migrate": "bash scripts/migrate.sh",
-    "release:dry": "bash scripts/release/assemble.sh && bash scripts/release/verify.sh"
+    "db:migrate": "drizzle-kit migrate --config drizzle/drizzle.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

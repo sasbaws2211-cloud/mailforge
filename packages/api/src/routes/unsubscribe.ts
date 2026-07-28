@@ -107,9 +107,17 @@ async function resolveAndSuppress(
   db: Db,
   token: string,
   source: typeof SOURCE_ONE_CLICK | typeof SOURCE_PAGE,
-): Promise<{ ok: true; email: string } | { ok: false }> {
-  // Step 1: verify the token
-  const result = verifyUnsubscribeToken(token);
+): Promise<{ ok: true; email: string } | { ok: false; missingKey?: true }> {
+  // Step 1: verify the token.
+  // verifyUnsubscribeToken throws when UNSUBSCRIBE_SIGNING_KEY is absent - that
+  // is a server misconfiguration, not a bad token. Catch and surface as a
+  // distinct missingKey flag so routes can return 503 rather than 500.
+  let result: ReturnType<typeof verifyUnsubscribeToken>;
+  try {
+    result = verifyUnsubscribeToken(token);
+  } catch {
+    return { ok: false, missingKey: true };
+  }
   if (!result.ok) {
     return { ok: false };
   }
@@ -315,6 +323,13 @@ const unsubscribeRoutes: FastifyPluginAsync = async (app) => {
     const outcome = await resolveAndSuppress(db, token, SOURCE_ONE_CLICK);
 
     if (!outcome.ok) {
+      if (outcome.missingKey) {
+        // UNSUBSCRIBE_SIGNING_KEY not configured - server misconfiguration.
+        // Return 503 so the provider knows to retry rather than treating this
+        // as a permanent invalid-token response.
+        reply.status(503);
+        return { error: "Service unavailable." };
+      }
       // Do not reveal which part failed or whether the message exists.
       reply.status(400);
       return { error: "Invalid unsubscribe link." };
@@ -346,7 +361,16 @@ const unsubscribeRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // Verify the token structure/signature only - no DB lookup here.
-    const verifyResult = verifyUnsubscribeToken(token);
+    // verifyUnsubscribeToken throws if UNSUBSCRIBE_SIGNING_KEY is absent.
+    // In that case render the error page (503 would confuse a human; 400 is
+    // accurate from the user's view since no valid page can be shown).
+    let verifyResult: ReturnType<typeof verifyUnsubscribeToken>;
+    try {
+      verifyResult = verifyUnsubscribeToken(token);
+    } catch {
+      reply.status(503).header("Content-Type", "text/html; charset=utf-8");
+      return reply.send(unsubscribeErrorHtml());
+    }
     if (!verifyResult.ok) {
       reply.status(400).header("Content-Type", "text/html; charset=utf-8");
       return reply.send(unsubscribeErrorHtml());
@@ -390,6 +414,15 @@ const unsubscribeRoutes: FastifyPluginAsync = async (app) => {
     const wantsJson = contentType.includes("application/json");
 
     if (!outcome.ok) {
+      if (outcome.missingKey) {
+        // UNSUBSCRIBE_SIGNING_KEY not configured - server misconfiguration.
+        if (wantsJson) {
+          reply.status(503);
+          return { error: "Service unavailable." };
+        }
+        reply.status(503).header("Content-Type", "text/html; charset=utf-8");
+        return reply.send(unsubscribeErrorHtml());
+      }
       if (wantsJson) {
         reply.status(400);
         return { error: "Invalid unsubscribe link." };

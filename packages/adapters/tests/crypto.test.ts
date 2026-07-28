@@ -92,8 +92,15 @@ describe("@claros/adapters crypto", () => {
     it("throws on tampered ciphertext", () => {
       const envelope = encrypt("secret", validKey);
       const parsed = JSON.parse(envelope) as EncryptedEnvelope;
-      // Flip a byte in the data
-      const tampered = parsed.data.slice(0, -2) + "ff";
+      // XOR the last byte of the hex-encoded ciphertext with 0x01. This is always
+      // a real change: 0x01 XOR any byte != that byte for every possible input, so
+      // the tamper can never be a no-op regardless of what the random IV produces.
+      const lastByte = parseInt(parsed.data.slice(-2), 16);
+      const flippedByte = (lastByte ^ 0x01).toString(16).padStart(2, "0");
+      const tampered = parsed.data.slice(0, -2) + flippedByte;
+      // Confirm the tamper actually changed the data before calling decrypt.
+      // If this assertion fails the test itself is broken, not the production code.
+      expect(tampered).not.toBe(parsed.data);
       const bad = JSON.stringify({ ...parsed, data: tampered });
       expect(() => decrypt(bad, validKey)).toThrow();
     });

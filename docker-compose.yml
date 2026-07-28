@@ -1,7 +1,7 @@
 services:
   app:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile
       # Use the dev stage: all deps including tsx, entrypoint is tsx watch.
       # node_modules in the image are Linux binaries - the source volume mount
@@ -22,9 +22,8 @@ services:
       - CLAROS_MIGRATE_ON_BOOT=true
       # Keep NODE_ENV as development so the console login fallback works.
       - NODE_ENV=development
-      # Pass-through from .env (docker/.env is a symlink to ../.env, loaded
-      # automatically by Docker Compose when present in the same directory as
-      # docker-compose.yml).
+      # Pass-through from .env (Docker Compose auto-loads .env from the same
+      # directory as the compose file - the repo root - where .env lives).
       - CLAROS_EDITION=${CLAROS_EDITION:-community}
       - PORT=${PORT:-3000}
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -37,9 +36,9 @@ services:
       # node_modules is NOT mounted - it stays from the image (Linux binaries).
       # Mounting the macOS node_modules would break platform-specific packages
       # like esbuild (@esbuild/darwin-arm64 vs @esbuild/linux-arm64).
-      - ../apps:/app/apps
-      - ../packages:/app/packages
-      - ../drizzle:/app/drizzle
+      - ./apps:/app/apps
+      - ./packages:/app/packages
+      - ./drizzle:/app/drizzle
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,8 +57,8 @@ services:
       # initdb: create claros_seed_test and apply migrations on first start.
       # Only runs when the data volume is empty (fresh container).
       # After schema changes: docker compose down -v && docker compose up -d
-      - ./initdb/01-seed-test-db.sh:/docker-entrypoint-initdb.d/01-seed-test-db.sh:ro
-      - ../drizzle/migrations:/docker-entrypoint-initdb.d/migrations:ro
+      - ./docker/initdb/01-seed-test-db.sh:/docker-entrypoint-initdb.d/01-seed-test-db.sh:ro
+      - ./drizzle/migrations:/docker-entrypoint-initdb.d/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U claros"]
       interval: 5s

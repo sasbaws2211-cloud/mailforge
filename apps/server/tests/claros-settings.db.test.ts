@@ -1112,30 +1112,21 @@ describe("claros CLI - login-link", () => {
 // is skipped. The wizard reports it as still-missing at the end.
 
 describe("claros CLI - setup wizard", () => {
-  it("first-time run: all three steps configured from scripted input", async () => {
-    if (!dbAvailable) return;
+  // ---------------------------------------------------------------------------
+  // Helper: scripted input that fully configures all three steps.
+  // Shared by the two first-time-run variants below.
+  // ---------------------------------------------------------------------------
+  const fullSetupInput = () => [
+    // Step 1: postal address
+    TEST_POSTAL_ADDRESS, "y",
+    // Step 2: LLM
+    "openai", TEST_API_KEY_LLM, "https://api.openai.com/v1", "gpt-4o", "", "y",
+    // Step 3: transport
+    "resend", "setup@example.com", "Setup Test", TEST_API_KEY, "", "y",
+  ].join("\n") + "\n";
 
-    // Scripted input for the wizard when nothing is configured.
-    // Step 1 (postal address): <address>\n <summary y>
-    // Step 2 (LLM): <provider>\n <api_key>\n <base_url>\n <model>\n <embedding (default)>\n <summary y>
-    // Step 3 (transport): <provider>\n <from_email>\n <from_name>\n <api_key>\n <webhook (skip)>\n <summary y>
-    const scriptedInput = [
-      // Step 1: postal address
-      TEST_POSTAL_ADDRESS, "y",
-      // Step 2: LLM
-      "openai", TEST_API_KEY_LLM, "https://api.openai.com/v1", "gpt-4o", "", "y",
-      // Step 3: transport
-      "resend", "setup@example.com", "Setup Test", TEST_API_KEY, "", "y",
-    ].join("\n") + "\n";
-
-    const { exitCode, stdout, stderr } = await runCli(
-      ["setup", SLUG],
-      scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
-    );
-
-    expect(exitCode).toBe(0);
-
+  // Shared DB assertions for the full-setup case.
+  async function assertFullSetupWritten() {
     // Postal address saved
     const tenantRow = await db
       .select({ settings: tenants.settings })
@@ -1160,13 +1151,67 @@ describe("claros CLI - setup wizard", () => {
       WHERE tenant_id = ${testTenantId}::uuid AND is_active = true LIMIT 1
     `);
     expect(transRows.rows[0]!.from_email).toBe("setup@example.com");
+  }
+
+  it("first-time run (signing key present): all three steps configured; summary says 'all done'", async () => {
+    if (!dbAvailable) return;
+
+    // UNSUBSCRIBE_SIGNING_KEY is explicitly set to a known value here so this
+    // test is not affected by whatever the developer has (or does not have) in
+    // their .env. The wizard's summary branch depends on this key being present,
+    // so the test must own that variable rather than inheriting it from the
+    // ambient environment.
+    const { exitCode, stdout, stderr } = await runCli(
+      ["setup", SLUG],
+      fullSetupInput(),
+      {
+        CLAROS_SETTINGS_INTERACTIVE: "1",
+        UNSUBSCRIBE_SIGNING_KEY: TEST_SIGNING_KEY,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    await assertFullSetupWritten();
 
     // Secrets never in output
     expect(stdout + stderr).not.toContain(TEST_API_KEY);
     expect(stdout + stderr).not.toContain(TEST_API_KEY_LLM);
 
-    // Summary says "all done"
+    // Summary says "all done" because signing key is present
     expect(stdout).toContain("All three configuration steps are done");
+    expect(stdout).not.toContain("UNSUBSCRIBE_SIGNING_KEY is not set");
+  }, 60000);
+
+  it("first-time run (signing key absent): all three steps configured; summary warns about missing key", async () => {
+    if (!dbAvailable) return;
+
+    // UNSUBSCRIBE_SIGNING_KEY is explicitly set to empty string here, which
+    // the CLI treats as absent (it checks `!!(value ?? "").trim()`). An empty
+    // string also prevents the CLI's own .env loader from overriding the value
+    // (the loader skips keys already set in the subprocess env, per claros.mjs:94).
+    // Without this explicit control, the test passes on machines where the
+    // developer has the key in .env and fails on CI where the key is absent.
+    const { exitCode, stdout, stderr } = await runCli(
+      ["setup", SLUG],
+      fullSetupInput(),
+      {
+        CLAROS_SETTINGS_INTERACTIVE: "1",
+        UNSUBSCRIBE_SIGNING_KEY: "",
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    await assertFullSetupWritten();
+
+    // Secrets never in output
+    expect(stdout + stderr).not.toContain(TEST_API_KEY);
+    expect(stdout + stderr).not.toContain(TEST_API_KEY_LLM);
+
+    // Summary shows the DB steps are done but warns about the missing key
+    expect(stdout).toContain("Database configuration steps are done");
+    expect(stdout).toContain("UNSUBSCRIBE_SIGNING_KEY is not set");
+    // The "all done" line must NOT appear when the key is absent
+    expect(stdout).not.toContain("All three configuration steps are done");
   }, 60000);
 
   it("re-run: existing config shown; operator keeps it (presses N)", async () => {

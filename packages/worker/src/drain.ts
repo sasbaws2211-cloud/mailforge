@@ -18,6 +18,13 @@
  *      - If absent: revert to 'approved' and log operator error. Same treatment
  *        as a missing postal address - configuration fault, not transport fault.
  *        No retry count consumed, no throttle budget consumed.
+ *   4b. Verify BASE_URL is usable in production (not localhost/loopback, https,
+ *       parseable). If unusable: revert to 'approved' and log operator error.
+ *       Same treatment as 3 and 4 - configuration fault, not transport fault.
+ *       No retry consumed, no throttle budget consumed. This check is more
+ *       critical than either of the above: a wrong BASE_URL is permanently
+ *       baked into delivered email bodies and cannot be corrected. Outside
+ *       production the check is suppressed (quickstart depends on localhost).
  *   5. Evaluate the throttle gate.
  *      - allow: hand to transport.
  *      - suppress: mark as 'suppressed' (terminal).
@@ -74,6 +81,7 @@ import {
 import type { TransportAdapter, TransportResolver } from "./transport.js";
 import {
   buildComplianceOutput,
+  checkBaseUrl,
   injectHtmlFooter,
   injectTextFooter,
   resolveBaseUrl,
@@ -116,6 +124,13 @@ export interface DrainTickResult {
   skippedNoPostalAddress: number;
   /** Messages skipped because UNSUBSCRIBE_SIGNING_KEY is not set. */
   skippedNoSigningKey: number;
+  /**
+   * Messages skipped because BASE_URL is unusable in production (localhost,
+   * non-https, or unparseable). Configuration fault, not transport fault.
+   * No retry consumed. The wrong value would be permanently baked into the
+   * unsubscribe link of every delivered email.
+   */
+  skippedBadBaseUrl: number;
   sent: number;
   suppressed: number;
   deferredFrequency: number;
@@ -250,6 +265,9 @@ export const fetchDrainBatchSimple: FetchDrainBatch = async (
  *   but for Community single-tenant this is effectively global).
  * @param baseUrlOverride - Base URL override for tests. Production reads BASE_URL env.
  * @param signingKeyOverride - Signing key override for tests. Production reads UNSUBSCRIBE_SIGNING_KEY env.
+ * @param isProductionOverride - Production flag override for tests. Production reads NODE_ENV env.
+ *   When true, checkBaseUrl enforces the no-localhost / https-required rules even in test environments.
+ *   When false, checkBaseUrl allows any URL. Defaults to NODE_ENV === 'production'.
  */
 export async function processDrainTick(
   db: Db,
@@ -259,6 +277,7 @@ export async function processDrainTick(
   batchLimit: number = 50,
   baseUrlOverride?: string,
   signingKeyOverride?: string,
+  isProductionOverride?: boolean,
 ): Promise<DrainTickResult> {
   const stats: DrainTickResult = {
     candidatesFetched: 0,
@@ -266,6 +285,7 @@ export async function processDrainTick(
     skippedNoEmail: 0,
     skippedNoPostalAddress: 0,
     skippedNoSigningKey: 0,
+    skippedBadBaseUrl: 0,
     sent: 0,
     suppressed: 0,
     deferredFrequency: 0,
@@ -313,7 +333,7 @@ export async function processDrainTick(
   // Step 4: Process each claimed message.
   for (const candidate of candidates) {
     const adapter = tenantsWithTransport.get(candidate.tenantId)!;
-    const result = await processOneMessage(db, candidate, now, adapter, baseUrl, signingKeyOverride);
+    const result = await processOneMessage(db, candidate, now, adapter, baseUrl, signingKeyOverride, isProductionOverride);
     switch (result) {
       case "no_email":
         stats.skippedNoEmail++;
@@ -323,6 +343,9 @@ export async function processDrainTick(
         break;
       case "no_signing_key":
         stats.skippedNoSigningKey++;
+        break;
+      case "bad_base_url":
+        stats.skippedBadBaseUrl++;
         break;
       case "sent":
         stats.sent++;
@@ -356,6 +379,7 @@ type MessageOutcome =
   | "no_email"
   | "no_postal_address"
   | "no_signing_key"
+  | "bad_base_url"
   | "sent"
   | "suppressed"
   | "deferred_frequency"
@@ -370,6 +394,7 @@ async function processOneMessage(
   adapter: TransportAdapter,
   baseUrl: string,
   signingKeyOverride?: string,
+  isProductionOverride?: boolean,
 ): Promise<MessageOutcome> {
   // Messages arrive here already at status = 'sending' (claimed by fetchBatch).
   // Transport is already resolved (per-tenant, before claiming).
@@ -421,6 +446,29 @@ async function processOneMessage(
     );
     await revertToApproved(db, candidate.id, now);
     return "no_signing_key";
+  }
+
+  // Step 3b: Verify BASE_URL is usable in production.
+  //
+  // A localhost/loopback, non-https, or unparseable BASE_URL is a configuration
+  // fault more serious than either of the above: the wrong value would be
+  // permanently baked into the List-Unsubscribe header and unsubscribe link
+  // footer of every delivered email and cannot be corrected retroactively.
+  //
+  // Treatment is identical to the other two configuration faults: revert to
+  // 'approved', no retry consumed, operator-facing log error. Nothing sends.
+  //
+  // Outside production (NODE_ENV !== 'production') the check is suppressed so
+  // the self-host quickstart (http://localhost:3000) continues to work.
+  const baseUrlFault = checkBaseUrl(baseUrl, isProductionOverride);
+  if (baseUrlFault !== null) {
+    console.error(
+      `[drain] BASE_URL is unusable in production: ${baseUrlFault} ` +
+        `Message ${candidate.id} (tenant ${candidate.tenantId}) will not be sent. ` +
+        `This is not a transport failure and no retry is consumed. Fix BASE_URL to unblock sending.`,
+    );
+    await revertToApproved(db, candidate.id, now);
+    return "bad_base_url";
   }
 
   // Step 4: Gather throttle gate inputs and evaluate.

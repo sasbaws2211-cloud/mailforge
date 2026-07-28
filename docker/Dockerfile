@@ -72,6 +72,15 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Build provenance: commit SHA and build timestamp injected at image build time.
+# Pass --build-arg COMMIT_SHA=<sha> when invoking docker build.
+# A locally built image that omits the argument gets an empty string, which the
+# /version endpoint normalises to "unknown". Never crashes; never blocks startup.
+ARG COMMIT_SHA=""
+ARG BUILT_AT=""
+ENV CLAROS_COMMIT_SHA=${COMMIT_SHA}
+ENV CLAROS_BUILT_AT=${BUILT_AT}
+
 # Copy built output and production deps
 COPY --from=builder /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
 COPY --from=builder /app/tsconfig.base.json ./

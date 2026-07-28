@@ -76,8 +76,8 @@ Once you have a session cookie you can exercise ingestion and flows directly:
 docker compose exec app node -e "
 import { randomBytes, createHash } from 'crypto';
 import pg from 'pg';
-const pool = new pg.default.Pool({ connectionString: process.env.DATABASE_URL });
-const [tenant] = await pool.query(\"SELECT id FROM tenants WHERE slug = 'default'\");
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const tenant = await pool.query(\"SELECT id FROM tenants WHERE slug = 'default'\");
 const raw = 'cl_live_' + randomBytes(32).toString('base64url');
 const hash = createHash('sha256').update(raw).digest('hex');
 await pool.query('INSERT INTO api_keys(tenant_id, key_hash, prefix) VALUES(\$1,\$2,\$3)',
@@ -138,7 +138,7 @@ docker compose exec app claros <command>
 
 **Docker one-shot** (starts a fresh container, runs the command, exits):
 ```bash
-docker compose run --rm app claros <command>
+docker compose run --rm --entrypoint claros app <command>
 ```
 
 **Local checkout** (after `pnpm install && pnpm build`):
@@ -152,6 +152,7 @@ node apps/server/bin/claros.mjs <command>
 claros                               Show help listing all commands
 claros help [command]                Show detailed help for a specific command
 
+claros doctor                        Read-only deployment diagnostic (see below)
 claros login-link <email>            Generate a one-time login URL
 claros setup [tenant_slug]           Guided first-run wizard (postal address, LLM, transport)
 
@@ -166,6 +167,91 @@ claros postal-address show <slug>    Show the current postal address
 ```
 
 Default `tenant_slug` for `setup` is `default`. All other commands require an explicit slug.
+
+### `claros doctor`
+
+Read-only deployment diagnostic. Run this after every deploy and after any secret rotation. It never writes to the database.
+
+```bash
+# Local checkout (after pnpm build), no environment comparison:
+node apps/server/bin/claros.mjs doctor
+
+# With environment key comparison (requires a session token):
+# The session token is a live 30-day credential. Do not paste it into
+# shared terminals, CI logs, or chat. Use the environment variable form:
+CLAROS_DOCTOR_SESSION=<claros_session_cookie_value> \
+  node apps/server/bin/claros.mjs doctor
+
+# Docker Compose (app container running):
+docker compose exec app claros doctor
+CLAROS_DOCTOR_SESSION=<claros_session_cookie_value> \
+  docker compose exec app claros doctor
+```
+
+To get a session token: run `node apps/server/bin/claros.mjs login-link <email>`, visit the printed URL in a browser, then copy the `claros_session` cookie value from your browser's dev tools (Application > Cookies).
+
+Output covers four sections:
+
+- **Deployment** - the local HEAD commit versus the commit the running image reports via `GET /version`. Prints `PROVENANCE: OK` when they match, or an unmissable `MISMATCH` block when they differ. A mismatch means the container is running different code than your local checkout.
+- **Database** - connection host, database name, SSL in use, applied migration count, and the name of the latest applied migration.
+- **Transport** - active and inactive resend row counts. For the active row: whether decryption succeeded, which credential keys are present, and a fingerprint (first 8 hex chars of SHA-256) of the webhook secret. No secret value is ever printed.
+- **Environment** - for `ENCRYPTION_KEY` and `UNSUBSCRIBE_SIGNING_KEY`: the LOCAL fingerprint (the value in the operator's local shell) compared against the CONTAINER fingerprint (the value the running container loaded from its own environment, retrieved via `GET /v1/diagnostics`). MATCH means both have the same value. MISMATCH means they differ - the most common cause after a secret rotation is that the container was not restarted. Without `--session`, the CONTAINER column shows "no session token" and only the LOCAL values are printed.
+
+Example output with `CLAROS_DOCTOR_SESSION` set (fingerprints are illustrative placeholders):
+
+```
+╔══════════════════════════════════════════════════════════╗
+║            claros doctor - deployment diagnostic          ║
+╚══════════════════════════════════════════════════════════╝
+
+  Deployment
+  ──────────
+    local HEAD:      a1b2c3d4e5f6...
+    version URL:     https://api.example.com/version
+    deployed commit: a1b2c3d4e5f6...
+
+    PROVENANCE:  OK - local HEAD matches deployed commit
+
+  Database
+  ────────
+    host/db:    db.host.example/claros
+    type:       remote (unknown)
+    SSL:        yes
+    migrations: 18 applied
+    latest:     0017_loud_black_tarantula
+
+  Transport
+  ─────────
+    resend rows:  active=1  inactive=0
+    active row:   decryption OK
+    cred keys:    apiKey, webhookSecret
+    webhookSecret fingerprint: xxxxxxxx... (first 8 hex chars of SHA-256)
+
+  Environment
+  ───────────
+    ENCRYPTION_KEY:
+      LOCAL:     present  44 bytes  fingerprint=xxxxxxxx...
+      CONTAINER: present  44 bytes  fingerprint=xxxxxxxx...
+      STATUS:    OK - fingerprints match
+    UNSUBSCRIBE_SIGNING_KEY:
+      LOCAL:     present  64 bytes  fingerprint=xxxxxxxx...
+      CONTAINER: present  64 bytes  fingerprint=xxxxxxxx...
+      STATUS:    OK - fingerprints match
+
+    CLAROS_EDITION (container): community
+    BASE_URL (local):  https://api.example.com  [https: OK]
+```
+
+The `GET /version` endpoint used by doctor is also directly accessible:
+
+```bash
+curl https://api.example.com/version
+# {"commit":"a1b2c3d4...","edition":"community","builtAt":"2026-01-01T00:00:00Z"}
+```
+
+`commit` is `"unknown"` when the image was built without the `--build-arg COMMIT_SHA` argument (local builds). `builtAt` is `null` in that case.
+
+**Security note:** doctor reads from your own database and calls your own `/version` and `/v1/diagnostics` endpoints. Do not point it at a deployment you do not control or administer. The session token you supply gives read access to `/v1/diagnostics` on the target server.
 
 ### `claros login-link`
 
@@ -368,7 +454,8 @@ apps/
                 Operator CLI: apps/server/bin/claros.mjs
   dashboard/    Placeholder. React SPA not yet built.
 drizzle/        Schema (19 tables), migrations.
-docker/         Dockerfile + docker-compose.yml
+docker/         Dockerfile and initdb scripts
+docker-compose.yml  Single-image compose stack (Postgres + app)
 ```
 
 ---

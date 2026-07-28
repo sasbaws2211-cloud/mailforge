@@ -23,6 +23,14 @@
  *     fault, not transport fault. The message reverts to 'approved', no retry
  *     is consumed, and a clear operator-facing log error is emitted. Nothing
  *     sends without a valid key; fail-closed is preserved.
+ *   - An unusable BASE_URL in production (localhost/loopback, non-https, or
+ *     unparseable) is treated identically: configuration fault, not transport
+ *     fault. The message reverts to 'approved', no retry is consumed, and a
+ *     clear operator-facing log error is emitted. This is more dangerous than
+ *     either of the above because the wrong value is permanently baked into the
+ *     unsubscribe link of every delivered email and cannot be corrected
+ *     retroactively. Outside production the check is suppressed so the
+ *     self-host quickstart (http://localhost:3000) continues to work.
  *   Not sending is the safe failure; sending without the required footer or
  *   without a verifiable unsubscribe token is a legal violation.
  *
@@ -84,7 +92,7 @@ export interface ComplianceOutput {
 }
 
 // ---------------------------------------------------------------------------
-// Base URL resolution
+// Base URL resolution and validation
 // ---------------------------------------------------------------------------
 
 /**
@@ -103,6 +111,77 @@ export function resolveBaseUrl(override?: string): string {
   const raw = override ?? process.env.BASE_URL ?? "http://localhost:3000";
   // Strip trailing slash for consistent URL construction.
   return raw.endsWith("/") ? raw.slice(0, -1) : raw;
+}
+
+/**
+ * The set of loopback hostnames and address prefixes that are never valid
+ * in production. IPv4 loopback covers the full 127.0.0.0/8 range.
+ * IPv6 loopback appears both as "::1" (URL.hostname without brackets) and
+ * "[::1]" (URL.hostname with brackets, as returned by some runtimes).
+ */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+function isLoopback(hostname: string): boolean {
+  if (LOOPBACK_HOSTNAMES.has(hostname)) return true;
+  // IPv4 loopback range: 127.x.x.x
+  if (/^127\.\d+\.\d+\.\d+$/.test(hostname)) return true;
+  return false;
+}
+
+/**
+ * Check whether a resolved base URL is safe to use for production sends.
+ *
+ * A URL is "unusable" in production when:
+ *   - It cannot be parsed as a URL (malformed)
+ *   - Its hostname is a loopback / localhost address
+ *   - Its scheme is not https
+ *
+ * The check is gated on NODE_ENV === 'production' so local development and the
+ * self-host quickstart (which rely on http://localhost:3000) are never blocked.
+ * Outside production every URL is considered valid; the check returns null.
+ *
+ * Returns null when the URL is acceptable, or a non-empty reason string when it
+ * is not. Callers use this as a configuration fault gate identical to the missing
+ * postal address and missing signing key checks: revert the message to 'approved',
+ * no retry consumed, operator-visible log error.
+ *
+ * @param baseUrl - Already-resolved URL (no trailing slash). From resolveBaseUrl().
+ * @param isProduction - Override for testing. Defaults to NODE_ENV === 'production'.
+ */
+export function checkBaseUrl(baseUrl: string, isProduction?: boolean): string | null {
+  const prod = isProduction !== undefined ? isProduction : process.env.NODE_ENV === "production";
+
+  // Outside production: all values are permitted. The quickstart depends on
+  // http://localhost:3000 and must not be blocked.
+  if (!prod) return null;
+
+  // Check 1: parse.
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return `BASE_URL "${baseUrl}" is not a valid URL. Set BASE_URL to the HTTPS domain where Claros is hosted.`;
+  }
+
+  // Check 2: loopback / localhost.
+  if (isLoopback(parsed.hostname)) {
+    return (
+      `BASE_URL resolves to a loopback address ("${parsed.hostname}") in production. ` +
+      `Unsubscribe links baked into delivered emails would point at localhost and cannot be corrected. ` +
+      `Set BASE_URL to the HTTPS domain where Claros is hosted.`
+    );
+  }
+
+  // Check 3: HTTPS required.
+  if (parsed.protocol !== "https:") {
+    return (
+      `BASE_URL uses scheme "${parsed.protocol.replace(":", "")}" instead of https in production. ` +
+      `Unsubscribe links baked into delivered emails would use an insecure scheme. ` +
+      `Set BASE_URL to an https:// URL.`
+    );
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------

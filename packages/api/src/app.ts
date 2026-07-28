@@ -22,6 +22,8 @@ import { registerDbPlugin, type Db } from "./plugins/db.js";
 import { registerTenantPlugin } from "./plugins/tenant.js";
 import { registerIngestAuthPlugin } from "./plugins/ingest-auth.js";
 import healthRoute from "./routes/health.js";
+import versionRoute from "./routes/version.js";
+import diagnosticsRoute from "./routes/diagnostics.js";
 import authRoutes from "./routes/auth.js";
 import ingestRoutes from "./routes/ingest.js";
 import flowsRoutes from "./routes/flows.js";
@@ -107,6 +109,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   // /health: always registered, no auth required. Compose smoke-test target.
   await app.register(healthRoute, { role, edition });
 
+  // /version: always registered, no auth required, no DB access.
+  // Returns build provenance: commit SHA (from CLAROS_COMMIT_SHA env), edition,
+  // and image build timestamp (from CLAROS_BUILT_AT env). Used by `claros doctor`
+  // to compare local HEAD against the running container without SSH access.
+  await app.register(versionRoute, { edition });
+
   // /auth/*: magic link login, verify, logout, me. No auth required for login/verify.
   if (opts.db) {
     await app.register(authRoutes, { prefix: "/auth", baseUrl });
@@ -177,6 +185,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (opts.db) {
         await v1.register(settingsRoutes, { prefix: "/settings" });
       }
+
+      // /v1/diagnostics: authenticated env fingerprint check for `claros doctor`.
+      // Session-cookie auth only (same preHandler as all /v1 routes).
+      // Returns commit SHA, edition, and key fingerprints from the running container.
+      // Never returns secret values.
+      await v1.register(diagnosticsRoute, { prefix: "/diagnostics" });
     },
     { prefix: "/v1" },
   );

@@ -240,6 +240,11 @@ async function insertUnimplementedConfig(provider: string): Promise<void> {
 /**
  * Run processDrainTick with the test signing key and base URL injected,
  * using the real buildTenantTransportResolver with the test ENCRYPTION_KEY.
+ *
+ * The resolver is scoped to testTenantId only. Other tenants' rows inserted
+ * by concurrently-running test files (e.g. settings-pipeline.db.test.ts)
+ * share the same Postgres instance; without this scope the drain tick would
+ * pick up those rows, causing spurious candidatesFetched > 0 failures.
  */
 async function runDrainWithRealResolver(now: Date, encryptionKeyOverride?: string | null) {
   const savedKey = process.env.ENCRYPTION_KEY;
@@ -252,7 +257,12 @@ async function runDrainWithRealResolver(now: Date, encryptionKeyOverride?: strin
   }
 
   try {
-    const resolver = buildTenantTransportResolver(db);
+    const rawResolver = buildTenantTransportResolver(db);
+    // Scope to this test's tenant only to prevent cross-file test pollution.
+    const resolver = async (tenantId: string) => {
+      if (tenantId !== testTenantId) return null;
+      return rawResolver(tenantId);
+    };
     return await processDrainTick(
       db,
       now,
