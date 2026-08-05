@@ -138,6 +138,7 @@ beforeEach(async () => {
   await db.execute(sql`DELETE FROM lifecycle_messages WHERE tenant_id IN (${tenantAId}, ${tenantBId})`);
   await db.execute(sql`DELETE FROM flow_memberships WHERE tenant_id IN (${tenantAId}, ${tenantBId})`);
   await db.execute(sql`DELETE FROM flows WHERE tenant_id IN (${tenantAId}, ${tenantBId})`);
+  await db.execute(sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id IN (${tenantAId}, ${tenantBId}))`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id IN (${tenantAId}, ${tenantBId})`);
 });
 
@@ -152,6 +153,7 @@ async function cleanup() {
   await db.execute(sql`DELETE FROM lifecycle_messages WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG_A}, ${SLUG_B}))`);
   await db.execute(sql`DELETE FROM flow_memberships WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG_A}, ${SLUG_B}))`);
   await db.execute(sql`DELETE FROM flows WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG_A}, ${SLUG_B}))`);
+  await db.execute(sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG_A}, ${SLUG_B})))`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG_A}, ${SLUG_B}))`);
   await db.execute(sql`DELETE FROM sessions WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG_A}, ${SLUG_B}))`);
   await db.execute(sql`DELETE FROM users WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG_A}, ${SLUG_B}))`);
@@ -610,6 +612,253 @@ describe("approved message is drain-eligible", () => {
       SELECT approved_at FROM lifecycle_messages WHERE id = ${messageId}
     `);
     expect(meta.rows[0]!.approved_at).not.toBeNull();
+
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/messages/:id/retry
+// ---------------------------------------------------------------------------
+
+describe("POST /v1/messages/:id/retry", () => {
+  it("re-queues a generation-failed message to pending_generation", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: TEST_BASE_URL });
+    const contactId = await insertContact(tenantAId, "retry-gen-contact");
+    const flowId = await insertFlow(tenantAId, "retry-gen-flow");
+    const membershipId = await insertMembership(tenantAId, contactId, flowId);
+
+    const [row] = await db.insert(lifecycleMessages).values({
+      tenantId: tenantAId,
+      contactId,
+      flowId,
+      membershipId,
+      flowStepOrder: 1,
+      status: "failed",
+      brainReasoning: "generation_failed: No LLM configuration found.",
+      retryCount: 3,
+    }).returning({ id: lifecycleMessages.id });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/messages/${row!.id}/retry`,
+      headers: { cookie: cookieA },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe("pending_generation");
+
+    // retry_count reset so the fresh attempt gets a full budget
+    const msg = await db.execute<{ status: string; retry_count: number }>(sql`
+      SELECT status, retry_count FROM lifecycle_messages WHERE id = ${row!.id}
+    `);
+    expect(msg.rows[0]!.status).toBe("pending_generation");
+    expect(msg.rows[0]!.retry_count).toBe(0);
+
+    await app.close();
+  });
+
+  it("returns 409 for a send-failed message (no generation_failed marker)", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: TEST_BASE_URL });
+    const contactId = await insertContact(tenantAId, "retry-send-fail");
+    const flowId = await insertFlow(tenantAId, "retry-send-flow");
+    const membershipId = await insertMembership(tenantAId, contactId, flowId);
+
+    const [row] = await db.insert(lifecycleMessages).values({
+      tenantId: tenantAId,
+      contactId,
+      flowId,
+      membershipId,
+      flowStepOrder: 1,
+      status: "failed",
+      brainReasoning: null,
+    }).returning({ id: lifecycleMessages.id });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/messages/${row!.id}/retry`,
+      headers: { cookie: cookieA },
+    });
+    expect(res.statusCode).toBe(409);
+    await app.close();
+  });
+
+  it("returns 404 for another tenant's message", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: TEST_BASE_URL });
+    const contactId = await insertContact(tenantAId, "retry-isolation");
+    const flowId = await insertFlow(tenantAId, "retry-isolation-flow");
+    const membershipId = await insertMembership(tenantAId, contactId, flowId);
+
+    const [row] = await db.insert(lifecycleMessages).values({
+      tenantId: tenantAId,
+      contactId,
+      flowId,
+      membershipId,
+      flowStepOrder: 1,
+      status: "failed",
+      brainReasoning: "generation_failed: test",
+    }).returning({ id: lifecycleMessages.id });
+
+    // tenant B tries to retry tenant A's message
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/messages/${row!.id}/retry`,
+      headers: { cookie: cookieB },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+});
+
+describe("GET /v1/messages contact join", () => {
+  it("includes contact email, name, and external_id in the list payload", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: TEST_BASE_URL });
+
+    const contactId = await insertContact(tenantAId, "list-contact-join");
+    const flowId = await insertFlow(tenantAId, "list-join-flow");
+    const membershipId = await insertMembership(tenantAId, contactId, flowId);
+    const messageId = await insertPendingApprovalMessage(tenantAId, contactId, flowId, membershipId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/messages",
+      headers: { cookie: cookieA },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    const msg = body.messages.find((m: { id: string }) => m.id === messageId);
+    expect(msg).toBeDefined();
+    expect(msg.contact).toEqual({
+      email: "list-contact-join@example.com",
+      name: null,
+      external_id: "list-contact-join",
+    });
+
+    await app.close();
+  });
+});
+
+describe("POST /v1/messages/bulk/approve", () => {
+  it("approves all pending_approval messages and skips others", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: TEST_BASE_URL });
+
+    const contactId = await insertContact(tenantAId, "bulk-approve-contact");
+    const flowId = await insertFlow(tenantAId, "bulk-approve-flow");
+    const membershipId = await insertMembership(tenantAId, contactId, flowId);
+    const id1 = await insertPendingApprovalMessage(tenantAId, contactId, flowId, membershipId, { stepOrder: 1 });
+    const id2 = await insertPendingApprovalMessage(tenantAId, contactId, flowId, membershipId, { stepOrder: 2 });
+
+    // A message already approved: must be reported as skipped
+    const id3 = await insertPendingApprovalMessage(tenantAId, contactId, flowId, membershipId, { stepOrder: 3 });
+    await app.inject({
+      method: "POST",
+      url: `/v1/messages/${id3}/approve`,
+      headers: { cookie: cookieA },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/messages/bulk/approve",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { ids: [id1, id2, id3] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.approved.sort()).toEqual([id1, id2].sort());
+    expect(body.skipped).toEqual([id3]);
+
+    const rows = await db.execute<{ id: string; status: string }>(sql`
+      SELECT id, status FROM lifecycle_messages WHERE id IN (${id1}, ${id2})
+    `);
+    for (const row of rows.rows) {
+      expect(row.status).toBe("approved");
+    }
+
+    await app.close();
+  });
+
+  it("never touches another tenant's messages", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: TEST_BASE_URL });
+
+    const contactId = await insertContact(tenantAId, "bulk-iso-contact");
+    const flowId = await insertFlow(tenantAId, "bulk-iso-flow");
+    const membershipId = await insertMembership(tenantAId, contactId, flowId);
+    const foreignId = await insertPendingApprovalMessage(tenantAId, contactId, flowId, membershipId);
+
+    // tenant B tries to bulk-approve tenant A's message
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/messages/bulk/approve",
+      headers: { cookie: cookieB, "content-type": "application/json" },
+      payload: { ids: [foreignId] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.approved).toEqual([]);
+    expect(body.skipped).toEqual([foreignId]);
+
+    const row = await db.execute<{ status: string }>(sql`
+      SELECT status FROM lifecycle_messages WHERE id = ${foreignId}
+    `);
+    expect(row.rows[0]!.status).toBe("pending_approval");
+
+    await app.close();
+  });
+
+  it("rejects an invalid body with 400", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: TEST_BASE_URL });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/messages/bulk/approve",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { ids: ["not-a-uuid"] },
+    });
+
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe("POST /v1/messages/bulk/reject", () => {
+  it("rejects all pending_approval messages and skips others", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: TEST_BASE_URL });
+
+    const contactId = await insertContact(tenantAId, "bulk-reject-contact");
+    const flowId = await insertFlow(tenantAId, "bulk-reject-flow");
+    const membershipId = await insertMembership(tenantAId, contactId, flowId);
+    const id1 = await insertPendingApprovalMessage(tenantAId, contactId, flowId, membershipId, { stepOrder: 1 });
+    const id2 = await insertPendingApprovalMessage(tenantAId, contactId, flowId, membershipId, { stepOrder: 2 });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/messages/bulk/reject",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { ids: [id1, id2] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.rejected.sort()).toEqual([id1, id2].sort());
+    expect(body.skipped).toEqual([]);
+
+    const rows = await db.execute<{ status: string }>(sql`
+      SELECT status FROM lifecycle_messages WHERE id IN (${id1}, ${id2})
+    `);
+    for (const row of rows.rows) {
+      expect(row.status).toBe("rejected");
+    }
 
     await app.close();
   });

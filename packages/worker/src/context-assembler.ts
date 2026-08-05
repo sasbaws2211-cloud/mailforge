@@ -76,6 +76,12 @@ export interface AssembledContext {
    */
   lastSeen?: string;
   /**
+   * template_ref from the compiled plan step, if present.
+   * When set, the content worker skips decide/draft/assess and renders
+   * the template directly.
+   */
+  templateRef?: string;
+  /**
    * Sections that were dropped during budget truncation.
    * Empty when no truncation was needed. Populated by the caller after
    * applying applyBudgetForBothPaths.
@@ -139,6 +145,11 @@ export async function assembleContext(
   // kb_context and generation continues. Only the KB section is treated this
   // way; failures in contact, lifecycle, or flow assembly remain fatal.
   //
+  // Skip entirely on the template path: templates are pre-authored fixed content
+  // that never consumes KB context. Attempting to resolve the embedding provider
+  // when no LLM is configured produces a recurring "cannot build KB context"
+  // warning on every template tick - noisy on healthy installs with no LLM.
+  //
   // The internal callEmbedding failures (network, timeout, 401) are already
   // caught inside buildKbContextSection and return undefined. This outer
   // try-catch is the safety net for any unexpected throw from buildKbContextSection
@@ -147,20 +158,25 @@ export async function assembleContext(
   // at 'generating' for reap - an availability inversion where the lowest-priority
   // context section halts all generation.
   let kbContext: string | undefined;
-  try {
-    kbContext = await buildKbContextSection(
-      db,
-      tenantId,
-      kbQueryText,
-      flowResult.kbRef,
-    );
-  } catch (kbErr) {
-    const msg = kbErr instanceof Error ? kbErr.message : String(kbErr);
-    console.warn(
-      `[assembler] KB context build failed for tenant ${tenantId} ` +
-        `(message will proceed without KB context): ${msg}`,
-    );
+  if (flowResult.templateRef) {
+    // Template path: KB context is unused, skip the embedding call entirely.
     kbContext = undefined;
+  } else {
+    try {
+      kbContext = await buildKbContextSection(
+        db,
+        tenantId,
+        kbQueryText,
+        flowResult.kbRef,
+      );
+    } catch (kbErr) {
+      const msg = kbErr instanceof Error ? kbErr.message : String(kbErr);
+      console.warn(
+        `[assembler] KB context build failed for tenant ${tenantId} ` +
+          `(message will proceed without KB context): ${msg}`,
+      );
+      kbContext = undefined;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -172,6 +188,7 @@ export async function assembleContext(
     brain_instruction: flowResult.brainInstruction,
     sender_name: flowResult.senderName,
     product_name: flowResult.productName,
+    brain_context: flowResult.brainContext,
     contact: {
       name: contactResult.contact.name,
       email: contactResult.contact.email,
@@ -289,10 +306,15 @@ export async function assembleContext(
     decideCtx.kbContext = draftCtx.kb_context;
   }
 
+  if (draftCtx.brain_context) {
+    decideCtx.brainContext = draftCtx.brain_context;
+  }
+
   return {
     decideCtx,
     draftCtx,
     lastSeen,
+    templateRef: flowResult.templateRef,
     droppedSections: [],
   };
 }

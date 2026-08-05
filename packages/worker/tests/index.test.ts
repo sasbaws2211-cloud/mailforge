@@ -66,6 +66,17 @@ vi.mock("../src/scan-enrollment.js", () => ({
   })),
 }));
 
+// Mock scan-segment-enrollment module to avoid DB calls in unit tests
+vi.mock("../src/scan-segment-enrollment.js", () => ({
+  phaseSegmentEnrollment: vi.fn(async () => ({
+    tenantsProcessed: 0,
+    flowsEvaluated: 0,
+    enrollmentsAttempted: 0,
+    enrollmentsSucceeded: 0,
+    flowsCapped: 0,
+  })),
+}));
+
 // Mock scan-step-advancement module to avoid DB calls in unit tests
 vi.mock("../src/scan-step-advancement.js", () => ({
   phaseStepAdvancement: vi.fn(async () => ({

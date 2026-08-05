@@ -105,8 +105,8 @@ describe("startScheduler - registration pattern", () => {
 
   it("registers exactly as many schedules as there are cron-triggered queues", async () => {
     await startScheduler(mockBoss as never);
-    // Six cron schedules: SCAN + DRAIN + REAP + COUNTER_ROLLOVER + PARTITION_MAINTENANCE + CONTENT_GENERATION.
-    expect(schedules).toHaveLength(6);
+    // Seven cron schedules: SCAN + DRAIN + REAP + COUNTER_ROLLOVER + PARTITION_MAINTENANCE + CONTENT_GENERATION + GRID_SNAPSHOT.
+    expect(schedules).toHaveLength(7);
   });
 
   it("does NOT call boss.work()", async () => {

@@ -73,6 +73,13 @@ export interface FlowStepSection {
    */
   kbRef?: string;
   /**
+   * The template_ref from the compiled plan for this step.
+   * When present, the step uses deterministic template rendering instead of
+   * LLM-generated content: decide, draft, and assess are all skipped.
+   * Absent when the step carries no @template reference.
+   */
+  templateRef?: string;
+  /**
    * The sender display name from transport_configs.from_name.
    * Absent when no active transport config exists or from_name is null.
    */
@@ -82,6 +89,12 @@ export interface FlowStepSection {
    * Always present when the tenant row is found.
    */
   productName?: string;
+  /**
+   * The tenant-level product description from tenants.settings.brain_context.
+   * Seeded by business model templates, editable via PATCH /v1/settings/tenant.
+   * Absent when the tenant has no brain_context set.
+   */
+  brainContext?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +111,7 @@ type TransportRow = Record<string, unknown> & {
 
 type TenantRow = Record<string, unknown> & {
   name: string;
+  settings: unknown; // JSONB arrives as parsed object or null
 };
 
 // ---------------------------------------------------------------------------
@@ -140,6 +154,7 @@ export async function buildFlowStepSection(
 
   let brainInstruction: string | undefined;
   let kbRef: string | undefined;
+  let templateRef: string | undefined;
 
   if (flowRows.rows.length > 0) {
     const rawPlan = flowRows.rows[0]!.compiled_plan;
@@ -158,6 +173,9 @@ export async function buildFlowStepSection(
         }
         if (step?.kb_ref) {
           kbRef = step.kb_ref;
+        }
+        if (step?.template_ref) {
+          templateRef = step.template_ref;
         }
       } else {
         // schema validation failure -> fields remain undefined, but this
@@ -198,18 +216,27 @@ export async function buildFlowStepSection(
   }
 
   // -------------------------------------------------------------------------
-  // Query 2b: product name from tenants
+  // Query 2b: product name and brain_context from tenants
   // -------------------------------------------------------------------------
   const tenantRows = await db.execute<TenantRow>(sql`
-    SELECT name
+    SELECT name, settings
     FROM tenants
     WHERE id = ${tenantId}::uuid
   `);
 
   let productName: string | undefined;
+  let brainContext: string | undefined;
   if (tenantRows.rows.length > 0) {
     // tenants.name is NOT NULL by schema - always a string when the row exists
     productName = tenantRows.rows[0]!.name;
+
+    // settings.brain_context is optional; absent rather than fabricated.
+    // Non-string values (corrupt settings JSON) are treated as absent.
+    const settings = tenantRows.rows[0]!.settings as Record<string, unknown> | null;
+    const rawBrainContext = settings?.brain_context;
+    if (typeof rawBrainContext === "string" && rawBrainContext.trim().length > 0) {
+      brainContext = rawBrainContext;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -218,7 +245,9 @@ export async function buildFlowStepSection(
   const result: FlowStepSection = {};
   if (brainInstruction !== undefined) result.brainInstruction = brainInstruction;
   if (kbRef !== undefined) result.kbRef = kbRef;
+  if (templateRef !== undefined) result.templateRef = templateRef;
   if (senderName !== undefined) result.senderName = senderName;
   if (productName !== undefined) result.productName = productName;
+  if (brainContext !== undefined) result.brainContext = brainContext;
   return result;
 }

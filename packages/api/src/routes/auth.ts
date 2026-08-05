@@ -11,6 +11,8 @@
  * - Single-use: atomic CAS (UPDATE WHERE consumed_at IS NULL).
  * - 10-minute TTL.
  * - Session: UUID in HTTP-only Secure SameSite=Lax cookie, 30-day fixed expiry.
+ * - GET /auth/verify is side-effect free (interstitial confirm page) so mail
+ *   scanner prefetch cannot burn the token; only POST /auth/verify consumes.
  *
  * Console fallback: when no transport is configured and NODE_ENV is not production
  * (and is not absent), the login link is printed to the server console instead of
@@ -26,11 +28,13 @@ import {
   sessions,
   magicLinkTokens,
   transportConfigs,
+  tenants,
 } from "@claros/db/schema";
 import {
   resolveTransportAdapter,
   type TransportAdapter,
 } from "@claros/adapters";
+import { buildLoginEmail, type TransactionalEmailInput } from "../transactional-email.js";
 import type { Db } from "../plugins/db.js";
 
 /** Token TTL in minutes. */
@@ -76,7 +80,25 @@ export function isConsoleLoginAllowed(): boolean {
 }
 
 export interface AuthRouteOptions {
+  /**
+   * Base URL of the API server (no trailing slash). Retained for interface
+   * compatibility but not currently used in auth route logic. The magic link
+   * verify URL is built from dashboardUrl (see below), not baseUrl, because
+   * in Cloud the verify link must point at app.claros.org where the SPA lives
+   * and the Vite dev proxy forwards /auth/* to Fastify.
+   */
   baseUrl: string;
+  /**
+   * Base URL of the dashboard SPA (no trailing slash). Used for:
+   *   - Building the magic link verify URL (/auth/verify?token=...)
+   *   - Redirects after magic link verify:
+   *     - Success: redirect to dashboardUrl/
+   *     - Failure: redirect to dashboardUrl/login?error=invalid_link
+   *
+   * In self-host mode this is typically the same as baseUrl.
+   * In Cloud it is the app. subdomain. Falls back to baseUrl when absent.
+   */
+  dashboardUrl: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,28 +166,25 @@ async function resolveAuthTransport(
 }
 
 // ---------------------------------------------------------------------------
-// Login email templates (plain, no marketing content, no compliance footer)
+// Login email templates (branded via the shared email shell)
 // ---------------------------------------------------------------------------
 
-function buildLoginEmailHtml(loginUrl: string): string {
-  return [
-    "<div style=\"font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;\">",
-    "  <p>You requested a login link. Click below to sign in:</p>",
-    `  <p><a href="${escapeHtmlAttr(loginUrl)}" style="display:inline-block;padding:12px 24px;background:#111;color:#fff;text-decoration:none;border-radius:4px;">Sign in to Claros</a></p>`,
-    `  <p style="font-size:13px;color:#666;">Or copy this URL: ${escapeHtml(loginUrl)}</p>`,
-    `  <p style="font-size:13px;color:#666;">This link expires in ${TOKEN_TTL_MINUTES} minutes and can only be used once.</p>`,
-    "</div>",
-  ].join("\n");
+function buildLoginEmailHtml(loginUrl: string, _brand?: unknown): string {
+  // Legacy fallback: called when brand context is not available.
+  // Returns a minimal branded HTML through the shell with defaults.
+  const { html } = buildLoginEmail(loginUrl, TOKEN_TTL_MINUTES, {
+    brand: {},
+    tenantName: "Claros",
+  });
+  return html;
 }
 
 function buildLoginEmailText(loginUrl: string): string {
-  return [
-    "You requested a login link. Open this URL to sign in:",
-    "",
-    loginUrl,
-    "",
-    `This link expires in ${TOKEN_TTL_MINUTES} minutes and can only be used once.`,
-  ].join("\n");
+  const { text } = buildLoginEmail(loginUrl, TOKEN_TTL_MINUTES, {
+    brand: {},
+    tenantName: "Claros",
+  });
+  return text;
 }
 
 function escapeHtml(str: string): string {
@@ -176,9 +195,77 @@ function escapeHtmlAttr(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// ---------------------------------------------------------------------------
+// Interstitial verify page
+// ---------------------------------------------------------------------------
+
+/**
+ * Render the magic link confirmation page.
+ *
+ * Standalone HTML with inline styles: no external assets, so it renders
+ * identically in any mail-client-adjacent browser context and does not
+ * depend on the dashboard build. Values mirror the light-theme tokens in
+ * apps/dashboard/src/index.css; the mark geometry mirrors
+ * src/components/brand-mark.tsx.
+ */
+function renderVerifyPage(email: string, token: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>Sign in to Claros</title>
+    <style>
+      body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f7f7f9; color: #26282e; font-family: system-ui, sans-serif; }
+      main { width: 100%; max-width: 360px; padding: 24px; text-align: center; }
+      h1 { font-size: 20px; font-weight: 600; margin: 16px 0 8px; }
+      p { font-size: 14px; line-height: 1.6; color: #585d68; margin: 0 0 24px; }
+      p strong { color: #26282e; font-weight: 500; }
+      button { width: 100%; height: 40px; border: 0; border-radius: 6px; background: #26282e; color: #f7f7f9; font-size: 14px; font-weight: 500; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M16.36 16.5 A 7 7 0 1 1 16.36 7.5" stroke="#3d5af1" stroke-width="2.4" stroke-linecap="round" />
+        <circle cx="19.7" cy="12" r="1.9" fill="#3d5af1" />
+      </svg>
+      <h1>Sign in to Claros</h1>
+      <p>You are signing in as <strong>${escapeHtml(email)}</strong>.</p>
+      <form method="post" action="/auth/verify">
+        <input type="hidden" name="token" value="${escapeHtmlAttr(token)}" />
+        <button type="submit">Sign in</button>
+      </form>
+    </main>
+  </body>
+</html>`;
+}
+
 const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
-  const { baseUrl } = opts;
+  const { baseUrl, dashboardUrl } = opts;
   const db: Db = app.db;
+
+  // Register form body parser for this scope (needed for the interstitial
+  // form POST to /auth/verify). Same manual parser as unsubscribe.ts - no
+  // new dependency. JSON is handled by Fastify's built-in parser.
+  app.addContentTypeParser(
+    "application/x-www-form-urlencoded",
+    { parseAs: "string" },
+    (_req, body, done) => {
+      const parsed: Record<string, string> = {};
+      if (typeof body === "string" && body.length > 0) {
+        for (const pair of body.split("&")) {
+          const eqIdx = pair.indexOf("=");
+          if (eqIdx === -1) continue;
+          const key = decodeURIComponent(pair.slice(0, eqIdx).replace(/\+/g, " "));
+          const value = decodeURIComponent(pair.slice(eqIdx + 1).replace(/\+/g, " "));
+          parsed[key] = value;
+        }
+      }
+      done(null, parsed);
+    },
+  );
 
   /**
    * POST /auth/login
@@ -243,7 +330,14 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
         expiresAt,
       });
 
-      const loginUrl = `${baseUrl}/auth/verify?token=${raw}`;
+      // Build the magic link URL.
+      // Resolution order: dashboardUrl (DASHBOARD_URL), then baseUrl (BASE_URL),
+      // then http://localhost:PORT. dashboardUrl is resolved in app.ts with
+      // opts.dashboardUrl ?? DASHBOARD_URL ?? baseUrl.
+      // In Vite dev mode DASHBOARD_URL=http://localhost:5173 and the Vite proxy
+      // forwards /auth/* to Fastify - so the link is clickable in a browser.
+      // In self-host mode both values are the same origin.
+      const loginUrl = `${dashboardUrl}/auth/verify?token=${raw}`;
 
       // Check if tenant has a configured transport
       const transports = await db
@@ -296,6 +390,23 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
       // and compliance headers. See resolveAuthTransport() for reasoning.
       const transport = await resolveAuthTransport(db, user.tenantId);
 
+      // Resolve brand settings for the branded email shell
+      const tenantRows = await db
+        .select({ name: tenants.name, settings: tenants.settings })
+        .from(tenants)
+        .where(eq(tenants.id, user.tenantId))
+        .limit(1);
+      const tenantRow = tenantRows[0];
+      const tenantSettings = (tenantRow?.settings as Record<string, unknown> | null) ?? {};
+      const brand = (tenantSettings.brand as Record<string, unknown> | undefined) ?? {};
+      const emailInput: TransactionalEmailInput = {
+        brand: brand as TransactionalEmailInput["brand"],
+        tenantName: tenantRow?.name ?? "Claros",
+      };
+      const { html: brandedHtml, text: brandedText } = buildLoginEmail(
+        loginUrl, TOKEN_TTL_MINUTES, emailInput,
+      );
+
       if (transport) {
         // Attempt direct send through the adapter (no drain, no throttle).
         // A unique message ID for idempotency - use the token hash (unique per request).
@@ -306,8 +417,8 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
             from: transport.fromEmail,
             fromName: transport.fromName ?? undefined,
             subject: "Your login link",
-            bodyHtml: buildLoginEmailHtml(loginUrl),
-            bodyText: buildLoginEmailText(loginUrl),
+            bodyHtml: brandedHtml,
+            bodyText: brandedText,
             // No List-Unsubscribe, no compliance headers - transactional email.
             headers: {},
             messageId,
@@ -357,46 +468,96 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
 
   /**
    * GET /auth/verify?token=xxx
-   * Verify a magic link token, create a session, set the cookie.
+   * Interstitial confirmation page. Does NOT consume the token and does NOT
+   * create a session: corporate mail scanners and link preview fetchers GET
+   * every URL in a message before the recipient clicks, and a GET with side
+   * effects burns the single-use token (the user then lands on invalid_link).
+   * A GET must be safe to prefetch; only the POST below has side effects.
+   *
+   * Valid token: 200 HTML page naming the account and a form whose button
+   * POSTs the token back here. Scanners do not submit forms.
+   * Invalid, consumed, or expired token: 302 -> dashboardUrl/login?error=invalid_link
    */
-  app.get<{ Querystring: { token: string } }>(
+  app.get<{ Querystring: { token?: string } }>(
     "/verify",
     {
       schema: {
         querystring: {
           type: "object",
           properties: { token: { type: "string" } },
-          required: ["token"],
-        },
-        response: {
-          200: {
-            type: "object",
-            properties: {
-              message: { type: "string" },
-              user: {
-                type: "object",
-                properties: {
-                  id: { type: "string" },
-                  email: { type: "string" },
-                  name: { type: "string" },
-                  role: { type: "string" },
-                },
-              },
-            },
-          },
-          401: {
-            type: "object",
-            properties: { error: { type: "string" } },
-          },
         },
       },
     },
     async (request, reply) => {
+      const failRedirect = `${dashboardUrl}/login?error=invalid_link`;
+
       const { token } = request.query;
 
       if (!token || token.length === 0) {
-        reply.status(401);
-        return { error: "Invalid or expired login link." };
+        return reply.redirect(failRedirect, 302);
+      }
+
+      const tokenHash = hashToken(token);
+
+      // Read-only lookup. Consumption happens exclusively in the POST handler.
+      const now = new Date();
+      const rows = await db
+        .select({
+          expiresAt: magicLinkTokens.expiresAt,
+          consumedAt: magicLinkTokens.consumedAt,
+          email: users.email,
+        })
+        .from(magicLinkTokens)
+        .innerJoin(users, eq(users.id, magicLinkTokens.userId))
+        .where(eq(magicLinkTokens.tokenHash, tokenHash))
+        .limit(1);
+
+      const row = rows[0];
+      if (!row || row.consumedAt !== null || row.expiresAt < now) {
+        return reply.redirect(failRedirect, 302);
+      }
+
+      // The page is per-token and short-lived; never let a scanner cache it.
+      return reply
+        .header("cache-control", "no-store")
+        .type("text/html; charset=utf-8")
+        .send(renderVerifyPage(row.email, token));
+    },
+  );
+
+  /**
+   * POST /auth/verify
+   * Consume a magic link token, create a session, set the cookie, redirect.
+   * Body: application/x-www-form-urlencoded { token } (submitted by the
+   * interstitial form; the token is the credential, so a cross-site form
+   * cannot forge this).
+   *
+   * Success: 302 -> dashboardUrl/
+   * Failure: 302 -> dashboardUrl/login?error=invalid_link
+   *
+   * The session cookie is set before the redirect so it is available on the
+   * dashboard origin immediately after the browser follows the Location header.
+   * Cookies set in a redirect response are sent by all major browsers.
+   *
+   * No JSON body is returned on either path.
+   */
+  app.post<{ Body: { token?: string } }>(
+    "/verify",
+    {
+      schema: {
+        body: {
+          type: "object",
+          properties: { token: { type: "string" } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const failRedirect = `${dashboardUrl}/login?error=invalid_link`;
+
+      const token = request.body?.token;
+
+      if (!token || token.length === 0) {
+        return reply.redirect(failRedirect, 302);
       }
 
       const tokenHash = hashToken(token);
@@ -422,8 +583,7 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
 
       if (consumed.length === 0) {
         // Token not found, already consumed, or tampered.
-        reply.status(401);
-        return { error: "Invalid or expired login link." };
+        return reply.redirect(failRedirect, 302);
       }
 
       const tokenRow = consumed[0]!;
@@ -432,8 +592,7 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
       if (tokenRow.expiresAt < now) {
         // Token was consumed but is expired. Already marked consumed so it
         // cannot be reused regardless.
-        reply.status(401);
-        return { error: "Invalid or expired login link." };
+        return reply.redirect(failRedirect, 302);
       }
 
       // Create session
@@ -451,7 +610,8 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
 
       const sessionId = sessionRows[0]!.id;
 
-      // Set session cookie
+      // Set session cookie before the redirect so the browser sends it on the
+      // first request to the dashboard.
       reply.setCookie(SESSION_COOKIE_NAME, sessionId, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
@@ -466,29 +626,7 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
         .set({ lastLoginAt: now })
         .where(eq(users.id, tokenRow.userId));
 
-      // Fetch user info for response
-      const userRows = await db
-        .select({
-          id: users.id,
-          email: users.email,
-          name: users.name,
-          role: users.role,
-        })
-        .from(users)
-        .where(eq(users.id, tokenRow.userId))
-        .limit(1);
-
-      const user = userRows[0]!;
-
-      return {
-        message: "Login successful.",
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-        },
-      };
+      return reply.redirect(`${dashboardUrl}/`, 302);
     },
   );
 

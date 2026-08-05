@@ -19,13 +19,9 @@
  *       Decrypts the config, reads the API key, constructs and returns a
  *       ResendTransportAdapter.
  *
- *   - Tenant has an active row for an unimplemented provider ('ses', 'smtp'):
- *       Returns null with a logged operator warning. The tenant's messages
- *       are untouched - same behavior as "no configuration." This is the
- *       safe failure: the operator chose a provider that is not yet built.
- *       Messages stay at 'approved' and will be retried on future ticks.
- *       When the provider is implemented, the same config row will start
- *       working without any operator action.
+ *   - Tenant has an active row for provider = 'smtp':
+ *       Decrypts the config, reads host/port/credentials, constructs and
+ *       returns a SmtpTransportAdapter.
  *
  *   - ENCRYPTION_KEY is missing or invalid:
  *       Returns null with a logged operator error. Same safe fallback.
@@ -101,9 +97,9 @@ export function buildTenantTransportResolver(db: Db): TransportResolver {
         );
       } else if (failure.reason === "unsupported_provider") {
         console.warn(
-          `[transport-resolver] Provider '${failure.provider}' is not yet implemented. ` +
+          `[transport-resolver] Provider '${failure.provider}' is not supported. ` +
             `Tenant ${tenantId} messages will remain at 'approved'. ` +
-            `Currently implemented: resend. Pending: ses, smtp.`,
+            `Supported providers: resend, smtp.`,
         );
       }
       return null;

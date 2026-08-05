@@ -56,4 +56,9 @@ export async function startScheduler(boss: PgBoss): Promise<void> {
   // and runs Brain decide+draft. More frequent than drain because LLM calls
   // have latency; smaller batches processed more often keeps pipeline moving.
   await boss.schedule(QUEUE.CONTENT_GENERATION, "*/5 * * * *", {});
+
+  // grid-snapshot: daily at 00:17 UTC (off the top of the hour). Records the
+  // day's retention-grid cell populations for the cell trend view.
+  // Idempotent: a re-run on the same day overwrites that day's rows.
+  await boss.schedule(QUEUE.GRID_SNAPSHOT, "17 0 * * *", {});
 }

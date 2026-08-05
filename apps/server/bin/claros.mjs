@@ -52,7 +52,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { execSync } from "node:child_process";
 import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, isNull } from "drizzle-orm";
 
 // Resolve repo root (apps/server/bin -> apps/server -> apps -> repo root)
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -382,7 +382,7 @@ function resolveEncryptionKey() {
 // Known providers
 // ---------------------------------------------------------------------------
 
-const KNOWN_TRANSPORT_PROVIDERS = ["resend", "ses", "smtp"];
+const KNOWN_TRANSPORT_PROVIDERS = ["resend", "smtp"];
 const KNOWN_LLM_PROVIDERS = ["openai", "anthropic", "ollama", "custom"];
 
 /**
@@ -413,7 +413,7 @@ function validateEmail(value) {
 // [impl] Same logic as POST /auth/login in packages/api/src/routes/auth.ts:
 // - randomBytes(32) token, SHA-256 hash stored in magic_link_tokens
 // - 10-minute TTL
-// - URL: <BASE_URL>/auth/verify?token=<raw>
+// - URL: DASHBOARD_URL ?? BASE_URL ?? http://localhost:3000 + /auth/verify?token=<raw>
 // ---------------------------------------------------------------------------
 
 async function cmdLoginLink(db, email) {
@@ -442,8 +442,14 @@ async function cmdLoginLink(db, email) {
     expiresAt,
   });
 
-  const baseUrl = (process.env.BASE_URL ?? "http://localhost:3000").replace(/\/$/, "");
-  const loginUrl = `${baseUrl}/auth/verify?token=${raw}`;
+  // Resolution order: DASHBOARD_URL, then BASE_URL, then http://localhost:3000.
+  // Matches the resolution chain in packages/api/src/app.ts (dashboardUrl).
+  // In Vite dev mode set DASHBOARD_URL=http://localhost:5173 so the printed
+  // link is directly clickable in a browser (Vite proxy forwards /auth/* to Fastify).
+  const linkBase = (
+    process.env.DASHBOARD_URL ?? process.env.BASE_URL ?? "http://localhost:3000"
+  ).replace(/\/$/, "");
+  const loginUrl = `${linkBase}/auth/verify?token=${raw}`;
 
   console.log("");
   console.log("========================================");
@@ -466,11 +472,11 @@ async function transportSet(db, tenantSlug, dbInfo) {
   const tenant = await findTenant(db, tenantSlug);
   console.log(`\nTenant: ${tenant.name} (${tenantSlug})`);
   console.log(`Target: ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`);
-
   let payload;
   if (isInteractive) {
     console.log("\nEnter transport configuration. Required fields are marked Required.");
     console.log("Secret fields will not be echoed.\n");
+
     const provider = await promptField({
       name: "provider", description: "Email provider", required: true,
       allowed: KNOWN_TRANSPORT_PROVIDERS,
@@ -482,33 +488,65 @@ async function transportSet(db, tenantSlug, dbInfo) {
     const from_name = await promptField({
       name: "from_name", description: "Sender display name", required: false,
     });
-    const api_key = await promptField({
-      name: "api_key", description: "Provider API key", required: true, secret: true,
-    });
-    const webhook_secret = await promptField({
-      name: "webhook_secret", description: "Webhook signing secret (for event verification)",
-      required: false, secret: true,
-    });
     const daily_limit_str = await promptField({
       name: "daily_limit", description: "Maximum emails per day (blank = provider default)",
       required: false,
     });
-    payload = {
-      provider, from_email,
-      from_name: from_name || undefined,
-      api_key,
-      webhook_secret: webhook_secret || undefined,
-      daily_limit: daily_limit_str ? parseInt(daily_limit_str, 10) : undefined,
-    };
+
+    if (provider === "smtp") {
+      const host = await promptField({
+        name: "host", description: "SMTP server hostname", required: true,
+      });
+      const port_str = await promptField({
+        name: "port", description: "SMTP port (465=TLS, 587=STARTTLS, 25=plain)", required: true,
+      });
+      const username = await promptField({
+        name: "username", description: "SMTP username (blank for unauthenticated relay)", required: false,
+      });
+      const password = await promptField({
+        name: "password", description: "SMTP password", required: false, secret: true,
+      });
+      payload = {
+        provider, from_email,
+        from_name: from_name || undefined,
+        host,
+        port: parseInt(port_str, 10),
+        secure: parseInt(port_str, 10) === 465,
+        username: username || undefined,
+        password: password || undefined,
+        daily_limit: daily_limit_str ? parseInt(daily_limit_str, 10) : undefined,
+      };
+    } else {
+      const api_key = await promptField({
+        name: "api_key", description: "Provider API key", required: true, secret: true,
+      });
+      const webhook_secret = await promptField({
+        name: "webhook_secret", description: "Webhook signing secret (for event verification)",
+        required: false, secret: true,
+      });
+      payload = {
+        provider, from_email,
+        from_name: from_name || undefined,
+        api_key,
+        webhook_secret: webhook_secret || undefined,
+        daily_limit: daily_limit_str ? parseInt(daily_limit_str, 10) : undefined,
+      };
+    }
   } else {
     try { payload = await readStdinJson(); }
     catch (err) { console.error(`\nERROR: ${err.message}\n`); process.exit(1); }
   }
 
-  const { provider, from_email, from_name, api_key, webhook_secret, daily_limit } = payload;
+  const { provider, from_email, from_name, daily_limit } = payload;
 
-  if (!provider || !from_email || !api_key) {
-    console.error("\nERROR: Required fields: provider, from_email, api_key\n"); process.exit(1);
+  if (!provider || !from_email) {
+    console.error("\nERROR: Required fields: provider, from_email\n"); process.exit(1);
+  }
+  if (provider === "resend" && !payload.api_key) {
+    console.error("\nERROR: api_key is required for Resend\n"); process.exit(1);
+  }
+  if (provider === "smtp" && (!payload.host || !payload.port)) {
+    console.error("\nERROR: host and port are required for SMTP\n"); process.exit(1);
   }
   if (!KNOWN_TRANSPORT_PROVIDERS.includes(provider)) {
     console.error(`\nERROR: Unknown provider "${provider}". Valid: ${KNOWN_TRANSPORT_PROVIDERS.join(", ")}\n`);
@@ -524,24 +562,53 @@ async function transportSet(db, tenantSlug, dbInfo) {
     if (!confirmed) { console.log("\nAborted.\n"); process.exit(0); }
   }
 
-  const summaryLines = [
-    `Tenant:          ${tenant.name} (${tenantSlug})`,
-    `Database:        ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`,
-    `provider:        ${provider}`,
-    `from_email:      ${from_email}`,
-    `from_name:       ${from_name || "(not set)"}`,
-    `api_key:         (present, ${api_key.length} chars)`,
-    `webhook_secret:  ${webhook_secret ? `(present, ${webhook_secret.length} chars)` : "(not set)"}`,
-    `daily_limit:     ${daily_limit ?? "(not set)"}`,
-  ];
+  let summaryLines;
+  if (provider === "smtp") {
+    summaryLines = [
+      `Tenant:          ${tenant.name} (${tenantSlug})`,
+      `Database:        ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`,
+      `provider:        ${provider}`,
+      `from_email:      ${from_email}`,
+      `from_name:       ${from_name || "(not set)"}`,
+      `host:            ${payload.host}`,
+      `port:            ${payload.port}`,
+      `secure:          ${payload.secure}`,
+      `username:        ${payload.username || "(not set)"}`,
+      `password:        ${payload.password ? `(present, ${payload.password.length} chars)` : "(not set)"}`,
+      `daily_limit:     ${daily_limit ?? "(not set)"}`,
+    ];
+  } else {
+    summaryLines = [
+      `Tenant:          ${tenant.name} (${tenantSlug})`,
+      `Database:        ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`,
+      `provider:        ${provider}`,
+      `from_email:      ${from_email}`,
+      `from_name:       ${from_name || "(not set)"}`,
+      `api_key:         (present, ${payload.api_key.length} chars)`,
+      `webhook_secret:  ${payload.webhook_secret ? `(present, ${payload.webhook_secret.length} chars)` : "(not set)"}`,
+      `daily_limit:     ${daily_limit ?? "(not set)"}`,
+    ];
+  }
   if (isProd) summaryLines.push("Mode:            PRODUCTION (--prod)");
 
   const ok = await confirmWrite(summaryLines);
   if (!ok) { console.log("\nAborted.\n"); process.exit(0); }
 
   const key = resolveEncryptionKey();
-  const credentials = { apiKey: api_key };
-  if (webhook_secret) credentials.webhookSecret = webhook_secret;
+  let credentials;
+  if (provider === "smtp") {
+    credentials = {
+      host: payload.host,
+      port: payload.port,
+      secure: payload.secure,
+      username: payload.username,
+      password: payload.password,
+      rejectUnauthorized: true,
+    };
+  } else {
+    credentials = { apiKey: payload.api_key };
+    if (payload.webhook_secret) credentials.webhookSecret = payload.webhook_secret;
+  }
   const encryptedConfig = encrypt(JSON.stringify(credentials), key);
 
   await db.update(transportConfigs).set({ isActive: false })
@@ -797,6 +864,164 @@ async function postalAddressShow(db, tenantSlug) {
   }
   console.log(`\nPostal address for "${tenant.name}" (${tenantSlug}):`);
   console.log(`  ${pa}\n`);
+}
+
+// ---------------------------------------------------------------------------
+// user list / user create / user promote
+//
+// Minimum CLI surface for user management. A self-hoster who seeds the wrong
+// SEED_ADMIN_EMAIL has no way back into the product without these commands.
+//
+// claros user list <tenant_slug>
+//   List all active users for the tenant (email, role, last login).
+//
+// claros user create <tenant_slug>
+//   Create a new user (owner or member). Interactive prompts for email and role.
+//   Non-interactive: echo '{"email":"x@y.com","role":"owner"}' | claros user create slug
+//
+// claros user promote <tenant_slug> <email>
+//   Promote an existing user to owner.
+// ---------------------------------------------------------------------------
+
+async function userList(db, tenantSlug) {
+  const tenant = await findTenant(db, tenantSlug);
+
+  const rows = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      role: users.role,
+      lastLoginAt: users.lastLoginAt,
+      createdAt: users.createdAt,
+    })
+    .from(users)
+    .where(and(eq(users.tenantId, tenant.id), isNull(users.deactivatedAt)));
+
+  console.log(`\nUsers for "${tenant.name}" (${tenantSlug}):`);
+  console.log(`${"  "}${"email".padEnd(40)} ${"role".padEnd(8)} ${"last login".padEnd(22)} name`);
+  console.log(`${"  "}${"─".repeat(40)} ${"─".repeat(8)} ${"─".repeat(22)} ${"─".repeat(20)}`);
+  for (const row of rows) {
+    const lastLogin = row.lastLoginAt ? row.lastLoginAt.toISOString().slice(0, 19) : "(never)";
+    console.log(`  ${row.email.padEnd(40)} ${row.role.padEnd(8)} ${lastLogin.padEnd(22)} ${row.name ?? ""}`);
+  }
+  console.log(`\n  Total: ${rows.length} active user${rows.length === 1 ? "" : "s"}\n`);
+}
+
+async function userCreate(db, tenantSlug, dbInfo) {
+  const tenant = await findTenant(db, tenantSlug);
+  console.log(`\nTenant: ${tenant.name} (${tenantSlug})`);
+  console.log(`Target: ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`);
+
+  let payload;
+  if (isInteractive) {
+    console.log("\nCreate a new user. Required fields are marked Required.\n");
+    const email = await promptField({
+      name: "email", description: "User email address", required: true,
+      validate: validateEmail,
+    });
+    const role = await promptField({
+      name: "role", description: "Role (owner or member)", required: true,
+      allowed: ["owner", "member"],
+    });
+    payload = { email, role };
+  } else {
+    try { payload = await readStdinJson(); }
+    catch (err) { console.error(`\nERROR: ${err.message}\n`); process.exit(1); }
+  }
+
+  const { email, role } = payload;
+  if (!email || !role) {
+    console.error("\nERROR: Required fields: email, role\n"); process.exit(1);
+  }
+  if (!["owner", "member"].includes(role)) {
+    console.error(`\nERROR: role must be "owner" or "member"\n`); process.exit(1);
+  }
+  const emailErr = validateEmail(email);
+  if (emailErr) {
+    console.error(`\nERROR: email: ${emailErr}\n`); process.exit(1);
+  }
+
+  const normalized = email.toLowerCase().trim();
+
+  if (isProd) {
+    const confirmed = await confirmProduction(dbInfo.hostPort, dbInfo.dbName);
+    if (!confirmed) { console.log("\nAborted.\n"); process.exit(0); }
+  }
+
+  // Check if user already exists (including deactivated)
+  const existing = await db
+    .select({ id: users.id, deactivatedAt: users.deactivatedAt })
+    .from(users)
+    .where(and(eq(users.tenantId, tenant.id), eq(users.email, normalized)))
+    .limit(1);
+
+  if (existing.length > 0 && !existing[0].deactivatedAt) {
+    console.error(`\nERROR: User "${normalized}" already exists and is active in this tenant.\n`);
+    process.exit(1);
+  }
+
+  if (existing.length > 0 && existing[0].deactivatedAt) {
+    // Reactivate
+    await db
+      .update(users)
+      .set({ role, deactivatedAt: null })
+      .where(eq(users.id, existing[0].id));
+    console.log(`\nUser "${normalized}" reactivated with role "${role}".`);
+    console.log(`  Generate a login link: claros login-link ${normalized}\n`);
+    return;
+  }
+
+  const [inserted] = await db
+    .insert(users)
+    .values({ tenantId: tenant.id, email: normalized, role })
+    .returning({ id: users.id, email: users.email, role: users.role });
+
+  console.log(`\nUser created.`);
+  console.log(`  id:    ${inserted.id}`);
+  console.log(`  email: ${inserted.email}`);
+  console.log(`  role:  ${inserted.role}`);
+  console.log(`\n  Generate a login link: claros login-link ${normalized}\n`);
+}
+
+async function userPromote(db, tenantSlug, email, dbInfo) {
+  const tenant = await findTenant(db, tenantSlug);
+  const normalized = email.toLowerCase().trim();
+
+  const rows = await db
+    .select({ id: users.id, role: users.role })
+    .from(users)
+    .where(and(
+      eq(users.tenantId, tenant.id),
+      eq(users.email, normalized),
+      isNull(users.deactivatedAt),
+    ))
+    .limit(1);
+
+  if (rows.length === 0) {
+    console.error(`\nERROR: No active user "${normalized}" in tenant "${tenantSlug}".\n`);
+    process.exit(1);
+  }
+
+  const user = rows[0];
+  if (user.role === "owner") {
+    console.log(`\nUser "${normalized}" is already an owner. Nothing to do.\n`);
+    return;
+  }
+
+  if (isProd) {
+    const confirmed = await confirmProduction(dbInfo.hostPort, dbInfo.dbName);
+    if (!confirmed) { console.log("\nAborted.\n"); process.exit(0); }
+  }
+
+  await db
+    .update(users)
+    .set({ role: "owner" })
+    .where(eq(users.id, user.id));
+
+  console.log(`\nUser "${normalized}" promoted to owner.`);
+  console.log(`  Tenant: ${tenant.name} (${tenantSlug})`);
+  console.log(`  Target: ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1671,6 +1896,9 @@ Commands:
   llm show <slug>              Show active LLM config (no credentials)
   postal-address set <slug>    Set the CAN-SPAM postal address
   postal-address show <slug>   Show the current postal address
+  user list <slug>             List active users for a tenant
+  user create <slug>           Create a new user (owner or member)
+  user promote <slug> <email>  Promote a user to owner
   help [command]               Show detailed help for a command
 
 Options:
@@ -1764,6 +1992,20 @@ try {
       if (sub === "set") await postalAddressSet(db, slug, dbInfo);
       else if (sub === "show") await postalAddressShow(db, slug);
       else { console.error(`\nUnknown subcommand: postal-address ${sub}\n`); process.exit(1); }
+      break;
+    }
+    case "user": {
+      const [sub, slug, extra] = restArgs;
+      if (!sub || !slug) {
+        console.error("\nERROR: claros user list|create|promote <tenant_slug> [email]\n"); process.exit(1);
+      }
+      if (sub === "list") await userList(db, slug);
+      else if (sub === "create") await userCreate(db, slug, dbInfo);
+      else if (sub === "promote") {
+        if (!extra) { console.error("\nERROR: claros user promote <tenant_slug> <email>\n"); process.exit(1); }
+        await userPromote(db, slug, extra, dbInfo);
+      }
+      else { console.error(`\nUnknown subcommand: user ${sub}\n`); process.exit(1); }
       break;
     }
     default:

@@ -12,7 +12,8 @@
  *
  * Behavior by provider:
  *   - "resend": decrypts, constructs ResendTransportAdapter, returns it.
- *   - "ses", "smtp", or anything else: returns null (unimplemented).
+ *   - "smtp": decrypts, constructs SmtpTransportAdapter, returns it.
+ *   - anything else: returns null (unimplemented).
  *
  * Failure modes (all return null):
  *   - ENCRYPTION_KEY missing or invalid
@@ -23,6 +24,7 @@
  */
 import { decrypt, parseEncryptionKey } from "./crypto.js";
 import { ResendTransportAdapter } from "./resend.js";
+import { SmtpTransportAdapter, type SmtpAdapterConfig } from "./smtp.js";
 import type { TransportAdapter } from "./transport-types.js";
 
 // ---------------------------------------------------------------------------
@@ -64,8 +66,8 @@ export function resolveTransportAdapter(
   encryptedConfig: string,
   encryptionKeyOverride?: string,
 ): ResolveTransportResult {
-  // Only resend is implemented.
-  if (provider !== "resend") {
+  // Gate: only resend and smtp are implemented.
+  if (provider !== "resend" && provider !== "smtp") {
     return { ok: false, failure: { reason: "unsupported_provider", provider } };
   }
 
@@ -76,12 +78,27 @@ export function resolveTransportAdapter(
   }
 
   // Decrypt and parse.
-  let apiKey: string;
+  let adapter: TransportAdapter;
   try {
     const key = parseEncryptionKey(encryptionKeyEnv);
     const decrypted = decrypt(encryptedConfig, key);
-    const parsed = JSON.parse(decrypted) as { apiKey: string };
-    apiKey = parsed.apiKey;
+    const parsed = JSON.parse(decrypted) as Record<string, unknown>;
+
+    if (provider === "resend") {
+      const apiKey = parsed.apiKey as string;
+      adapter = new ResendTransportAdapter({ apiKey });
+    } else {
+      // provider === "smtp"
+      const smtpConfig: SmtpAdapterConfig = {
+        host: parsed.host as string,
+        port: parsed.port as number,
+        secure: parsed.secure as boolean,
+        username: (parsed.username as string) || undefined,
+        password: (parsed.password as string) || undefined,
+        rejectUnauthorized: parsed.rejectUnauthorized as boolean | undefined,
+      };
+      adapter = new SmtpTransportAdapter(smtpConfig);
+    }
   } catch (err) {
     return {
       ok: false,
@@ -92,7 +109,5 @@ export function resolveTransportAdapter(
     };
   }
 
-  // Construct adapter.
-  const adapter = new ResendTransportAdapter({ apiKey });
   return { ok: true, transport: { adapter, provider } };
 }

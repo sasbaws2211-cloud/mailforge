@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, index } from "drizzle-orm/pg-core";
 import { tenants } from "./tenants.js";
 import { contacts } from "./contacts.js";
 
@@ -23,4 +23,9 @@ export const lifecycleTransitions = pgTable("lifecycle_transitions", {
   transitionedAt: timestamp("transitioned_at", {
     withTimezone: true,
   }).notNull(),
-});
+}, (table) => [
+  // Person timeline transitions branch: WHERE contact_id ORDER BY transitioned_at DESC.
+  index("idx_transitions_contact").on(table.contactId, table.transitionedAt.desc()),
+  // Analytics movement queries: per-tenant range scans on transitioned_at.
+  index("idx_transitions_tenant_time").on(table.tenantId, table.transitionedAt),
+]);

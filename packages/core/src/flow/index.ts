@@ -212,12 +212,48 @@ export const FLOW_SOURCES: readonly FlowSource[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Content mode
+// ---------------------------------------------------------------------------
+
+/**
+ * How the flow produces email content:
+ *   - "ai_drafted": the brain drafts each email per contact at send time.
+ *     Requires an LLM provider.
+ *   - "fixed_content": the person writes the emails once and they are sent
+ *     as-is (with variable interpolation). No LLM needed.
+ */
+export type ContentMode = "ai_drafted" | "fixed_content";
+
+export const CONTENT_MODES: readonly ContentMode[] = [
+  "ai_drafted",
+  "fixed_content",
+];
+
+// ---------------------------------------------------------------------------
 // Approval mode
 // ---------------------------------------------------------------------------
 
 export type ApprovalMode = "require" | "auto";
 
 export const APPROVAL_MODES: readonly ApprovalMode[] = ["require", "auto"];
+
+// ---------------------------------------------------------------------------
+// Template approval mode (for fixed_content flows)
+// ---------------------------------------------------------------------------
+
+/**
+ * Template review modes for person-written flows:
+ *   - "template_reviewed": the template is reviewed once against real contact
+ *     data. After that, messages send without per-message approval.
+ *   - "per_message": every message enters the approval queue (same as
+ *     approval_mode = "require" for AI-drafted flows).
+ */
+export type TemplateApprovalMode = "template_reviewed" | "per_message";
+
+export const TEMPLATE_APPROVAL_MODES: readonly TemplateApprovalMode[] = [
+  "template_reviewed",
+  "per_message",
+];
 
 // ---------------------------------------------------------------------------
 // Compiled plan (task 11)

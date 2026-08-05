@@ -48,5 +48,7 @@ export const contacts = pgTable(
       .where(sql`email IS NOT NULL`),
     index("idx_contacts_tenant_state").on(table.tenantId, table.lifecycleState),
     index("idx_contacts_last_seen").on(table.tenantId, table.lastSeenAt),
+    // People list cursor pagination: ORDER BY (created_at, id) per tenant.
+    index("idx_contacts_tenant_created").on(table.tenantId, table.createdAt, table.id),
   ]
 );

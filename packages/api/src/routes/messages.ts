@@ -8,6 +8,9 @@
  *   GET   /v1/messages           list messages pending approval (cursor-paginated)
  *   POST  /v1/messages/:id/approve   advance pending_approval -> approved
  *   POST  /v1/messages/:id/reject    advance pending_approval -> rejected (terminal)
+ *   POST  /v1/messages/:id/retry     re-queue a generation-failed message (failed -> pending_generation)
+ *   POST  /v1/messages/bulk/approve  approve many pending_approval messages at once
+ *   POST  /v1/messages/bulk/reject   reject many pending_approval messages at once
  *
  * CAS conventions: approve and reject use WHERE status = 'pending_approval'
  * to guarantee atomic state transitions. Approving an already-approved message
@@ -21,6 +24,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { sql } from "drizzle-orm";
 import type { Db } from "../plugins/db.js";
+import { QUEUE } from "@claros/core";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -31,6 +35,72 @@ const DEFAULT_PAGE_SIZE = 50;
 
 /** Maximum page size for GET /v1/messages list. */
 const MAX_PAGE_SIZE = 200;
+
+/** Maximum ids accepted by the bulk approve/reject endpoints. */
+const BULK_MAX_IDS = 100;
+
+/** Row shape of the message list query (joined with contacts). */
+type MessageListRow = Record<string, unknown> & {
+  id: string;
+  tenant_id: string;
+  contact_id: string;
+  flow_id: string;
+  flow_step_order: number | null;
+  status: string;
+  subject: string | null;
+  body_html: string | null;
+  body_text: string | null;
+  brain_reasoning: string | null;
+  brain_action_type: string | null;
+  created_at: string | Date | null;
+  updated_at: string | Date | null;
+  contact_email: string | null;
+  contact_name: string | null;
+  contact_external_id: string | null;
+  scheduled_send_at: string | Date | null;
+};
+
+function serializeMessageRow(r: MessageListRow) {
+  let waiting_reason: string | null = null;
+  if (r.status === "approved" && r.scheduled_send_at) {
+    const scheduled = r.scheduled_send_at instanceof Date
+      ? r.scheduled_send_at
+      : new Date(r.scheduled_send_at);
+    const now = new Date();
+    if (scheduled > now) {
+      const diffMs = scheduled.getTime() - now.getTime();
+      const diffHours = Math.round(diffMs / (1000 * 60 * 60));
+      if (diffHours <= 24) {
+        waiting_reason = `Waiting for send window (in ${diffHours} hours)`;
+      } else {
+        const diffDays = Math.round(diffHours / 24);
+        waiting_reason = `Waiting for send window (in ${diffDays} days)`;
+      }
+    }
+  }
+  return {
+    id: r.id,
+    tenant_id: r.tenant_id,
+    contact_id: r.contact_id,
+    flow_id: r.flow_id,
+    flow_step_order: r.flow_step_order,
+    status: r.status,
+    subject: r.subject,
+    body_html: r.body_html,
+    body_text: r.body_text,
+    brain_reasoning: r.brain_reasoning,
+    brain_action_type: r.brain_action_type,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+    scheduled_send_at: r.scheduled_send_at,
+    waiting_reason,
+    contact: {
+      email: r.contact_email,
+      name: r.contact_name,
+      external_id: r.contact_external_id,
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Cursor helpers (same convention as GET /v1/suppressions and GET /v1/kb)
@@ -84,7 +154,7 @@ const messagesRoutes: FastifyPluginAsync = async (app) => {
    */
   app.get<{
     Querystring: { limit?: string; after?: string; status?: string };
-  }>("/", async (request) => {
+  }>("/", { config: { minRole: "member" } }, async (request) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
 
@@ -101,44 +171,40 @@ const messagesRoutes: FastifyPluginAsync = async (app) => {
       cursor = decodeCursor(request.query.after);
     }
 
-    let rows: {
-      id: string;
-      tenant_id: string;
-      contact_id: string;
-      flow_id: string;
-      flow_step_order: number | null;
-      status: string;
-      subject: string | null;
-      body_html: string | null;
-      body_text: string | null;
-      brain_reasoning: string | null;
-      brain_action_type: string | null;
-      created_at: string | Date | null;
-      updated_at: string | Date | null;
-    }[];
+    let rows: MessageListRow[];
 
     if (cursor) {
-      const result = await db.execute<typeof rows[number]>(sql`
-        SELECT id, tenant_id, contact_id, flow_id, flow_step_order,
-               status, subject, body_html, body_text,
-               brain_reasoning, brain_action_type, created_at, updated_at
-        FROM lifecycle_messages
-        WHERE tenant_id = ${tenantId}
-          AND status = ${statusFilter}
-          AND ROW(created_at, id) > ROW(${cursor.created_at}::timestamptz, ${cursor.id}::uuid)
-        ORDER BY created_at ASC, id ASC
+      const result = await db.execute<MessageListRow>(sql`
+        SELECT m.id, m.tenant_id, m.contact_id, m.flow_id, m.flow_step_order,
+               m.status, m.subject, m.body_html, m.body_text,
+               m.brain_reasoning, m.brain_action_type, m.created_at, m.updated_at,
+               m.scheduled_send_at,
+               c.email AS contact_email, c.name AS contact_name,
+               c.external_id AS contact_external_id
+        FROM lifecycle_messages m
+        LEFT JOIN contacts c
+          ON c.id = m.contact_id AND c.tenant_id = m.tenant_id
+        WHERE m.tenant_id = ${tenantId}
+          AND m.status = ${statusFilter}
+          AND ROW(m.created_at, m.id) > ROW(${cursor.created_at}::timestamptz, ${cursor.id}::uuid)
+        ORDER BY m.created_at ASC, m.id ASC
         LIMIT ${fetchLimit}
       `);
       rows = result.rows;
     } else {
-      const result = await db.execute<typeof rows[number]>(sql`
-        SELECT id, tenant_id, contact_id, flow_id, flow_step_order,
-               status, subject, body_html, body_text,
-               brain_reasoning, brain_action_type, created_at, updated_at
-        FROM lifecycle_messages
-        WHERE tenant_id = ${tenantId}
-          AND status = ${statusFilter}
-        ORDER BY created_at ASC, id ASC
+      const result = await db.execute<MessageListRow>(sql`
+        SELECT m.id, m.tenant_id, m.contact_id, m.flow_id, m.flow_step_order,
+               m.status, m.subject, m.body_html, m.body_text,
+               m.brain_reasoning, m.brain_action_type, m.created_at, m.updated_at,
+               m.scheduled_send_at,
+               c.email AS contact_email, c.name AS contact_name,
+               c.external_id AS contact_external_id
+        FROM lifecycle_messages m
+        LEFT JOIN contacts c
+          ON c.id = m.contact_id AND c.tenant_id = m.tenant_id
+        WHERE m.tenant_id = ${tenantId}
+          AND m.status = ${statusFilter}
+        ORDER BY m.created_at ASC, m.id ASC
         LIMIT ${fetchLimit}
       `);
       rows = result.rows;
@@ -153,21 +219,7 @@ const messagesRoutes: FastifyPluginAsync = async (app) => {
       : null;
 
     return {
-      messages: pageRows.map((r) => ({
-        id: r.id,
-        tenant_id: r.tenant_id,
-        contact_id: r.contact_id,
-        flow_id: r.flow_id,
-        flow_step_order: r.flow_step_order,
-        status: r.status,
-        subject: r.subject,
-        body_html: r.body_html,
-        body_text: r.body_text,
-        brain_reasoning: r.brain_reasoning,
-        brain_action_type: r.brain_action_type,
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-      })),
+      messages: pageRows.map(serializeMessageRow),
       next_cursor: nextCursor,
     };
   });
@@ -184,7 +236,7 @@ const messagesRoutes: FastifyPluginAsync = async (app) => {
    */
   app.post<{
     Params: { id: string };
-  }>("/:id/approve", async (request, reply) => {
+  }>("/:id/approve", { config: { minRole: "member" } }, async (request, reply) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
     const messageId = request.params.id;
@@ -208,7 +260,15 @@ const messagesRoutes: FastifyPluginAsync = async (app) => {
     `);
 
     if (casResult.rows.length > 0) {
-      // Transition succeeded
+      // Transition succeeded - enqueue targeted drain for immediate send
+      const enqueue = request.server.enqueue;
+      if (enqueue) {
+        await enqueue(
+          QUEUE.DRAIN_MESSAGE,
+          { tenant_id: tenantId, message_id: messageId },
+          { singletonKey: messageId, retryLimit: 2, retryDelay: 10, expireInMinutes: 5 },
+        ).catch(() => {});
+      }
       return { message: "Message approved.", id: messageId, status: "approved" };
     }
 
@@ -251,7 +311,7 @@ const messagesRoutes: FastifyPluginAsync = async (app) => {
    */
   app.post<{
     Params: { id: string };
-  }>("/:id/reject", async (request, reply) => {
+  }>("/:id/reject", { config: { minRole: "member" } }, async (request, reply) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
     const messageId = request.params.id;
@@ -303,6 +363,158 @@ const messagesRoutes: FastifyPluginAsync = async (app) => {
       status: currentStatus,
     };
   });
+
+  /**
+   * POST /v1/messages/bulk/approve
+   *
+   * Approve many messages at once. Body: { ids: string[] } (1-100 uuids).
+   * One CAS UPDATE advances every message still at pending_approval; each
+   * transitioned message gets its targeted drain enqueue, same as the
+   * single-message route. Messages in any other status (or another
+   * tenant's) are reported as skipped, never touched.
+   *
+   * Response: { approved: string[], skipped: string[] }
+   */
+  app.post<{
+    Body: { ids?: unknown };
+  }>("/bulk/approve", { config: { minRole: "member" } }, async (request, reply) => {
+    const db: Db = request.server.db;
+    const tenantId = request.tenant!.id;
+
+    const ids = parseBulkIds(request.body?.ids);
+    if (!ids) {
+      reply.status(400);
+      return { error: `Body must be { ids: string[] } with 1-${BULK_MAX_IDS} uuid values.` };
+    }
+
+    const now = new Date();
+    const casResult = await db.execute<{ id: string }>(sql`
+      UPDATE lifecycle_messages
+      SET status = 'approved', approved_at = ${now}, updated_at = ${now}
+      WHERE tenant_id = ${tenantId}
+        AND status = 'pending_approval'
+        AND id = ANY(ARRAY[${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)}])
+      RETURNING id
+    `);
+
+    const approved = casResult.rows.map((r) => r.id);
+
+    const enqueue = request.server.enqueue;
+    if (enqueue) {
+      for (const id of approved) {
+        await enqueue(
+          QUEUE.DRAIN_MESSAGE,
+          { tenant_id: tenantId, message_id: id },
+          { singletonKey: id, retryLimit: 2, retryDelay: 10, expireInMinutes: 5 },
+        ).catch(() => {});
+      }
+    }
+
+    const approvedSet = new Set(approved);
+    return {
+      approved,
+      skipped: ids.filter((id) => !approvedSet.has(id)),
+    };
+  });
+
+  /**
+   * POST /v1/messages/bulk/reject
+   *
+   * Reject many messages at once (terminal). Body: { ids: string[] }
+   * (1-100 uuids). One CAS UPDATE advances every message still at
+   * pending_approval; anything else is reported as skipped.
+   *
+   * Response: { rejected: string[], skipped: string[] }
+   */
+  app.post<{
+    Body: { ids?: unknown };
+  }>("/bulk/reject", { config: { minRole: "member" } }, async (request, reply) => {
+    const db: Db = request.server.db;
+    const tenantId = request.tenant!.id;
+
+    const ids = parseBulkIds(request.body?.ids);
+    if (!ids) {
+      reply.status(400);
+      return { error: `Body must be { ids: string[] } with 1-${BULK_MAX_IDS} uuid values.` };
+    }
+
+    const now = new Date();
+    const casResult = await db.execute<{ id: string }>(sql`
+      UPDATE lifecycle_messages
+      SET status = 'rejected', updated_at = ${now}
+      WHERE tenant_id = ${tenantId}
+        AND status = 'pending_approval'
+        AND id = ANY(ARRAY[${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)}])
+      RETURNING id
+    `);
+
+    const rejected = casResult.rows.map((r) => r.id);
+    const rejectedSet = new Set(rejected);
+    return {
+      rejected,
+      skipped: ids.filter((id) => !rejectedSet.has(id)),
+    };
+  });
+
+  /**
+   *
+   * Re-queue a message whose content generation failed permanently
+   * (status 'failed' with a brain_reasoning of 'generation_failed: ...').
+   * This is the operator recovery path after fixing the configuration fault
+   * the failure recorded (add an LLM provider, repair the key, fix the
+   * model name). CAS: failed -> pending_generation, retry_count reset so
+   * the fresh attempt gets a full reap budget.
+   *
+   * Send-side failures (status 'failed' without the generation_failed
+   * marker) are NOT retryable here: re-running generation for a message
+   * that already has approved content would discard it, and resurrecting a
+   * bounced send needs a different decision. Those return 409.
+   */
+  app.post<{
+    Params: { id: string };
+  }>("/:id/retry", { config: { minRole: "member" } }, async (request, reply) => {
+    const db: Db = request.server.db;
+    const tenantId = request.tenant!.id;
+    const messageId = request.params.id;
+
+    if (!isUuid(messageId)) {
+      reply.status(404);
+      return { error: "Message not found." };
+    }
+
+    const now = new Date();
+
+    const casResult = await db.execute<{ id: string }>(sql`
+      UPDATE lifecycle_messages
+      SET status = 'pending_generation', retry_count = 0, updated_at = ${now}
+      WHERE id = ${messageId}
+        AND tenant_id = ${tenantId}
+        AND status = 'failed'
+        AND brain_reasoning LIKE 'generation_failed:%'
+      RETURNING id
+    `);
+
+    if (casResult.rows.length > 0) {
+      return { message: "Message re-queued for generation.", id: messageId, status: "pending_generation" };
+    }
+
+    const existing = await db.execute<{ id: string; status: string }>(sql`
+      SELECT id, status FROM lifecycle_messages
+      WHERE id = ${messageId} AND tenant_id = ${tenantId}
+    `);
+
+    if (existing.rows.length === 0) {
+      reply.status(404);
+      return { error: "Message not found." };
+    }
+
+    reply.status(409);
+    return {
+      error: `Cannot retry message in status '${existing.rows[0]!.status}'.`,
+      id: messageId,
+      status: existing.rows[0]!.status,
+    };
+  });
 };
 
 // ---------------------------------------------------------------------------
@@ -313,6 +525,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function isUuid(value: string): boolean {
   return UUID_RE.test(value);
+}
+
+/** Validate a bulk-endpoint ids array: 1..BULK_MAX_IDS unique uuids. */
+function parseBulkIds(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > BULK_MAX_IDS) {
+    return null;
+  }
+  const ids: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !isUuid(item)) return null;
+    ids.push(item);
+  }
+  return [...new Set(ids)];
 }
 
 export default messagesRoutes;

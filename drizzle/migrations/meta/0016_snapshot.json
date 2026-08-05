@@ -1,6 +1,6 @@
 {
   "id": "rename-delivered-to-recipient-address",
-  "prevId": "rename-delivered-to-recipient-address",
+  "prevId": "22c8e89d-d911-4d21-b3cf-dc3db870ae73",
   "version": "7",
   "dialect": "postgresql",
   "tables": {

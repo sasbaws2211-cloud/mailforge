@@ -35,7 +35,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { eq, and, ne } from "drizzle-orm";
-import { flows, llmConfigs } from "@claros/db/schema";
+import { flows, llmConfigs, tenants, templates } from "@claros/db/schema";
 import {
   isValidDelay,
   validateStatusTransition,
@@ -45,9 +45,13 @@ import {
   REENTRY_POLICIES,
   FLOW_SOURCES,
   APPROVAL_MODES,
+  CONTENT_MODES,
   QUEUE,
+  compiledPlanSchema,
   type FlowStatus,
 } from "@claros/core";
+import { decrypt, parseEncryptionKey } from "@claros/adapters";
+import { OpenAICompatibleProvider, draft } from "@claros/brain-oss";
 import type { Db } from "../plugins/db.js";
 
 // ---------------------------------------------------------------------------
@@ -81,6 +85,9 @@ const createFlowSchema = z.object({
   steps: z.array(flowStepSchema).min(0),
   source: z
     .enum(FLOW_SOURCES as [string, ...string[]])
+    .optional(),
+  content_mode: z
+    .enum(CONTENT_MODES as [string, ...string[]])
     .optional(),
   approval_mode: z
     .enum(APPROVAL_MODES as [string, ...string[]])
@@ -149,7 +156,7 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
    * POST /v1/flows
    * Create a new flow. Always starts with status = 'draft'.
    */
-  app.post<{ Body: CreateFlowBody }>("/", async (request, reply) => {
+  app.post<{ Body: CreateFlowBody }>("/", { config: { minRole: "member" } }, async (request, reply) => {
     const parsed = createFlowSchema.safeParse(request.body);
     if (!parsed.success) {
       return validationError(reply, parsed.error.issues);
@@ -179,8 +186,9 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
         triggerConfig: body.trigger_config,
         steps: body.steps,
         source: body.source ?? "manual",
+        contentMode: body.content_mode ?? "ai_drafted",
         status: "draft",
-        approvalMode: body.approval_mode ?? "require",
+        approvalMode: body.approval_mode ?? (body.content_mode === "fixed_content" ? "auto" : "require"),
         flowClass: body.flow_class ?? "nurture",
         reentryPolicy: body.reentry_policy ?? "cooldown",
         reentryCooldownDays: body.reentry_cooldown_days ?? 30,
@@ -201,6 +209,7 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
    */
   app.get<{ Querystring: { include_archived?: string } }>(
     "/",
+    { config: { minRole: "member" } },
     async (request) => {
       const db: Db = request.server.db;
       const tenantId = request.tenant!.id;
@@ -231,7 +240,7 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
    * GET /v1/flows/:id
    * Get a single flow. Returns 404 if not found or owned by another tenant.
    */
-  app.get<{ Params: { id: string } }>("/:id", async (request, reply) => {
+  app.get<{ Params: { id: string } }>("/:id", { config: { minRole: "member" } }, async (request, reply) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
 
@@ -264,6 +273,7 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
    */
   app.patch<{ Params: { id: string }; Body: UpdateFlowBody }>(
     "/:id",
+    { config: { minRole: "member" } },
     async (request, reply) => {
       const parsed = updateFlowSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -350,6 +360,7 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
       if (body.trigger_config !== undefined)    setClauses.triggerConfig = body.trigger_config;
       if (body.steps !== undefined)             setClauses.steps = body.steps;
       if (body.source !== undefined)            setClauses.source = body.source;
+      if (body.content_mode !== undefined)      setClauses.contentMode = body.content_mode;
       if (body.approval_mode !== undefined)     setClauses.approvalMode = body.approval_mode;
       if (body.flow_class !== undefined)        setClauses.flowClass = body.flow_class;
       if (body.reentry_policy !== undefined)    setClauses.reentryPolicy = body.reentry_policy;
@@ -406,7 +417,7 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
    * If the flow is already archived, this is a no-op (idempotent).
    * Returns 404 if the flow does not exist for this tenant.
    */
-  app.delete<{ Params: { id: string } }>("/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/:id", { config: { minRole: "member" } }, async (request, reply) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
 
@@ -454,7 +465,7 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
    * Returns 422 if preconditions are not met.
    * Returns 503 if the job queue is unavailable.
    */
-  app.post<{ Params: { id: string } }>("/:id/compile", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/:id/compile", { config: { minRole: "member" } }, async (request, reply) => {
     const db: Db = request.server.db;
     const enqueue = request.server.enqueue;
     const tenantId = request.tenant!.id;
@@ -529,6 +540,325 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
     reply.status(202);
     return { message: "Compilation queued.", flow_id: flow.id, compile_status: "pending" };
   });
+  /**
+   * POST /v1/flows/:id/plan
+   * Save a hand-authored compiled plan for a fixed_content flow.
+   *
+   * This is the path for person-written flows: the dashboard builds the
+   * compiled plan from the step editor UI and submits it here. For each step
+   * with email content, a template row is created/upserted, and template_ref
+   * is set so the execution engine uses the deterministic template path.
+   *
+   * Body: { steps: Array<{ order, delay, action_type, window_policy, subject,
+   *         body_html, body_text? }>, exit_conditions?: [...] }
+   *
+   * On success: creates templates, builds a compiled plan, sets
+   * compile_status = "ready". The flow can then be activated.
+   */
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    "/:id/plan",
+    { config: { minRole: "member" } },
+    async (request, reply) => {
+      const db: Db = request.server.db;
+      const tenantId = request.tenant!.id;
+
+      // Validate request body
+      const stepContentSchema = z.object({
+        order: z.number().int().min(1),
+        delay: z.string().regex(/^\d+(m|h|d)$/),
+        action_type: z.string().min(1),
+        window_policy: z.enum(["immediate", "respect_window"]),
+        subject: z.string().min(1, "Subject is required"),
+        body_html: z.string().min(1, "Body HTML is required"),
+        body_text: z.string().optional(),
+      });
+
+      const planBodySchema = z.object({
+        steps: z.array(stepContentSchema).min(1, "At least one step is required"),
+        exit_conditions: z.array(z.unknown()).optional(),
+      });
+
+      const parsed = planBodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        reply.status(400);
+        return {
+          error: "Invalid plan data.",
+          issues: parsed.error.issues.map((i) => ({
+            path: i.path.join("."),
+            message: i.message,
+          })),
+        };
+      }
+
+      const { steps, exit_conditions } = parsed.data;
+
+      // Fetch flow
+      const flowRows = await db
+        .select()
+        .from(flows)
+        .where(and(eq(flows.id, request.params.id), eq(flows.tenantId, tenantId)))
+        .limit(1);
+
+      if (flowRows.length === 0) {
+        reply.status(404);
+        return { error: "Flow not found." };
+      }
+
+      const flow = flowRows[0]!;
+
+      if (flow.status === "archived") {
+        reply.status(422);
+        return { error: "Cannot update the plan of an archived flow." };
+      }
+
+      if ((flow.contentMode ?? "ai_drafted") !== "fixed_content") {
+        reply.status(422);
+        return {
+          error: "Only fixed_content flows accept a hand-authored plan. " +
+            "AI-drafted flows use POST /v1/flows/:id/compile instead.",
+        };
+      }
+
+      // Create/upsert templates for each step
+      const flowId = request.params.id;
+      const templateVariables = [
+        "contact.first_name",
+        "contact.name",
+        "contact.email",
+        "contact.company",
+        "tenant.name",
+      ];
+
+      for (const step of steps) {
+        const slug = `flow-${flowId}-step-${step.order}`;
+        const name = `${flow.name} - Step ${step.order}`;
+
+        // Upsert template: ON CONFLICT (tenant_id, slug) DO UPDATE
+        await db
+          .insert(templates)
+          .values({
+            tenantId,
+            name,
+            slug,
+            subject: step.subject,
+            bodyHtml: step.body_html,
+            bodyText: step.body_text ?? null,
+            variables: templateVariables,
+            category: "flow",
+            isActive: true,
+          })
+          .onConflictDoUpdate({
+            target: [templates.tenantId, templates.slug],
+            set: {
+              name,
+              subject: step.subject,
+              bodyHtml: step.body_html,
+              bodyText: step.body_text ?? null,
+              variables: templateVariables,
+              isActive: true,
+            },
+          });
+      }
+
+      // Build the compiled plan
+      const compiledPlan = {
+        trigger: {
+          type: flow.triggerType,
+          condition: flow.triggerConfig as Record<string, unknown>,
+        },
+        steps: steps.map((s) => ({
+          order: s.order,
+          action_type: s.action_type,
+          delay: s.delay,
+          window_policy: s.window_policy,
+          template_ref: `flow-${flowId}-step-${s.order}`,
+        })),
+        ...(exit_conditions && exit_conditions.length > 0
+          ? { exit_conditions }
+          : {}),
+      };
+
+      // Validate against the schema to be sure
+      const planParsed = compiledPlanSchema.safeParse(compiledPlan);
+      if (!planParsed.success) {
+        reply.status(500);
+        return {
+          error: "Internal error: generated plan failed validation.",
+          issues: planParsed.error.issues.map((i) => ({
+            path: i.path.join("."),
+            message: i.message,
+          })),
+        };
+      }
+
+      // Write the plan to the flow
+      const [updated] = await db
+        .update(flows)
+        .set({
+          compiledPlan: planParsed.data as unknown as Record<string, unknown>,
+          compiledAt: new Date(),
+          compileStatus: "ready",
+          compileError: null,
+          steps: steps.map((s) => ({
+            order: s.order,
+            action_type: s.action_type,
+            delay: s.delay,
+            window_policy: s.window_policy,
+            template_ref: `flow-${flowId}-step-${s.order}`,
+          })),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(flows.id, flowId), eq(flows.tenantId, tenantId)))
+        .returning();
+
+      return serializeFlow(updated!);
+    },
+  );
+
+  /**
+   * POST /v1/flows/:id/draft-step
+   * Ask the AI to draft copy for a single step in a fixed_content flow.
+   *
+   * The result is returned to the dashboard for the person to edit. It is
+   * never stored automatically - the person owns the final copy.
+   *
+   * Body: { step_order: number, subject?: string, body_html?: string, context?: string }
+   *   - step_order: which step to draft for (used for positioning context)
+   *   - subject/body_html: existing content (if any) - the AI sees it as "current draft"
+   *   - context: optional extra instructions from the person
+   *
+   * Returns: { subject: string, body_html: string }
+   *
+   * Requires an active LLM configuration.
+   */
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    "/:id/draft-step",
+    { config: { minRole: "member" } },
+    async (request, reply) => {
+      const db: Db = request.server.db;
+      const tenantId = request.tenant!.id;
+
+      const bodySchema = z.object({
+        step_order: z.number().int().min(1),
+        subject: z.string().optional(),
+        body_html: z.string().optional(),
+        context: z.string().optional(),
+      });
+
+      const parsed = bodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        return validationError(reply, parsed.error.issues);
+      }
+
+      const { step_order, subject, body_html, context } = parsed.data;
+
+      // Fetch flow
+      const flowRows = await db
+        .select()
+        .from(flows)
+        .where(and(eq(flows.id, request.params.id), eq(flows.tenantId, tenantId)))
+        .limit(1);
+
+      if (flowRows.length === 0) {
+        reply.status(404);
+        return { error: "Flow not found." };
+      }
+
+      const flow = flowRows[0]!;
+
+      // Require active LLM config and resolve provider
+      const llmRows = await db
+        .select()
+        .from(llmConfigs)
+        .where(and(eq(llmConfigs.tenantId, tenantId), eq(llmConfigs.isActive, true)))
+        .limit(1);
+
+      if (llmRows.length === 0) {
+        reply.status(422);
+        return { error: "No LLM configuration found. Add an LLM provider in Settings to use AI drafting." };
+      }
+
+      const llmConfig = llmRows[0]!;
+      const encryptionKeyEnv = process.env.ENCRYPTION_KEY;
+      if (!encryptionKeyEnv) {
+        reply.status(500);
+        return { error: "ENCRYPTION_KEY not configured." };
+      }
+
+      let provider;
+      try {
+        const key = parseEncryptionKey(encryptionKeyEnv);
+        const decrypted = decrypt(llmConfig.config, key);
+        const providerConfig = JSON.parse(decrypted);
+        provider = new OpenAICompatibleProvider(providerConfig);
+      } catch (err) {
+        reply.status(500);
+        return { error: `Failed to resolve LLM provider: ${err instanceof Error ? err.message : String(err)}` };
+      }
+
+      // Fetch tenant name for product context
+      const tenantRows = await db
+        .select({ name: tenants.name })
+        .from(tenants)
+        .where(eq(tenants.id, tenantId))
+        .limit(1);
+
+      const productName = tenantRows[0]?.name ?? undefined;
+
+      // Build the steps array for context
+      const compiledPlan = flow.compiledPlan as Record<string, unknown> | null;
+      const steps = compiledPlan && Array.isArray(compiledPlan.steps)
+        ? compiledPlan.steps as Array<Record<string, unknown>>
+        : (Array.isArray(flow.steps) ? flow.steps as Array<Record<string, unknown>> : []);
+
+      const currentStep = steps.find(
+        (s) => typeof s.order === "number" && s.order === step_order,
+      );
+      const delay = currentStep?.delay as string | undefined;
+      const actionType = currentStep?.action_type as string | undefined;
+
+      // Build brain_instruction for the draft
+      const parts: string[] = [];
+      parts.push(`You are writing email step ${step_order} of ${steps.length || "a"} in a flow.`);
+      if (flow.name) parts.push(`Flow name: "${flow.name}".`);
+      if (flow.triggerType) parts.push(`Trigger: ${flow.triggerType} (${JSON.stringify(flow.triggerConfig)}).`);
+      if (delay) parts.push(`This email sends ${delay === "0m" ? "immediately" : `after a ${delay} delay`}.`);
+      if (actionType) parts.push(`Action type: ${actionType}.`);
+      if (step_order > 1) parts.push(`This is a follow-up. The contact has already received ${step_order - 1} earlier email(s) in this flow.`);
+      parts.push("Use {{contact.first_name|there}}, {{contact.name}}, {{contact.company}}, {{contact.email}} where personalisation belongs.");
+      parts.push("The output must contain {{variable}} syntax for personalisation - do not use placeholder text like [Name].");
+      if (subject) parts.push(`The person has written this subject so far: "${subject}". Improve or replace it.`);
+      if (body_html) parts.push(`The person has written this body so far:\n${body_html}\nImprove or replace it.`);
+      if (context) parts.push(`Additional instructions from the person: ${context}`);
+
+      const brainInstruction = parts.join("\n");
+
+      // Call the brain
+      const result = await draft(provider, {
+        brain_instruction: brainInstruction,
+        action_type: actionType,
+        product_name: productName,
+        first_contact: step_order === 1,
+      });
+
+      if (!result.ok) {
+        reply.status(502);
+        return { error: `AI draft failed: ${result.error}` };
+      }
+
+      // Convert markdown body to simple HTML (paragraphs)
+      const bodyMarkdown = result.draft.body_markdown;
+      const htmlBody = bodyMarkdown
+        .split(/\n\n+/)
+        .map((p: string) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
+        .join("\n");
+
+      return {
+        subject: result.draft.subject,
+        body_html: htmlBody,
+      };
+    },
+  );
 };
 
 // ---------------------------------------------------------------------------
@@ -552,6 +882,7 @@ function serializeFlow(row: typeof flows.$inferSelect) {
     trigger_config: row.triggerConfig,
     steps: row.steps,
     source: row.source,
+    content_mode: row.contentMode ?? "ai_drafted",
     status: row.status,
     approval_mode: row.approvalMode,
     flow_class: row.flowClass,

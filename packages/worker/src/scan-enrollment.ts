@@ -9,7 +9,8 @@
  * the number of transitions phase 1 applied (typically O(10s) per scan run).
  * No checkpoint is needed.
  *
- * Segment-triggered flows are skipped with a warning (unsupported in MVP).
+ * Segment-triggered flows enroll in phase 2b (scan-segment-enrollment.ts),
+ * not here: this phase only handles lifecycle_transition triggers.
  *
  * Mirror side: PUBLIC (packages/worker is mirrored).
  */

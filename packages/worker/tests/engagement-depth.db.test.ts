@@ -75,6 +75,9 @@ beforeAll(async () => {
     sql`DELETE FROM events WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG}, 'test-depth-isolation-other'))`,
   );
   await db.execute(
+    sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG}, 'test-depth-isolation-other')))`,
+  );
+  await db.execute(
     sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${SLUG}, 'test-depth-isolation-other'))`,
   );
   await db.execute(
@@ -107,6 +110,7 @@ afterAll(async () => {
     return;
   }
   await db.execute(sql`DELETE FROM events WHERE tenant_id = ${tenantId}`);
+  await db.execute(sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id = ${tenantId})`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${tenantId}`);
   await db.execute(sql`DELETE FROM scan_checkpoints WHERE tenant_id = ${tenantId}`);
   await db.execute(sql`DELETE FROM tenants WHERE id = ${tenantId}`);

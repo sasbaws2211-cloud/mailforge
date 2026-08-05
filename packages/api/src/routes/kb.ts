@@ -48,11 +48,9 @@
  *   Preview length: 300 characters. Truncation appended with "..." when the
  *   original is longer.
  *
- *   Index note: the cursor ORDER BY clause is (created_at ASC, id ASC), which
- *   requires an index on (tenant_id, created_at, id) for efficient execution.
- *   That index does not yet exist; cursor pagination will perform a sequential
- *   scan on kb_entries until it is added. See docs/BACKLOG.md
- *   "kb_entries cursor index" for the tracking item.
+ *   Index note: the cursor ORDER BY clause is (created_at ASC, id ASC),
+ *   served by idx_kb_entries_tenant_created (tenant_id, created_at, id),
+ *   added in migration 0018.
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
@@ -72,6 +70,27 @@ const SOURCES = ["manual", "crawl", "upload"] as const;
 
 /** Number of characters returned in the list content preview. */
 const CONTENT_PREVIEW_LENGTH = 300;
+
+/**
+ * Maximum length for an entry title.
+ *
+ * [impl] Unvalidated starting value. Titles are used as kb_ref anchors and
+ * shown in list UIs; 200 chars is generous for both.
+ */
+export const KB_TITLE_MAX_CHARS = 200;
+
+/**
+ * Maximum length for entry content.
+ *
+ * [impl] Unvalidated starting value. The entry content is injected verbatim
+ * into the draft prompt when retrieved (context-kb.ts); at ~4 chars/token an
+ * 8000-char entry costs ~2000 tokens against a 4000-token context budget
+ * (MAX_CONTEXT_TOKENS). Larger entries would push the whole kb_context
+ * section over budget and get it dropped, so the cap protects retrieval
+ * usefulness rather than the token bill. Well below the embedding truncation
+ * ceiling (EMBEDDING_MAX_CHARS = 32000 in embed-kb.ts).
+ */
+export const KB_CONTENT_MAX_CHARS = 8_000;
 
 /** Default page size for the list endpoint. */
 const DEFAULT_PAGE_SIZE = 50;
@@ -127,8 +146,14 @@ const RE_EMBED_ORPHAN_THRESHOLD_MINUTES = 15;
 // ---------------------------------------------------------------------------
 
 const createKbEntrySchema = z.object({
-  title: z.string().min(1, "title is required"),
-  content: z.string().min(1, "content is required"),
+  title: z
+    .string()
+    .min(1, "title is required")
+    .max(KB_TITLE_MAX_CHARS, `title must be at most ${KB_TITLE_MAX_CHARS} characters`),
+  content: z
+    .string()
+    .min(1, "content is required")
+    .max(KB_CONTENT_MAX_CHARS, `content must be at most ${KB_CONTENT_MAX_CHARS} characters`),
   content_type: z.enum(CONTENT_TYPES).optional(),
   source: z.enum(SOURCES).optional(),
   source_url: z.string().optional(),
@@ -237,7 +262,7 @@ const kbRoutes: FastifyPluginAsync = async (app) => {
    * is not set (stays null = "never enqueued" state). Tests that need to
    * verify enqueue behavior pass a mock enqueue function.
    */
-  app.post<{ Body: CreateKbEntryBody }>("/", async (request, reply) => {
+  app.post<{ Body: CreateKbEntryBody }>("/", { config: { minRole: "member" } }, async (request, reply) => {
     const parsed = createKbEntrySchema.safeParse(request.body);
     if (!parsed.success) {
       return validationError(reply, parsed.error.issues);
@@ -308,7 +333,7 @@ const kbRoutes: FastifyPluginAsync = async (app) => {
       after?: string;
       include_inactive?: string;
     };
-  }>("/", async (request) => {
+  }>("/", { config: { minRole: "member" } }, async (request) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
     const includeInactive = request.query.include_inactive === "true";
@@ -404,7 +429,7 @@ const kbRoutes: FastifyPluginAsync = async (app) => {
    * Get a single KB entry with full content.
    * Returns 404 if not found or owned by another tenant.
    */
-  app.get<{ Params: { id: string } }>("/:id", async (request, reply) => {
+  app.get<{ Params: { id: string } }>("/:id", { config: { minRole: "member" } }, async (request, reply) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
 
@@ -437,6 +462,7 @@ const kbRoutes: FastifyPluginAsync = async (app) => {
    */
   app.patch<{ Params: { id: string }; Body: UpdateKbEntryBody }>(
     "/:id",
+    { config: { minRole: "member" } },
     async (request, reply) => {
       const parsed = updateKbEntrySchema.safeParse(request.body);
       if (!parsed.success) {
@@ -521,7 +547,7 @@ const kbRoutes: FastifyPluginAsync = async (app) => {
    * Hard delete. Returns 200 with the deleted entry on success.
    * Returns 404 if the entry does not exist for this tenant.
    */
-  app.delete<{ Params: { id: string } }>("/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/:id", { config: { minRole: "member" } }, async (request, reply) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
 
@@ -578,7 +604,7 @@ const kbRoutes: FastifyPluginAsync = async (app) => {
    * Returns 202 with { enqueued, remaining, total_qualifying }.
    * Returns 503 if the job queue is not available.
    */
-  app.post("/re-embed", async (request, reply) => {
+  app.post("/re-embed", { config: { minRole: "member" } }, async (request, reply) => {
     const enqueue = request.server.enqueue;
     if (!enqueue) {
       reply.status(503);

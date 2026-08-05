@@ -86,5 +86,9 @@ export const lifecycleMessages = pgTable(
     index("idx_messages_provider_id")
       .on(table.providerMessageId)
       .where(sql`provider_message_id IS NOT NULL`),
+    // Analytics sending performance: per-tenant range scans on sent_at.
+    index("idx_messages_tenant_sent")
+      .on(table.tenantId, table.sentAt)
+      .where(sql`sent_at IS NOT NULL`),
   ]
 );

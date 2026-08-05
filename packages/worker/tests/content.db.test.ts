@@ -8,10 +8,12 @@
  * - Full path: pending_generation -> generating -> awaiting_content -> pending_approval
  *   with subject, body_html, and body_text populated.
  * - Skip/wait decisions land at 'skipped' with reasoning recorded.
- * - Provider error leaves the row at 'generating' (reap recovers).
+ * - Permanent faults (provider resolution failure, 4xx LLM rejections) fail
+ *   the message terminally with the reason in brain_reasoning.
+ * - Transient LLM errors leave the row at 'generating' (reap recovers).
  * - CAS rejects a stale write.
  * - Markdown renders to both HTML and text.
- * - Tenant with no active LLM config handled same as provider error.
+ * - Tenant with no active LLM config fails permanently like any resolution fault.
  * - Two concurrent ticks claim disjoint sets (SKIP LOCKED holds).
  * - Reap still recovers stuck 'generating' messages.
  * - Tenant scoping is respected.
@@ -151,8 +153,18 @@ beforeEach(async () => {
   await db.execute(sql`DELETE FROM flow_memberships WHERE tenant_id = ${otherTenantId}`);
   await db.execute(sql`DELETE FROM flows WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`DELETE FROM flows WHERE tenant_id = ${otherTenantId}`);
-  await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${testTenantId}`);
-  await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${otherTenantId}`);
+  await db.execute(
+      sql`DELETE FROM lifecycle_transitions WHERE tenant_id = ${testTenantId}`,
+    );
+    await db.execute(
+      sql`DELETE FROM contacts WHERE tenant_id = ${testTenantId}`,
+    );
+  await db.execute(
+      sql`DELETE FROM lifecycle_transitions WHERE tenant_id = ${otherTenantId}`,
+    );
+    await db.execute(
+      sql`DELETE FROM contacts WHERE tenant_id = ${otherTenantId}`,
+    );
 });
 
 afterAll(async () => {
@@ -172,6 +184,9 @@ async function cleanup() {
     );
     await db.execute(
       sql`DELETE FROM flows WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`,
+    );
+    await db.execute(
+      sql`DELETE FROM lifecycle_transitions WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`,
     );
     await db.execute(
       sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`,
@@ -348,9 +363,10 @@ describe("content generation worker", () => {
       const msg = await getMessage(messageId);
       expect(msg.status).toBe("pending_approval");
       expect(msg.subject).toBe("Welcome to Acme");
-      expect(msg.bodyHtml).toContain("<h1>");
+      // bodyHtml is email-safe inline-styled HTML; check structural content not exact tag form
+      expect(msg.bodyHtml).toMatch(/<h[1-3][^>]*>/);
       expect(msg.bodyHtml).toContain("<strong>Acme Corp</strong>");
-      expect(msg.bodyHtml).toContain('<a href="https://acme.com/start">');
+      expect(msg.bodyHtml).toContain('href="https://acme.com/start"');
       expect(msg.bodyText).toContain("Hello");
       expect(msg.bodyText).toContain("Acme Corp");
       expect(msg.bodyText).toContain("https://acme.com/start");
@@ -449,11 +465,11 @@ describe("content generation worker", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Provider error leaves row at generating
+  // Provider faults: permanent -> terminal failed; transient -> stays for reap
   // -------------------------------------------------------------------------
 
   describe("provider error handling", () => {
-    it("leaves message at generating when provider resolution fails", async () => {
+    it("fails the message permanently when provider resolution fails", async () => {
       if (!dbAvailable) return;
 
       mockResolveTenantProvider.mockResolvedValue({
@@ -474,13 +490,16 @@ describe("content generation worker", () => {
       const result = await processContentTick(db, now, 20, [testTenantId]);
 
       expect(result.claimed).toBe(1);
-      expect(result.errors).toBe(1);
+      expect(result.failed).toBe(1);
+      expect(result.errors).toBe(0);
       expect(result.advanced).toBe(0);
       expect(result.skipped).toBe(0);
 
-      // Message should be at generating (claim moved it there, error left it)
+      // Resolution failure is a configuration fault: terminal, with the
+      // reason recorded where the dashboard surfaces it.
       const msg = await getMessage(messageId);
-      expect(msg.status).toBe("generating");
+      expect(msg.status).toBe("failed");
+      expect(msg.brainReasoning).toBe("generation_failed: No LLM configuration found.");
     });
 
     it("leaves message at generating when decide() returns an LLM error", async () => {
@@ -509,7 +528,7 @@ describe("content generation worker", () => {
       expect(msg.status).toBe("generating");
     });
 
-    it("tenant with no active LLM config is handled same as provider error", async () => {
+    it("tenant with no active LLM config fails the message permanently", async () => {
       if (!dbAvailable) return;
 
       mockResolveTenantProvider.mockResolvedValue({
@@ -529,11 +548,14 @@ describe("content generation worker", () => {
       const now = new Date("2026-07-21T10:00:00Z");
       const result = await processContentTick(db, now, 20, [testTenantId]);
 
-      expect(result.errors).toBe(1);
+      expect(result.failed).toBe(1);
+      expect(result.errors).toBe(0);
 
-      // Message at generating - reap will eventually recover it
       const msg = await getMessage(messageId);
-      expect(msg.status).toBe("generating");
+      expect(msg.status).toBe("failed");
+      expect(msg.brainReasoning).toBe(
+        "generation_failed: No LLM configuration found. Add an LLM provider in Settings.",
+      );
     });
 
     it("leaves message at awaiting_content when draft() fails (reap recovery path)", async () => {
@@ -664,9 +686,12 @@ describe("content generation worker", () => {
     it("renders markdown with headings, bold, links to proper html", () => {
       const md = "# Welcome\n\nHello **world**.\n\n[Click here](https://example.com)";
       const html = renderMarkdownToHtml(md);
-      expect(html).toContain("<h1>Welcome</h1>");
+      // Headings carry inline styles now; check tag opens without asserting full attribute list
+      expect(html).toMatch(/<h1[^>]*>Welcome<\/h1>/);
       expect(html).toContain("<strong>world</strong>");
-      expect(html).toContain('<a href="https://example.com">Click here</a>');
+      // Links carry inline styles; assert the href is present
+      expect(html).toContain('href="https://example.com"');
+      expect(html).toContain(">Click here<");
     });
 
 
@@ -754,11 +779,13 @@ describe("content generation worker", () => {
     it("renders markdown formatting correctly after sanitization", () => {
       const md = "# Hello\n\n**bold** and _italic_\n\n- item 1\n- item 2";
       const html = renderMarkdownToHtml(md);
-      expect(html).toContain("<h1>");
+      // Headings carry inline styles; check tag opens
+      expect(html).toMatch(/<h1[^>]*>/);
       expect(html).toContain("<strong>bold</strong>");
       expect(html).toContain("<em>italic</em>");
-      expect(html).toContain("<li>item 1</li>");
-      expect(html).toContain("<li>item 2</li>");
+      // List items carry inline styles
+      expect(html).toMatch(/<li[^>]*>item 1<\/li>/);
+      expect(html).toMatch(/<li[^>]*>item 2<\/li>/);
     });
   });
 

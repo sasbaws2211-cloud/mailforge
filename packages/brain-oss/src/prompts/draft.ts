@@ -69,6 +69,14 @@ export interface DraftPromptContext {
   first_contact?: boolean;
   /** KB context snippets retrieved for this step. */
   kb_context?: string;
+  /**
+   * Tenant-level product description (tenants.settings.brain_context).
+   * Seeded by business model templates, editable via the settings API.
+   * Always injected when present - the anti-hallucination anchor that tells
+   * the drafter what the product is and is not. Protected from budget
+   * truncation (see context-budget.ts).
+   */
+  brain_context?: string;
   /** The sender/product name for the From line. */
   sender_name?: string;
   /** The product/company name. */
@@ -96,7 +104,7 @@ HARD CONSTRAINTS:
 4. Write in the voice and tone appropriate to the action type and instruction given.
 5. Personalize using the contact context provided. Reference specific behaviors, features, or data points when available.
 6. Keep emails concise and actionable. Lifecycle emails are not newsletters.
-7. Do not invent facts about the product that are not in the provided context or KB snippets.
+7. Do not invent facts about the product that are not in the provided product context or KB snippets.
 8. Do not include unsubscribe links or footer boilerplate - the deterministic engine adds those.`;
 
 // ---------------------------------------------------------------------------
@@ -125,6 +133,11 @@ export function buildDraftMessages(ctx: DraftPromptContext): ChatMessage[] {
     if (ctx.product_name) parts.push(`Product: ${ctx.product_name}`);
     if (ctx.sender_name) parts.push(`Sender: ${ctx.sender_name}`);
     userParts.push(`\nPRODUCT:\n${parts.join("\n")}`);
+  }
+
+  // Tenant-level product description (anti-hallucination anchor)
+  if (ctx.brain_context) {
+    userParts.push(`\nPRODUCT CONTEXT:\n${ctx.brain_context}`);
   }
 
   // Contact details

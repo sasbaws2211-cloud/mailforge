@@ -15,9 +15,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@claros/core": "workspace:*"
+    "@claros/core": "workspace:*",
+    "nodemailer": "^9.0.4"
   },
   "devDependencies": {
+    "@types/nodemailer": "^8.0.1",
     "typescript": "^5.5.0",
     "vitest": "^1.6.0"
   }

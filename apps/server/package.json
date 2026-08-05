@@ -14,16 +14,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@claros/core": "workspace:*",
     "@claros/adapters": "workspace:*",
     "@claros/api": "workspace:*",
-    "@claros/db": "workspace:*",
-    "@claros/worker": "workspace:*",
-    "@claros/scheduler": "workspace:*",
     "@claros/brain-oss": "workspace:*",
+    "@claros/core": "workspace:*",
+    "@claros/db": "workspace:*",
+    "@claros/scheduler": "workspace:*",
+    "@claros/worker": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "pg": "^8.22.0",
     "fastify": "^4.28.0",
+    "pg": "^8.22.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {

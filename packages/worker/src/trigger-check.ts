@@ -27,6 +27,11 @@ import { enrollContactInFlows } from "./enroll.js";
 
 type Db = NodePgDatabase<Record<string, never>>;
 
+export interface TriggerCheckResult {
+  /** IDs of memberships successfully enrolled. */
+  enrolledMembershipIds: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -38,11 +43,14 @@ type Db = NodePgDatabase<Record<string, never>>;
  *   1. Load active, compiled event-trigger flows for the tenant
  *   2. Filter to flows whose trigger_config.event matches the event name
  *   3. Run enrollment guards via enrollContactInFlows (advisory-locked)
+ *
+ * Returns the enrolled membership IDs so the caller can chain targeted
+ * step-advancement jobs.
  */
 export async function handleTriggerCheck(
   data: TriggerCheckJobData,
   db: Db,
-): Promise<void> {
+): Promise<TriggerCheckResult> {
   const { tenant_id, contact_id, event_name } = data;
 
   // Load active, compiled event-trigger flows for this tenant
@@ -84,12 +92,13 @@ export async function handleTriggerCheck(
       reentryCooldownDays: f.reentryCooldownDays ?? 30,
     }));
 
-  if (matchingFlows.length === 0) return;
+  if (matchingFlows.length === 0) return { enrolledMembershipIds: [] };
 
   // Enroll within a transaction (advisory lock acquired inside)
   const now = new Date();
+  let results: Awaited<ReturnType<typeof enrollContactInFlows>> = [];
   await db.transaction(async (tx) => {
-    await enrollContactInFlows(
+    results = await enrollContactInFlows(
       tx as unknown as Db,
       contact_id,
       tenant_id,
@@ -97,4 +106,11 @@ export async function handleTriggerCheck(
       now,
     );
   });
+
+  // Collect successfully enrolled membership IDs
+  const enrolledMembershipIds = results
+    .filter((r) => r.enrolled)
+    .map((r) => (r as { enrolled: true; membershipId: string }).membershipId);
+
+  return { enrolledMembershipIds };
 }

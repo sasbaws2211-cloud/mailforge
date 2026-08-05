@@ -1,0 +1,1 @@
+ALTER TABLE "flows" ADD COLUMN "content_mode" text DEFAULT 'ai_drafted';

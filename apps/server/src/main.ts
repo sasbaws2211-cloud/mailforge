@@ -202,6 +202,19 @@ async function start(): Promise<void> {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const db = drizzle(pool);
 
+  // Provisional signal handler: registered immediately after the pool is
+  // created so that a SIGTERM arriving during the startup sequence (before
+  // the full handler at the bottom of start() is registered) does not
+  // leave the pool open. The provisional handler sets a flag; the main
+  // handler below replaces it and runs the full sequence. If the main
+  // handler never gets registered (because a startup step calls
+  // process.exit(1) before we reach it), the provisional handler's flag
+  // is irrelevant and Node exits cleanly through the process.exit() call.
+  let shutdownRequestedEarly = false;
+  const provisionalHandler = () => { shutdownRequestedEarly = true; };
+  process.once("SIGTERM", provisionalHandler);
+  process.once("SIGINT", provisionalHandler);
+
   // Auto-migrate: apply pending community schema migrations on startup.
   //
   // GATE: only runs when CLAROS_MIGRATE_ON_BOOT=true is explicitly set.
@@ -311,6 +324,38 @@ async function start(): Promise<void> {
         );
       }
     }
+
+    // Warn if DASHBOARD_URL is set but is loopback or non-https in production.
+    // A wrong DASHBOARD_URL means /auth/verify redirects to an unreachable host,
+    // locking operators out. The server still starts; this is an early signal.
+    const rawDashboardUrl = process.env.DASHBOARD_URL;
+    if (rawDashboardUrl) {
+      try {
+        const parsed = new URL(rawDashboardUrl);
+        const loopback = parsed.hostname === "localhost" ||
+          parsed.hostname === "127.0.0.1" ||
+          parsed.hostname === "::1" ||
+          parsed.hostname === "[::1]" ||
+          /^127\.\d+\.\d+\.\d+$/.test(parsed.hostname);
+        if (loopback) {
+          console.warn(
+            `[config] DASHBOARD_URL is set to a loopback address ("${parsed.hostname}") in production. ` +
+            "The /auth/verify redirect would point at localhost. Operators would be unable to log in. " +
+            "Set DASHBOARD_URL to the HTTPS domain where the dashboard is hosted.",
+          );
+        } else if (parsed.protocol !== "https:") {
+          console.warn(
+            `[config] DASHBOARD_URL uses scheme "${parsed.protocol.replace(":", "")}" instead of https in production. ` +
+            "Set DASHBOARD_URL to an https:// URL.",
+          );
+        }
+      } catch {
+        console.warn(
+          `[config] DASHBOARD_URL "${rawDashboardUrl}" is not a valid URL in production. ` +
+          "Set DASHBOARD_URL to the HTTPS domain where the dashboard is hosted.",
+        );
+      }
+    }
   }
 
   // Bootstrap seed: only relevant for roles that serve HTTP (api, all).
@@ -348,8 +393,34 @@ async function start(): Promise<void> {
   };
 
   // API roles: "all" and "api" start the HTTP server.
+  //
+  // app is declared here (outside the conditional block) so the shutdown
+  // closure below can capture it. It remains undefined for pure worker and
+  // scheduler roles that never start Fastify.
+  let app: Awaited<ReturnType<typeof buildApp>> | undefined;
   if (role === "all" || role === "api") {
-    const app = await buildApp({ role, edition, db, enqueue });
+    // CLAROS_SERVE_DASHBOARD controls @fastify/static serving of the built
+    // dashboard SPA and the SPA catch-all fallback.
+    //
+    // Default: true for community edition, false for cloud edition.
+    // Rationale: in Cloud the Worker serves static assets; the container must
+    // not attempt to serve them. The edition-based default means a Cloud
+    // container never accidentally enables SPA serving without an explicit
+    // override - it does not require the operator to remember to set the flag.
+    // An explicit CLAROS_SERVE_DASHBOARD value ("true" or "false") still
+    // overrides in both directions.
+    //
+    // If enabled but apps/dashboard/dist does not exist, a warning is logged
+    // and serving is skipped - the server still starts cleanly.
+    const editionDefault = edition !== "cloud";
+    const serveDashboard =
+      process.env.CLAROS_SERVE_DASHBOARD === "true"
+        ? true
+        : process.env.CLAROS_SERVE_DASHBOARD === "false"
+          ? false
+          : editionDefault;
+
+    app = await buildApp({ role, edition, db, enqueue, serveDashboard });
 
     try {
       await app.listen({ port, host });
@@ -372,13 +443,88 @@ async function start(): Promise<void> {
     console.log("[pg-boss] cron schedules registered");
   }
 
-  // Graceful shutdown: stop pg-boss when the process exits.
+  // ---------------------------------------------------------------------------
+  // Graceful shutdown
+  //
+  // Order:
+  //   1. app.close()  - stop accepting new HTTP connections; wait for
+  //                     in-flight requests to finish. forceCloseConnections
+  //                     is set on the Fastify instance so keep-alive
+  //                     connections are destroyed immediately rather than
+  //                     waiting for the remote end to close them. Without
+  //                     this the keep-warm cron (every 60 s) would hold a
+  //                     persistent connection open and app.close() would
+  //                     hang exactly as boss.stop() used to.
+  //   2. boss.stop()  - stop pg-boss pollers and wait (up to 10 s) for
+  //                     any in-flight job cleanups. Job cleanup may still
+  //                     need the database pool, so this runs before pool.end.
+  //   3. pool.end()   - drain the pg.Pool used by Drizzle. This is the
+  //                     handle that kept the event loop alive before this fix.
+  //
+  // Watchdog: a timer fires process.exit(1) after SHUTDOWN_BUDGET_MS if the
+  // sequence above has not completed. The timer is unref'd so it cannot
+  // itself keep the event loop alive if all other handles drain first.
+  // The budget is 30 s: pg-boss graceful window (10 s) + app.close drain
+  // (<1 s with forceCloseConnections) + pool.end drain (<1 s) + 18 s
+  // safety margin. This is well under Cloudflare's 15-minute SIGKILL ceiling
+  // and far above the measured clean-shutdown cost (~2 s after the fix).
+  // ---------------------------------------------------------------------------
+
+  const SHUTDOWN_BUDGET_MS = 30_000;
+  let shutdownInProgress = false;
+
   const shutdown = async () => {
-    console.log("[pg-boss] stopping...");
-    await boss.stop({ graceful: true, timeout: 10000 });
+    if (shutdownInProgress) return;
+    shutdownInProgress = true;
+
+    // Watchdog: fires only if the sequence below hangs.
+    const watchdog = setTimeout(() => {
+      console.error(
+        "[shutdown] WATCHDOG: graceful shutdown exceeded budget of " +
+        `${SHUTDOWN_BUDGET_MS / 1000} s. A handle was not closed. Forcing exit.`,
+      );
+      process.exit(1);
+    }, SHUTDOWN_BUDGET_MS);
+    watchdog.unref();
+
+    try {
+      // Step 1: stop accepting HTTP connections.
+      if (app) {
+        console.log("[shutdown] closing HTTP server...");
+        await app.close();
+        console.log("[shutdown] HTTP server closed");
+      }
+
+      // Step 2: stop pg-boss pollers and drain in-flight job cleanups.
+      console.log("[shutdown] stopping pg-boss...");
+      await boss.stop({ graceful: true, timeout: 10_000 });
+      console.log("[shutdown] pg-boss stopped");
+
+      // Step 3: drain the database pool.
+      console.log("[shutdown] draining database pool...");
+      await pool.end();
+      console.log("[shutdown] database pool closed");
+
+      console.log("[shutdown] clean exit");
+      process.exit(0);
+    } catch (err) {
+      console.error("[shutdown] error during shutdown sequence:", err);
+      process.exit(1);
+    }
   };
+
+  // Remove the provisional handlers and register the real ones.
+  process.off("SIGTERM", provisionalHandler);
+  process.off("SIGINT", provisionalHandler);
   process.once("SIGTERM", () => void shutdown());
   process.once("SIGINT", () => void shutdown());
+
+  // If a signal arrived during startup (before the real handlers were
+  // installed), run the full shutdown now.
+  if (shutdownRequestedEarly) {
+    console.log("[shutdown] signal received during startup - shutting down now");
+    void shutdown();
+  }
 }
 
 start();

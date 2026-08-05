@@ -528,6 +528,7 @@ describe("GET /v1/settings/tenant", () => {
     expect(body.tenant.slug).toBe(SLUG_A);
     expect(body.tenant.plan).toBe("free");
     expect(body.tenant.postal_address).toBeNull();
+    expect(body.tenant.brain_context).toBeNull();
     expect(body.tenant.created_at).toBeDefined();
   });
 
@@ -600,10 +601,10 @@ describe("PATCH /v1/settings/tenant", () => {
     if (!dbAvailable) return;
     const app = await buildApp({ db, logger: false });
 
-    // Simulate a template having written lifecycle/throttle settings
+    // Simulate a template having written lifecycle/throttle/brain_context settings
     await db.execute(sql`
       UPDATE tenants
-      SET settings = '{"lifecycle":{"activation_window_days":7},"throttle":{"max_emails_per_user_per_week":3}}'::jsonb
+      SET settings = '{"lifecycle":{"activation_window_days":7},"throttle":{"max_emails_per_user_per_week":3},"brain_context":"Template seeded context."}'::jsonb
       WHERE id = ${tenantAId}
     `);
 
@@ -623,8 +624,123 @@ describe("PATCH /v1/settings/tenant", () => {
     // Template keys preserved
     expect((settings.lifecycle as Record<string, unknown>).activation_window_days).toBe(7);
     expect((settings.throttle as Record<string, unknown>).max_emails_per_user_per_week).toBe(3);
+    expect(settings.brain_context).toBe("Template seeded context.");
     // Postal address written
     expect(settings.postal_address).toBe(TEST_POSTAL_ADDRESS);
+  });
+
+  it("brain_context round-trips: write then read back matches", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+    const brainContext = "Our product is a kanban tool. Boards, cards, lists. No Gantt charts.";
+
+    const patchRes = await app.inject({
+      method: "PATCH",
+      url: "/v1/settings/tenant",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { brain_context: brainContext },
+    });
+    expect(patchRes.statusCode).toBe(200);
+    expect(patchRes.json().tenant.brain_context).toBe(brainContext);
+
+    const getRes = await app.inject({
+      method: "GET",
+      url: "/v1/settings/tenant",
+      headers: { cookie: cookieA },
+    });
+    expect(getRes.statusCode).toBe(200);
+    expect(getRes.json().tenant.brain_context).toBe(brainContext);
+  });
+
+  it("brain_context over 4000 characters is rejected with 400", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/settings/tenant",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { brain_context: "b".repeat(4001) },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/brain_context/);
+  });
+
+  it("brain_context at exactly 4000 characters is accepted", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/settings/tenant",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { brain_context: "b".repeat(4000) },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("brain_context null clears a previously set value", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+
+    await app.inject({
+      method: "PATCH",
+      url: "/v1/settings/tenant",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { brain_context: "Context to be cleared." },
+    });
+
+    const clearRes = await app.inject({
+      method: "PATCH",
+      url: "/v1/settings/tenant",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { brain_context: null },
+    });
+    expect(clearRes.statusCode).toBe(200);
+    expect(clearRes.json().tenant.brain_context).toBeNull();
+
+    // Key is removed from settings JSONB, not stored as empty string
+    const [row] = await db
+      .select({ settings: tenants.settings })
+      .from(tenants)
+      .where(eq(tenants.id, tenantAId));
+    const settings = (row!.settings as Record<string, unknown> | null) ?? {};
+    expect("brain_context" in settings).toBe(false);
+  });
+
+  it("brain_context empty/whitespace string clears the field", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+
+    await app.inject({
+      method: "PATCH",
+      url: "/v1/settings/tenant",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { brain_context: "Context to be cleared." },
+    });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/settings/tenant",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { brain_context: "   " },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().tenant.brain_context).toBeNull();
+  });
+
+  it("brain_context is trimmed on write", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/settings/tenant",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { brain_context: "  Padded context.  " },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().tenant.brain_context).toBe("Padded context.");
   });
 
   it("PATCH body with no recognised fields returns 400", async () => {

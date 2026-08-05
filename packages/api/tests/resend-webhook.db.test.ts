@@ -199,11 +199,13 @@ async function isSuppressed(email: string, tid?: string): Promise<boolean> {
 async function cleanup(): Promise<void> {
   // Clean up in reverse FK order
   for (const slug of [SLUG, OTHER_SLUG]) {
+    await db.execute(sql`DELETE FROM message_events WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`);
     await db.execute(sql`DELETE FROM lifecycle_messages WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`);
     await db.execute(sql`DELETE FROM flow_memberships WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`);
     await db.execute(sql`DELETE FROM flows WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`);
     await db.execute(sql`DELETE FROM suppressions WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`);
     await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`);
+    await db.execute(sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug}))`);
     await db.execute(sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`);
     await db.execute(sql`DELETE FROM tenants WHERE slug = ${slug}`);
   }

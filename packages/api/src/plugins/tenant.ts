@@ -8,9 +8,9 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { sessions, tenants, users } from "@claros/db/schema";
-import type { TenantContext } from "../types.js";
+import type { TenantContext, UserRole } from "../types.js";
 import type { Db } from "./db.js";
 import { SESSION_COOKIE_NAME } from "../routes/auth.js";
 
@@ -53,12 +53,15 @@ export function registerTenantPlugin(app: FastifyInstance): void {
     // Look up session + tenant + user in one query.
     // The user JOIN ensures a session whose user row has been deleted
     // (e.g. via CASCADE) cannot authenticate a request.
+    // The deactivated_at check ensures removed users cannot use residual sessions.
     const rows = await db
       .select({
         sessionUserId: sessions.userId,
         sessionExpiresAt: sessions.expiresAt,
         tenantId: tenants.id,
         tenantSlug: tenants.slug,
+        userRole: users.role,
+        userDeactivatedAt: users.deactivatedAt,
       })
       .from(sessions)
       .innerJoin(tenants, eq(sessions.tenantId, tenants.id))
@@ -77,10 +80,17 @@ export function registerTenantPlugin(app: FastifyInstance): void {
       return; // Expired session - tenant stays null
     }
 
-    // Resolve tenant
+    // Deactivated users cannot authenticate
+    if (row.userDeactivatedAt !== null) {
+      return; // Deactivated user - tenant stays null
+    }
+
+    // Resolve tenant with full user context
     request.tenant = {
       id: row.tenantId,
       slug: row.tenantSlug,
+      userId: row.sessionUserId,
+      userRole: row.userRole as UserRole,
     };
   });
 }

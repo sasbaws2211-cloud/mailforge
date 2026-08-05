@@ -103,6 +103,7 @@ beforeAll(async () => {
   }
 
   // Clean up from previous runs (reverse dependency order)
+  await db.execute(sql`DELETE FROM templates WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
   await db.execute(sql`DELETE FROM flows WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
   await db.execute(sql`DELETE FROM api_keys WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
   await db.execute(sql`DELETE FROM sessions WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
@@ -167,6 +168,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (dbAvailable) {
+    await db.execute(sql`DELETE FROM templates WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
     await db.execute(sql`DELETE FROM flows WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
     await db.execute(sql`DELETE FROM api_keys WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
     await db.execute(sql`DELETE FROM sessions WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
@@ -897,6 +899,141 @@ describe("flow CRUD", () => {
         method: "DELETE", url: `/v1/flows/${idB}`, headers: { cookie: cookieA },
       });
       expect(res.statusCode).toBe(404);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /v1/flows/:id/plan (person-written fixed_content flow)
+  // -------------------------------------------------------------------------
+
+  describe("POST /v1/flows/:id/plan", () => {
+    it("saves a plan for a fixed_content flow and creates templates", async () => {
+      if (!dbAvailable) return;
+      const app = await buildApp({ db, logger: false });
+
+      // Create a fixed_content flow
+      const created = await app.inject({
+        method: "POST",
+        url: "/v1/flows",
+        headers: { cookie: cookieA },
+        payload: {
+          ...minimalFlow({ name: "Person Written Test" }),
+          content_mode: "fixed_content",
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      const flow = created.json();
+      expect(flow.content_mode).toBe("fixed_content");
+      expect(flow.approval_mode).toBe("auto"); // default for fixed_content
+
+      // Save a plan with step content
+      const planRes = await app.inject({
+        method: "POST",
+        url: `/v1/flows/${flow.id}/plan`,
+        headers: { cookie: cookieA },
+        payload: {
+          steps: [
+            {
+              order: 1,
+              delay: "0m",
+              action_type: "onboard_welcome",
+              window_policy: "immediate",
+              subject: "Welcome {{contact.first_name|there}}!",
+              body_html: "<p>Hi {{contact.first_name|there}}, welcome to our product.</p>",
+            },
+            {
+              order: 2,
+              delay: "3d",
+              action_type: "nurture_value",
+              window_policy: "respect_window",
+              subject: "Getting started with {{tenant.name}}",
+              body_html: "<p>Here are some tips to get the most out of {{tenant.name}}.</p>",
+              body_text: "Here are some tips to get the most out of {{tenant.name}}.",
+            },
+          ],
+        },
+      });
+      expect(planRes.statusCode).toBe(200);
+      const updated = planRes.json();
+      expect(updated.compile_status).toBe("ready");
+      expect(updated.compiled_plan).not.toBeNull();
+      expect(updated.compiled_plan.steps).toHaveLength(2);
+      expect(updated.compiled_plan.steps[0].template_ref).toMatch(/^flow-.*-step-1$/);
+      expect(updated.compiled_plan.steps[1].template_ref).toMatch(/^flow-.*-step-2$/);
+
+      // The flow can now be activated
+      const activateRes = await app.inject({
+        method: "PATCH",
+        url: `/v1/flows/${flow.id}`,
+        headers: { cookie: cookieA },
+        payload: { status: "active" },
+      });
+      expect(activateRes.statusCode).toBe(200);
+      expect(activateRes.json().status).toBe("active");
+    });
+
+    it("rejects plan for ai_drafted flow", async () => {
+      if (!dbAvailable) return;
+      const app = await buildApp({ db, logger: false });
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/v1/flows",
+        headers: { cookie: cookieA },
+        payload: minimalFlow({ name: "AI Flow No Plan" }),
+      });
+      const flow = created.json();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/v1/flows/${flow.id}/plan`,
+        headers: { cookie: cookieA },
+        payload: { steps: [{ order: 1, delay: "0m", action_type: "x", window_policy: "immediate", subject: "s", body_html: "b" }] },
+      });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error).toContain("fixed_content");
+    });
+
+    it("rejects plan with empty steps", async () => {
+      if (!dbAvailable) return;
+      const app = await buildApp({ db, logger: false });
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/v1/flows",
+        headers: { cookie: cookieA },
+        payload: { ...minimalFlow({ name: "Empty Plan" }), content_mode: "fixed_content" },
+      });
+      const flow = created.json();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/v1/flows/${flow.id}/plan`,
+        headers: { cookie: cookieA },
+        payload: { steps: [] },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("rejects plan with missing subject", async () => {
+      if (!dbAvailable) return;
+      const app = await buildApp({ db, logger: false });
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/v1/flows",
+        headers: { cookie: cookieA },
+        payload: { ...minimalFlow({ name: "No Subject" }), content_mode: "fixed_content" },
+      });
+      const flow = created.json();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/v1/flows/${flow.id}/plan`,
+        headers: { cookie: cookieA },
+        payload: { steps: [{ order: 1, delay: "0m", action_type: "x", window_policy: "immediate", subject: "", body_html: "b" }] },
+      });
+      expect(res.statusCode).toBe(400);
     });
   });
 });

@@ -127,6 +127,41 @@
       "when": 1785120100000,
       "tag": "0017_loud_black_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1785822568166,
+      "tag": "0018_tan_doctor_strange",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1785908649055,
+      "tag": "0019_late_joystick",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1785922512033,
+      "tag": "0020_thin_purifiers",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1785922842881,
+      "tag": "0021_daffy_shockwave",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1785930970284,
+      "tag": "0022_messy_peter_quill",
+      "breakpoints": true
     }
   ]
 }

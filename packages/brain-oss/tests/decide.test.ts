@@ -221,4 +221,24 @@ describe("decide()", () => {
       expect(result.decision.reasoning).toBeUndefined();
     }
   });
+
+  it("includes brainContext as PRODUCT CONTEXT in the user message", async () => {
+    const output = { action: "contact" };
+    const { provider, completeSpy } = mockProvider(JSON.stringify(output));
+    await decide(provider, { ...baseCtx, brainContext: "Acme is a kanban tool." });
+
+    const opts = completeSpy.mock.calls[0]![0] as CompletionOptions;
+    const user = opts.messages.find((m) => m.role === "user")!.content;
+    expect(user).toContain("PRODUCT CONTEXT:\nAcme is a kanban tool.");
+  });
+
+  it("omits PRODUCT CONTEXT when brainContext is absent", async () => {
+    const output = { action: "contact" };
+    const { provider, completeSpy } = mockProvider(JSON.stringify(output));
+    await decide(provider, baseCtx);
+
+    const opts = completeSpy.mock.calls[0]![0] as CompletionOptions;
+    const user = opts.messages.find((m) => m.role === "user")!.content;
+    expect(user).not.toContain("PRODUCT CONTEXT:");
+  });
 });

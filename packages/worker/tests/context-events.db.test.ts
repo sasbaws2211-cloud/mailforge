@@ -120,6 +120,8 @@ beforeEach(async () => {
   // Delete events first (FK from events -> contacts), then contacts.
   await db.execute(sql`DELETE FROM events WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`DELETE FROM events WHERE tenant_id = ${otherTenantId}`);
+  await db.execute(sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id = ${testTenantId})`);
+  await db.execute(sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id = ${otherTenantId})`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${otherTenantId}`);
 });
@@ -133,6 +135,9 @@ async function cleanup() {
   for (const slug of [SLUG, SLUG_OTHER]) {
     await db.execute(
       sql`DELETE FROM events WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`,
+    );
+    await db.execute(
+      sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug}))`,
     );
     await db.execute(
       sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`,

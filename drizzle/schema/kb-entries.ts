@@ -60,5 +60,7 @@ export const kbEntries = pgTable(
       "ivfflat",
       table.embedding.op("vector_cosine_ops")
     ),
+    // List endpoint cursor pagination: ORDER BY (created_at, id) per tenant.
+    index("idx_kb_entries_tenant_created").on(table.tenantId, table.createdAt, table.id),
   ]
 );

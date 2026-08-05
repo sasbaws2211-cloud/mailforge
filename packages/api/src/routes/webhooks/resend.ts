@@ -73,9 +73,20 @@
 import type { FastifyPluginAsync } from "fastify";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { eq, and, sql } from "drizzle-orm";
-import { lifecycleMessages, suppressions } from "@claros/db/schema";
+import { lifecycleMessages, suppressions, messageEvents } from "@claros/db/schema";
 import { decrypt, parseEncryptionKey } from "@claros/adapters";
 import type { Db } from "../../plugins/db.js";
+
+// ---------------------------------------------------------------------------
+// Event logging constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Maximum number of event rows stored per message. Beyond this, new events
+ * are silently dropped. This bounds growth from sources we do not control
+ * (e.g. pixel-loaded opens on email clients that re-render on every view).
+ */
+const MAX_EVENTS_PER_MESSAGE = 50;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -383,6 +394,9 @@ interface ResendWebhookEvent {
       subType?: string;
       message?: string;
     };
+    click?: {
+      url?: string;
+    };
     [key: string]: unknown;
   };
 }
@@ -394,12 +408,19 @@ interface ResendWebhookEvent {
  * A provider_message_id that belongs to a different tenant will resolve to zero
  * rows and be acknowledged without processing, identical to an unknown message ID.
  *
+ * Event logging: every recognized event type is written to message_events for the
+ * sent-mail log timeline, in addition to advancing the feedback column. The event
+ * table insert uses ON CONFLICT DO NOTHING on (tenant_id, provider_event_id) so
+ * provider webhook retries are idempotent. A per-message cap (MAX_EVENTS_PER_MESSAGE)
+ * bounds growth from sources we do not control.
+ *
  * Returns a status object describing what happened (for testing/logging).
  */
 export async function processResendWebhookEvent(
   db: Db,
   event: ResendWebhookEvent,
   tenantId: string,
+  providerEventId?: string,
 ): Promise<{ action: string; messageId?: string }> {
   const eventType = event.type;
   const emailId = event.data?.email_id;
@@ -409,40 +430,56 @@ export async function processResendWebhookEvent(
     return { action: "ignored_no_email_id" };
   }
 
-  // Map event type to feedback value
+  // Map event type to our internal event_type and feedback value
+  let logEventType: string | null = null;
   let feedback: "opened" | "clicked" | "bounced" | "complained" | null = null;
   let shouldSuppress = false;
   let suppressionReason: "hard_bounce" | "complaint" = "hard_bounce";
+  let eventMetadata: Record<string, unknown> | null = null;
 
   switch (eventType) {
     case "email.delivered":
       // Delivery confirmation - no feedback column change needed
-      // (feedback tracks engagement, not delivery)
-      return { action: "acknowledged_delivery" };
+      // (feedback tracks engagement, not delivery), but we log the event.
+      logEventType = "delivered";
+      break;
 
     case "email.opened":
+      logEventType = "opened";
       feedback = "opened";
       break;
 
     case "email.clicked":
+      logEventType = "clicked";
       feedback = "clicked";
+      // Capture click URL if provided
+      if (event.data?.click?.url) {
+        eventMetadata = { url: event.data.click.url };
+      }
       break;
 
     case "email.bounced": {
+      logEventType = "bounced";
       feedback = "bounced";
-      // Only suppress on permanent bounces
       const bounceType = event.data?.bounce?.type;
+      const bounceSubType = event.data?.bounce?.subType;
+      const bounceMessage = event.data?.bounce?.message;
+      eventMetadata = {
+        ...(bounceType && { bounce_type: bounceType }),
+        ...(bounceSubType && { bounce_sub_type: bounceSubType }),
+        ...(bounceMessage && { bounce_message: bounceMessage }),
+      };
+      if (Object.keys(eventMetadata).length === 0) eventMetadata = null;
+      // Only suppress on permanent bounces
       if (bounceType === "Permanent") {
         shouldSuppress = true;
         suppressionReason = "hard_bounce";
       }
-      // If bounceType is "Temporary", undefined, or anything else: no suppression.
-      // We still mark feedback as bounced for visibility, but soft bounces
-      // do not suppress because the address may recover.
       break;
     }
 
     case "email.complained":
+      logEventType = "complained";
       feedback = "complained";
       shouldSuppress = true;
       suppressionReason = "complaint";
@@ -483,9 +520,23 @@ export async function processResendWebhookEvent(
 
   const message = messageRows[0]!;
 
-  // Advance feedback
+  // Advance feedback (only for engagement/terminal events, not delivery)
   if (feedback) {
     await advanceFeedback(db, message.id, feedback);
+  }
+
+  // Write event to message_events table (all event types including delivery).
+  // Respects per-message cap and provider-level deduplication.
+  if (logEventType) {
+    await writeMessageEvent(
+      db,
+      tenantId,
+      message.id,
+      logEventType,
+      event.created_at ?? new Date().toISOString(),
+      providerEventId ?? null,
+      eventMetadata,
+    );
   }
 
   // Write suppression if needed (address from message row, NOT from payload)
@@ -499,6 +550,49 @@ export async function processResendWebhookEvent(
   }
 
   return { action: "processed", messageId: message.id };
+}
+
+/**
+ * Write a delivery event to the message_events table.
+ *
+ * Idempotency: ON CONFLICT DO NOTHING on (tenant_id, provider_event_id).
+ * Growth bound: checks existing event count for the message and skips if at cap.
+ */
+async function writeMessageEvent(
+  db: Db,
+  tenantId: string,
+  messageId: string,
+  eventType: string,
+  occurredAt: string,
+  providerEventId: string | null,
+  metadata: Record<string, unknown> | null,
+): Promise<void> {
+  // Enforce per-message cap to bound growth from repeated opens/clicks.
+  const countResult = await db.execute<{ cnt: number }>(sql`
+    SELECT count(*)::int AS cnt
+    FROM message_events
+    WHERE message_id = ${messageId}::uuid
+  `);
+  const currentCount = countResult.rows[0]?.cnt ?? 0;
+  if (currentCount >= MAX_EVENTS_PER_MESSAGE) {
+    return; // Silently drop - cap reached
+  }
+
+  const metadataJson = metadata ? JSON.stringify(metadata) : null;
+  await db.execute(sql`
+    INSERT INTO message_events (tenant_id, message_id, event_type, occurred_at, provider_event_id, metadata)
+    VALUES (
+      ${tenantId}::uuid,
+      ${messageId}::uuid,
+      ${eventType},
+      ${occurredAt}::timestamptz,
+      ${providerEventId},
+      ${metadataJson}::jsonb
+    )
+    ON CONFLICT (tenant_id, provider_event_id)
+      WHERE provider_event_id IS NOT NULL
+    DO NOTHING
+  `);
 }
 
 // ---------------------------------------------------------------------------
@@ -587,7 +681,7 @@ const resendWebhookRoute: FastifyPluginAsync = async (app) => {
     }
 
     // Step 5: Process the event, scoped to this tenant
-    await processResendWebhookEvent(db, event, tenantId);
+    await processResendWebhookEvent(db, event, tenantId, svixId);
 
     // Always return 200 to acknowledge receipt (even for ignored events)
     reply.status(200);

@@ -10,6 +10,11 @@
  *   commit    - CLAROS_COMMIT_SHA env (set at image build time via --build-arg)
  *   edition   - CLAROS_EDITION env
  *   builtAt   - CLAROS_BUILT_AT env (null if absent)
+ *   startedAt - ISO-8601 UTC timestamp of when this container process started.
+ *               Computed once at module load time from Date.now() and
+ *               process.uptime(). Use this to distinguish a slow rollout
+ *               (startedAt advances once, then holds) from a container that
+ *               restarted mid-window (startedAt resets to a later value).
  *   keys      - for ENCRYPTION_KEY and UNSUBSCRIBE_SIGNING_KEY:
  *                 present (boolean), byteLength (decoded bytes), fingerprint
  *                 (first 8 hex chars of SHA-256 of the decoded bytes)
@@ -28,6 +33,12 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { createHash } from "node:crypto";
+
+// Computed once at module load time so every request returns a stable value
+// for the lifetime of this process. process.uptime() is the seconds since the
+// Node.js process started; subtracting it from the current wall-clock time
+// gives the wall-clock start time regardless of when the module is imported.
+const PROCESS_STARTED_AT = new Date(Date.now() - process.uptime() * 1000).toISOString();
 
 type KeyResult =
   | { present: true;  byteLength: number; fingerprint: string; decodeError: null }
@@ -62,6 +73,7 @@ const diagnosticsRoute: FastifyPluginAsync = async (app) => {
   app.get(
     "/",
     {
+      config: { minRole: "member" as const },
       schema: {
         response: {
           200: {
@@ -70,6 +82,7 @@ const diagnosticsRoute: FastifyPluginAsync = async (app) => {
               commit:  { type: "string" },
               edition: { type: "string" },
               builtAt: { type: ["string", "null"] },
+              startedAt: { type: "string" },
               keys: {
                 type: "object",
                 properties: {
@@ -106,6 +119,7 @@ const diagnosticsRoute: FastifyPluginAsync = async (app) => {
         commit:  process.env.CLAROS_COMMIT_SHA ?? "unknown",
         edition: process.env.CLAROS_EDITION    ?? "community",
         builtAt: process.env.CLAROS_BUILT_AT   ?? null,
+        startedAt: PROCESS_STARTED_AT,
         keys: {
           // ENCRYPTION_KEY is base64-encoded (44 chars -> 32 bytes)
           ENCRYPTION_KEY:         encKey ? decodeAndFingerprint(encKey, "base64") : keyAbsent(),

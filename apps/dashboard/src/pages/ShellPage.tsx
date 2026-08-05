@@ -1,0 +1,178 @@
+/**
+ * Authenticated shell layout.
+ *
+ * One chrome column, no top header. The sidebar owns everything persistent:
+ * the brand lockup at the top, navigation in the middle, and a footer with
+ * the theme toggle, the signed-in user, and sign out. A horizontal header
+ * across the content column would spend the scarce axis (vertical space in
+ * a data tool) to hold three small controls; the footer puts them where
+ * every comparable product puts identity.
+ *
+ * Navigation is driven by the NAV_ITEMS array. Activating a future
+ * destination is a one-line change (set enabled: true and add the route).
+ *
+ * Mirror side: PUBLIC (apps/dashboard is mirrored).
+ */
+import React from "react";
+import { Outlet, NavLink } from "react-router-dom";
+import {
+  Home,
+  Workflow,
+  Activity,
+  Users,
+  Inbox,
+  BookOpen,
+  BarChart3,
+  Settings,
+  Plug,
+  LogOut,
+  Send,
+} from "lucide-react";
+import { useLogout } from "../auth.js";
+import { BrandLockup } from "../components/brand-lockup.js";
+import { ThemeToggle } from "../components/theme-toggle.js";
+import type { MeResponse } from "../api.js";
+
+// ---------------------------------------------------------------------------
+// Navigation configuration
+// ---------------------------------------------------------------------------
+
+interface NavItem {
+  label: string;
+  path: string;
+  icon: React.ElementType;
+  /** When false the item renders muted and is not clickable or focusable. */
+  enabled: boolean;
+}
+
+/**
+ * Derived from docs/CLAROS_HANDOFF_V2.md Phase 5 tasks 35-43:
+ *   35 - Flows list + detail
+ *   37 - Lifecycle Overview
+ *   38 - People (CRM)
+ *   40 - Approvals
+ *   41 - Knowledge Base UI
+ *   42 - Analytics
+ *   43 - Settings
+ *
+ * Task 36 (Flow editor) and 39 (Person Detail) are sub-routes, not top-level
+ * nav destinations.
+ */
+const NAV_ITEMS: NavItem[] = [
+  { label: "Home", path: "/home", icon: Home, enabled: true },
+  { label: "Integrate", path: "/integrate", icon: Plug, enabled: true },
+  { label: "Flows", path: "/flows", icon: Workflow, enabled: true },
+  { label: "Lifecycle", path: "/lifecycle", icon: Activity, enabled: true },
+  { label: "People", path: "/people", icon: Users, enabled: true },
+  { label: "Approvals", path: "/approvals", icon: Inbox, enabled: true },
+  { label: "Sent Mail", path: "/sent", icon: Send, enabled: true },
+  { label: "Knowledge Base", path: "/kb", icon: BookOpen, enabled: true },
+  { label: "Analytics", path: "/analytics", icon: BarChart3, enabled: true },
+  { label: "Settings", path: "/settings", icon: Settings, enabled: true },
+];
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+interface ShellPageProps {
+  me: MeResponse;
+}
+
+export default function ShellPage({ me }: ShellPageProps) {
+  const logout = useLogout();
+
+  function handleLogout() {
+    logout.mutate(undefined, {
+      onSuccess: () => {
+        // Hard reload clears React state and query cache entirely.
+        window.location.href = "/login";
+      },
+    });
+  }
+
+  return (
+    <div className="flex h-screen bg-background text-foreground">
+      {/* Sidebar: the only chrome column */}
+      <aside className="flex w-60 flex-col bg-sunken">
+        {/* Brand lockup: mark + Quicksand wordmark. Padding-left matches
+            the nav items below (nav px-3 + item px-3 = 24px) so the mark
+            and the nav icons share one vertical axis. */}
+        <div className="flex h-16 shrink-0 items-center px-6">
+          <BrandLockup markSize={26} />
+        </div>
+
+        {/* Navigation */}
+        <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+
+            if (!item.enabled) {
+              return (
+                <span
+                  key={item.path}
+                  aria-disabled="true"
+                  className="flex items-center gap-3 rounded-md px-3 py-2 text-[14px] text-subtle-foreground select-none"
+                >
+                  <Icon size={16} strokeWidth={1.75} />
+                  {item.label}
+                </span>
+              );
+            }
+
+            return (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                className={({ isActive }) =>
+                  [
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-[14px] transition-colors duration-(--dur-fast) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    isActive
+                      ? "bg-selected font-semibold text-foreground"
+                      : "font-medium text-muted-foreground hover:bg-sunken hover:text-foreground",
+                  ].join(" ")
+                }
+              >
+                <Icon size={16} strokeWidth={1.75} />
+                {item.label}
+              </NavLink>
+            );
+          })}
+        </nav>
+
+        {/* Footer: appearance, identity, session */}
+        <div className="shrink-0 border-t border-border px-3 py-3">
+          <div className="flex items-center justify-between px-1 pb-2">
+            <span className="text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+              Theme
+            </span>
+            <ThemeToggle />
+          </div>
+          <div className="flex items-center gap-1 rounded-md px-1 py-1">
+            <span
+              className="min-w-0 flex-1 truncate text-[14px] text-muted-foreground"
+              title={me.user.email}
+            >
+              {me.user.email}
+            </span>
+            <button
+              type="button"
+              onClick={handleLogout}
+              disabled={logout.isPending}
+              title={logout.isPending ? "Signing out..." : "Sign out"}
+              aria-label="Sign out"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-(--dur-fast) hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:text-subtle-foreground"
+            >
+              <LogOut size={16} strokeWidth={1.5} />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* Content */}
+      <main className="flex-1 overflow-y-auto px-8 py-8">
+        <Outlet />
+      </main>
+    </div>
+  );
+}

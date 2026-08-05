@@ -440,6 +440,96 @@ describe("POST /v1/suppressions/import", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Single-address add tests
+// ---------------------------------------------------------------------------
+
+describe("POST /v1/suppressions", () => {
+  it("adds a single address with reason=manual and source=admin", async () => {
+    if (!dbAvailable) return;
+    await clearSuppressions(tenantAId);
+    const app = await buildApp({ db, logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/suppressions",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { email: "Manual@Example.COM" },
+    });
+    expect(res.statusCode).toBe(201);
+    const json = res.json();
+    expect(json.email).toBe("manual@example.com"); // lowercased
+    expect(json.added).toBe(true);
+
+    const [row] = await db.select().from(suppressions).where(eq(suppressions.tenantId, tenantAId));
+    expect(row?.email).toBe("manual@example.com");
+    expect(row?.reason).toBe("manual");
+    expect(row?.source).toBe("admin");
+  });
+
+  it("is idempotent: re-adding the same address returns 200 with added=false", async () => {
+    if (!dbAvailable) return;
+    await clearSuppressions(tenantAId);
+    const app = await buildApp({ db, logger: false });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/suppressions",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { email: "dup@example.com" },
+    });
+    expect(first.statusCode).toBe(201);
+
+    const second = await app.inject({
+      method: "POST",
+      url: "/v1/suppressions",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { email: "DUP@example.com" },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().added).toBe(false);
+
+    const rows = await db.select().from(suppressions).where(eq(suppressions.tenantId, tenantAId));
+    expect(rows.length).toBe(1);
+  });
+
+  it("rejects an invalid address with 400", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/suppressions",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: { email: "not-an-email" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("rejects a missing email field with 400", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/suppressions",
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("returns 401 without session cookie", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ db, logger: false });
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/suppressions",
+      headers: { "content-type": "application/json" },
+      payload: { email: "a@b.com" },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // List tests
 // ---------------------------------------------------------------------------
 

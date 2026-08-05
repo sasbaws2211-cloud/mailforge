@@ -23,11 +23,12 @@
 import { PgBoss, fromDrizzle } from "pg-boss";
 import type { Job } from "pg-boss";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { QUEUE, type ScanJobData, type CompileJobData, type TriggerCheckJobData, type DrainJobData, type ReapJobData, type CounterRolloverJobData, type PartitionMaintenanceJobData, type ContentGenerationJobData, type KbEmbedJobData } from "@claros/core";
+import { QUEUE, resolveThrottleConfig, type ScanJobData, type CompileJobData, type TriggerCheckJobData, type DrainJobData, type ReapJobData, type CounterRolloverJobData, type PartitionMaintenanceJobData, type ContentGenerationJobData, type KbEmbedJobData, type AdvanceMembershipJobData, type ProcessMessageJobData, type DrainMessageJobData, type GridSnapshotJobData } from "@claros/core";
 import { handleCompileJob } from "./compile.js";
 import { handleKbEmbedJob } from "./embed-kb.js";
 import { phaseTimeTransitions } from "./scan-time-transitions.js";
 import { phaseEnrollment } from "./scan-enrollment.js";
+import { phaseSegmentEnrollment } from "./scan-segment-enrollment.js";
 import { phaseStepAdvancement } from "./scan-step-advancement.js";
 import { phaseEngagementDepth } from "./scan-engagement-depth.js";
 import { handleTriggerCheck } from "./trigger-check.js";
@@ -38,13 +39,18 @@ import { processPartitionMaintenance } from "./partition-maintenance.js";
 import { processContentTick } from "./content.js";
 import { nullTransportResolver, type TransportResolver } from "./transport.js";
 import { buildTenantTransportResolver } from "./transport-resolver.js";
+import { handleAdvanceMembership } from "./advance-membership.js";
+import { handleProcessMessage } from "./process-message.js";
+import { handleDrainMessage } from "./drain-message.js";
+import { processGridSnapshotTick } from "./snapshot-retention-grid.js";
+import { tenants } from "@claros/db/schema";
 
 export { fromDrizzle };
 export { nullTransportResolver } from "./transport.js";
 export type { TransportAdapter, TransportResolver, TransportSendResult, TransportSendParams } from "./transport.js";
 export { buildTenantTransportResolver } from "./transport-resolver.js";
-export { processDrainTick, fetchDrainBatchSimple } from "./drain.js";
-export type { FetchDrainBatch, DrainTickResult, DrainCandidate } from "./drain.js";
+export { processDrainTick, fetchDrainBatchSimple, processOneMessage as processOneDrainMessage } from "./drain.js";
+export type { FetchDrainBatch, DrainTickResult, DrainCandidate, MessageOutcome } from "./drain.js";
 export {
   buildComplianceOutput,
   injectHtmlFooter,
@@ -54,14 +60,41 @@ export {
   type ComplianceInput,
   type ComplianceOutput,
 } from "./compliance.js";
+export {
+  wrapInShell,
+  wrapInTextShell,
+  buildShellComplianceHtml,
+  buildShellComplianceText,
+  type BrandSettings,
+  type EmailShellInput,
+  type TextShellInput,
+} from "@claros/core";
 export { processReapTick } from "./reap.js";
 export type { ReapTickResult } from "./reap.js";
 export { processCounterRollover } from "./counter-rollover.js";
 export type { CounterRolloverResult } from "./counter-rollover.js";
 export { processPartitionMaintenance } from "./partition-maintenance.js";
 export type { PartitionMaintenanceResult } from "./partition-maintenance.js";
-export { processContentTick, claimContentBatch } from "./content.js";
-export type { ContentTickResult, ContentCandidate } from "./content.js";
+export { processContentTick, claimContentBatch, processOneContentMessage } from "./content.js";
+export type { ContentTickResult, ContentCandidate, ContentOutcome } from "./content.js";
+export { handleTriggerCheck } from "./trigger-check.js";
+export type { TriggerCheckResult } from "./trigger-check.js";
+export { phaseStepAdvancement } from "./scan-step-advancement.js";
+export type { PhaseStepAdvancementResult } from "./scan-step-advancement.js";
+export { handleAdvanceMembership } from "./advance-membership.js";
+export type { AdvanceMembershipResult } from "./advance-membership.js";
+export { handleProcessMessage } from "./process-message.js";
+export type { ProcessMessageResult } from "./process-message.js";
+export { handleDrainMessage } from "./drain-message.js";
+export type { DrainMessageResult } from "./drain-message.js";
+export { processGridSnapshotTick } from "./snapshot-retention-grid.js";
+export type { GridSnapshotResult } from "./snapshot-retention-grid.js";
+export {
+  renderTemplate,
+  escapeHtml,
+  SUPPORTED_VARIABLE_PREFIXES,
+} from "./template-renderer.js";
+export type { TemplateContext, TemplateRenderOutcome, RenderResult, RenderError } from "./template-renderer.js";
 export { handleKbEmbedJob, EMBEDDING_MAX_CHARS, DEFAULT_EMBEDDING_MODEL } from "./embed-kb.js";
 export { EmbeddingPermanentError, resolveEmbeddingProvider, callEmbedding } from "./embedding-client.js";
 export { buildKbContextSection, KB_MAX_RESULTS, KB_SIMILARITY_FLOOR } from "./context-kb.js";
@@ -139,6 +172,10 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
   await boss.createQueue(QUEUE.PARTITION_MAINTENANCE);
   await boss.createQueue(QUEUE.CONTENT_GENERATION);
   await boss.createQueue(QUEUE.KB_EMBED);
+  await boss.createQueue(QUEUE.ADVANCE_MEMBERSHIP);
+  await boss.createQueue(QUEUE.PROCESS_MESSAGE);
+  await boss.createQueue(QUEUE.DRAIN_MESSAGE);
+  await boss.createQueue(QUEUE.GRID_SNAPSHOT);
 
   await boss.work<ScanJobData>(
     QUEUE.SCAN,
@@ -164,6 +201,17 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
           `[scan] enrollment: ${phase2.transitionsEvaluated} transitions evaluated, ` +
             `${phase2.enrollmentsSucceeded}/${phase2.enrollmentsAttempted} enrollments, ` +
             `${phase2.evictions} evictions`,
+        );
+      }
+
+      // Phase 2b: enroll contacts into segment-triggered flows (retention
+      // grid cells). Bounded per flow per run by SEGMENT_ENROLLMENT_CAP.
+      const phase2b = await phaseSegmentEnrollment(db, now);
+      if (phase2b.flowsEvaluated > 0) {
+        console.log(
+          `[scan] segment-enrollment: ${phase2b.flowsEvaluated} segment flows, ` +
+            `${phase2b.enrollmentsSucceeded}/${phase2b.enrollmentsAttempted} enrollments` +
+            (phase2b.flowsCapped > 0 ? `, ${phase2b.flowsCapped} capped` : ""),
         );
       }
 
@@ -216,7 +264,15 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
     async (jobs: Job<TriggerCheckJobData>[]) => {
       for (const job of jobs) {
         try {
-          await handleTriggerCheck(job.data, db);
+          const result = await handleTriggerCheck(job.data, db);
+          // Chain: enqueue targeted step advancement for each enrolled membership
+          for (const membershipId of result.enrolledMembershipIds) {
+            await boss.send(
+              QUEUE.ADVANCE_MEMBERSHIP,
+              { tenant_id: job.data.tenant_id, membership_id: membershipId },
+              { retryLimit: 2, retryDelay: 10, expireInSeconds: 300 },
+            );
+          }
         } catch (err) {
           console.error(
             `[trigger-check] error for contact ${job.data.contact_id}, event "${job.data.event_name}":`,
@@ -238,11 +294,22 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
       // identical to the previous nullTransportResolver behavior.
       const resolveTransport = buildTenantTransportResolver(db);
       const now = new Date();
+
+      // Read batch_size_per_tick from tenant throttle config, default to 50
+      const tenantRows = await db
+        .select({ settings: tenants.settings })
+        .from(tenants)
+        .limit(1);
+      const batchLimit = tenantRows.length > 0
+        ? resolveThrottleConfig(tenantRows[0]!.settings as Record<string, unknown> | null).batch_size_per_tick
+        : 50;
+
       const result = await processDrainTick(
         db,
         now,
         resolveTransport,
         fetchDrainBatchSimple,
+        batchLimit,
       );
 
       if (result.candidatesFetched > 0) {
@@ -364,6 +431,117 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
             err,
           );
           // Throw so pg-boss marks the job as failed and retries per retryLimit.
+          throw err;
+        }
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Targeted fast-path handlers (event-driven, eliminate cron wait)
+  // -------------------------------------------------------------------------
+
+  await boss.work<AdvanceMembershipJobData>(
+    QUEUE.ADVANCE_MEMBERSHIP,
+    { pollingIntervalSeconds: 2 },
+    async (jobs: Job<AdvanceMembershipJobData>[]) => {
+      for (const job of jobs) {
+        try {
+          const result = await handleAdvanceMembership(job.data, db);
+          if (result.messageCreated && result.messageId) {
+            // Chain: enqueue targeted content generation for the new message
+            await boss.send(
+              QUEUE.PROCESS_MESSAGE,
+              { tenant_id: job.data.tenant_id, message_id: result.messageId },
+              { singletonKey: result.messageId, retryLimit: 2, retryDelay: 10, expireInSeconds: 300 },
+            );
+          }
+          if (result.messageCreated || result.advanced || result.completed || result.exited) {
+            console.log(
+              `[advance-membership] membership ${job.data.membership_id}: ` +
+                `message=${result.messageCreated} advanced=${result.advanced} ` +
+                `completed=${result.completed} exited=${result.exited}`,
+            );
+          }
+        } catch (err) {
+          console.error(
+            `[advance-membership] error for membership ${job.data.membership_id}:`,
+            err,
+          );
+          throw err;
+        }
+      }
+    },
+  );
+
+  await boss.work<ProcessMessageJobData>(
+    QUEUE.PROCESS_MESSAGE,
+    { pollingIntervalSeconds: 2 },
+    async (jobs: Job<ProcessMessageJobData>[]) => {
+      for (const job of jobs) {
+        try {
+          const result = await handleProcessMessage(job.data, db);
+          if (result.claimed) {
+            console.log(
+              `[process-message] message ${job.data.message_id}: ${result.outcome}`,
+            );
+            // Chain: if message reached 'approved' (auto-approve), enqueue targeted drain
+            if (result.outcome === "advanced") {
+              await boss.send(
+                QUEUE.DRAIN_MESSAGE,
+                { tenant_id: job.data.tenant_id, message_id: job.data.message_id },
+                { singletonKey: job.data.message_id, retryLimit: 2, retryDelay: 10, expireInSeconds: 300 },
+              );
+            }
+          }
+        } catch (err) {
+          console.error(
+            `[process-message] error for message ${job.data.message_id}:`,
+            err,
+          );
+          throw err;
+        }
+      }
+    },
+  );
+
+  const resolveTransport = buildTenantTransportResolver(db);
+
+  await boss.work<GridSnapshotJobData>(
+    QUEUE.GRID_SNAPSHOT,
+    { pollingIntervalSeconds: 30 },
+    async (jobs: Job<GridSnapshotJobData>[]) => {
+      // Grid snapshot runs as a single cron-triggered job (daily). Records
+      // the day's retention-grid cell populations for every tenant.
+      const now = new Date();
+      const result = await processGridSnapshotTick(db, now);
+
+      console.log(
+        `[grid-snapshot] tick: ${result.tenantsProcessed} tenants, ` +
+          `${result.rowsWritten} rows for ${result.snapshotDate}`,
+      );
+
+      void jobs;
+    },
+  );
+
+  await boss.work<DrainMessageJobData>(
+    QUEUE.DRAIN_MESSAGE,
+    { pollingIntervalSeconds: 2 },
+    async (jobs: Job<DrainMessageJobData>[]) => {
+      for (const job of jobs) {
+        try {
+          const result = await handleDrainMessage(job.data, db, resolveTransport);
+          if (result.claimed) {
+            console.log(
+              `[drain-message] message ${job.data.message_id}: ${result.outcome}`,
+            );
+          }
+        } catch (err) {
+          console.error(
+            `[drain-message] error for message ${job.data.message_id}:`,
+            err,
+          );
           throw err;
         }
       }

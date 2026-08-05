@@ -101,6 +101,8 @@ beforeEach(async () => {
   await db.execute(sql`DELETE FROM flow_memberships WHERE tenant_id = ${otherTenantId}`);
   await db.execute(sql`DELETE FROM flows WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`DELETE FROM flows WHERE tenant_id = ${otherTenantId}`);
+  await db.execute(sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id = ${testTenantId})`);
+  await db.execute(sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id = ${otherTenantId})`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${otherTenantId}`);
 });
@@ -122,6 +124,9 @@ async function cleanup() {
     );
     await db.execute(
       sql`DELETE FROM flows WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`,
+    );
+    await db.execute(
+      sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug}))`,
     );
     await db.execute(
       sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`,

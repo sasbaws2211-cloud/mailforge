@@ -75,6 +75,11 @@ import {
 import {
   evaluateThrottleGate,
   resolveThrottleConfig,
+  wrapInShell,
+  wrapInTextShell,
+  buildShellComplianceHtml,
+  buildShellComplianceText,
+  type BrandSettings,
   type ThrottleGateInput,
   type ThrottleVerdict,
 } from "@claros/core";
@@ -82,8 +87,6 @@ import type { TransportAdapter, TransportResolver } from "./transport.js";
 import {
   buildComplianceOutput,
   checkBaseUrl,
-  injectHtmlFooter,
-  injectTextFooter,
   resolveBaseUrl,
   resolveSigningKey,
 } from "./compliance.js";
@@ -328,11 +331,55 @@ export async function processDrainTick(
 
   if (candidates.length === 0) return stats;
 
+  // Step 3b: Resolve daily_limit for each tenant
+  const tenantDailyLimits = new Map<string, number | null>();
+  for (const tenantId of tenantIds) {
+    const transportRows = await db.execute<{ daily_limit: number | null }>(sql`
+      SELECT daily_limit
+      FROM transport_configs
+      WHERE tenant_id = ${tenantId} AND is_active = true
+      LIMIT 1
+    `);
+    tenantDailyLimits.set(tenantId, transportRows.rows[0]?.daily_limit ?? null);
+  }
+
+  // Count sent messages today per tenant (for daily limit enforcement)
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const tenantSentToday = new Map<string, number>();
+  for (const tenantId of tenantIds) {
+    const countRows = await db.execute<{ cnt: string }>(sql`
+      SELECT COUNT(*)::text AS cnt
+      FROM lifecycle_messages
+      WHERE tenant_id = ${tenantId}
+        AND status = 'sent'
+        AND sent_at >= ${startOfDay}
+    `);
+    tenantSentToday.set(tenantId, parseInt(countRows.rows[0]?.cnt ?? "0", 10));
+  }
+
   const baseUrl = resolveBaseUrl(baseUrlOverride);
 
   // Step 4: Process each claimed message.
   for (const candidate of candidates) {
     const adapter = tenantsWithTransport.get(candidate.tenantId)!;
+
+    // Check daily limit before processing
+    const dailyLimit = tenantDailyLimits.get(candidate.tenantId) ?? null;
+    const sentToday = tenantSentToday.get(candidate.tenantId) ?? 0;
+    if (dailyLimit !== null && sentToday >= dailyLimit) {
+      // Revert to approved, will retry tomorrow
+      const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      await db
+        .update(lifecycleMessages)
+        .set({
+          status: "approved",
+          scheduledSendAt: tomorrow,
+          updatedAt: now,
+        })
+        .where(and(eq(lifecycleMessages.id, candidate.id), eq(lifecycleMessages.status, "sending")));
+      continue;
+    }
+
     const result = await processOneMessage(db, candidate, now, adapter, baseUrl, signingKeyOverride, isProductionOverride);
     switch (result) {
       case "no_email":
@@ -349,6 +396,13 @@ export async function processDrainTick(
         break;
       case "sent":
         stats.sent++;
+        // Update the in-memory daily send counter so the next message in
+        // this same tick sees the updated count and the limit is honoured
+        // across the full batch, not just at the start of the tick.
+        tenantSentToday.set(
+          candidate.tenantId,
+          (tenantSentToday.get(candidate.tenantId) ?? 0) + 1,
+        );
         break;
       case "suppressed":
         stats.suppressed++;
@@ -375,7 +429,7 @@ export async function processDrainTick(
 // Per-message processing
 // ---------------------------------------------------------------------------
 
-type MessageOutcome =
+export type MessageOutcome =
   | "no_email"
   | "no_postal_address"
   | "no_signing_key"
@@ -387,7 +441,7 @@ type MessageOutcome =
   | "transport_error"
   | "permanent_failure";
 
-async function processOneMessage(
+export async function processOneMessage(
   db: Db,
   candidate: DrainCandidate,
   now: Date,
@@ -418,11 +472,12 @@ async function processOneMessage(
   const contactProps = contactRow[0]!.properties as Record<string, unknown> | null;
   const contactTimezone = (contactProps?.timezone as string) ?? null;
 
-  // Step 2: Resolve tenant postal address for CAN-SPAM compliance.
-  // If absent, revert the message to 'approved' and surface an operator error.
-  // This is NOT a transport failure - the message is not broken, the tenant
-  // configuration is incomplete. No retry count consumed.
-  const postalAddress = await resolvePostalAddress(db, candidate.tenantId);
+  // Step 2: Resolve tenant postal address and brand settings.
+  // If postal address is absent, revert the message to 'approved' and surface
+  // an operator error. This is NOT a transport failure - the message is not
+  // broken, the tenant configuration is incomplete. No retry count consumed.
+  const tenantSettings = await resolveTenantDrainSettings(db, candidate.tenantId);
+  const postalAddress = tenantSettings?.postalAddress ?? null;
   if (!postalAddress) {
     console.error(
       `[drain] tenant ${candidate.tenantId} has no postal_address in settings. ` +
@@ -537,13 +592,27 @@ async function processOneMessage(
     signingKey,
   });
 
-  // Step 8: Inject footer into bodies. Stored row is NOT modified.
-  const deliveredHtml = candidate.bodyHtml
-    ? injectHtmlFooter(candidate.bodyHtml, compliance.htmlFooter)
-    : compliance.htmlFooter;
-  const deliveredText = candidate.bodyText
-    ? injectTextFooter(candidate.bodyText, compliance.textFooter)
-    : compliance.textFooter.trimStart(); // strip leading newline if no body
+  // Step 8: Wrap body in branded email shell with compliance footer.
+  // The shell is the complete HTML document; compliance is structural, placed
+  // inside the shell footer. Stored row is NOT modified.
+  const shellComplianceHtml = buildShellComplianceHtml(compliance.unsubscribeUrl, postalAddress);
+  const shellComplianceText = buildShellComplianceText(compliance.unsubscribeUrl, postalAddress);
+
+  const tenantName = tenantSettings?.tenantName ?? "Our Team";
+  const brand = tenantSettings?.brand ?? {};
+
+  const deliveredHtml = wrapInShell({
+    bodyHtml: candidate.bodyHtml ?? "",
+    brand,
+    tenantName,
+    complianceFooterHtml: shellComplianceHtml,
+  });
+  const deliveredText = wrapInTextShell({
+    bodyText: candidate.bodyText ?? "",
+    brand,
+    tenantName,
+    complianceFooterText: shellComplianceText,
+  });
 
   // Step 9: Write recipient_address BEFORE sending.
   //
@@ -792,7 +861,7 @@ async function resolveSenderInfo(db: Db, tenantId: string): Promise<SenderInfo> 
 }
 
 // ---------------------------------------------------------------------------
-// Postal address resolver
+// Tenant settings resolver (postal address + brand)
 // ---------------------------------------------------------------------------
 
 /**
@@ -813,4 +882,42 @@ async function resolvePostalAddress(db: Db, tenantId: string): Promise<string | 
   const addr = settings?.postal_address;
   if (typeof addr !== "string" || addr.trim().length === 0) return null;
   return addr.trim();
+}
+
+/**
+ * Result from resolving tenant settings needed at drain time.
+ * Combined query to avoid a second round-trip.
+ */
+interface TenantDrainSettings {
+  postalAddress: string | null;
+  tenantName: string;
+  brand: BrandSettings;
+}
+
+/**
+ * Resolves tenant postal address, name, and brand settings in one query.
+ * Used at drain time to assemble the email shell.
+ */
+async function resolveTenantDrainSettings(db: Db, tenantId: string): Promise<TenantDrainSettings | null> {
+  const tenantRow = await db
+    .select({ name: tenants.name, settings: tenants.settings })
+    .from(tenants)
+    .where(eq(tenants.id, tenantId))
+    .limit(1);
+
+  if (tenantRow.length === 0) return null;
+
+  const settings = tenantRow[0]!.settings as Record<string, unknown> | null;
+  const addr = settings?.postal_address;
+  const postalAddress = (typeof addr === "string" && addr.trim().length > 0)
+    ? addr.trim()
+    : null;
+
+  const brand = (settings?.brand as BrandSettings | undefined) ?? {};
+
+  return {
+    postalAddress,
+    tenantName: tenantRow[0]!.name,
+    brand,
+  };
 }

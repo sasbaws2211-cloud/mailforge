@@ -36,3 +36,20 @@ export {
   type EngagementDepth,
   type DepthAssignmentInput,
 } from "./engagement-depth.js";
+
+export {
+  RETENTION_TENURE_BUCKETS,
+  RETENTION_RECENCY_BUCKETS,
+  RETENTION_TENURE_THRESHOLDS_DAYS,
+  RETENTION_RECENCY_MULTIPLIERS,
+  tenureBucket,
+  recencyBucket,
+  recencyThresholdDays,
+  tenureBucketRange,
+  recencyBucketRange,
+  isSegmentTriggerConfig,
+  matchesSegmentTrigger,
+  type RetentionTenureBucket,
+  type RetentionRecencyBucket,
+  type SegmentTriggerConfig,
+} from "./retention-grid.js";

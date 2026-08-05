@@ -204,6 +204,7 @@ beforeEach(async () => {
   await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id = ${testTenantId}::uuid`);
   await db.execute(sql`DELETE FROM llm_configs WHERE tenant_id = ${testTenantId}::uuid`);
   await db.execute(sql`DELETE FROM magic_link_tokens WHERE tenant_id = ${testTenantId}::uuid`);
+  await db.execute(sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id = ${testTenantId})`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`UPDATE tenants SET settings = NULL WHERE id = ${testTenantId}`);
 });
@@ -249,6 +250,7 @@ async function cleanup() {
   await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
   await db.execute(sql`DELETE FROM llm_configs WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
   await db.execute(sql`DELETE FROM magic_link_tokens WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
+  await db.execute(sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG}))`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
   await db.execute(sql`DELETE FROM scan_checkpoints WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
   await db.execute(sql`DELETE FROM sessions WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
@@ -648,17 +650,17 @@ describe("claros CLI - interactive (scripted input)", () => {
   it("transport set interactive: prompts accepted, config written", async () => {
     if (!dbAvailable) return;
 
-    // Field order for transport set:
-    //   provider -> from_email -> from_name -> api_key -> webhook_secret -> daily_limit
-    // Optional fields: from_name (empty = skip), webhook_secret (empty = skip), daily_limit (empty = skip)
+    // Field order for transport set (resend):
+    //   provider -> from_email -> from_name -> daily_limit -> api_key -> webhook_secret
+    // Optional fields: from_name (empty = skip), daily_limit (empty = skip), webhook_secret (empty = skip)
     // Then confirmation: "y"
     const scriptedInput = [
       "resend",           // provider
       "sender@acme.com",  // from_email
       "Acme Mailer",      // from_name (optional, filled)
+      "",                 // daily_limit (optional, skipped)
       TEST_API_KEY,       // api_key (secret)
       "",                 // webhook_secret (optional, skipped)
-      "",                 // daily_limit (optional, skipped)
       "y",                // confirmation
     ].join("\n") + "\n";
 
@@ -698,9 +700,9 @@ describe("claros CLI - interactive (scripted input)", () => {
       "",                 // from_email (empty - should re-prompt)
       "retry@acme.com",   // from_email (second attempt)
       "",                 // from_name (optional, skipped)
+      "",                 // daily_limit (optional, skipped)
       TEST_API_KEY,       // api_key (secret)
       "",                 // webhook_secret (optional, skipped)
-      "",                 // daily_limit (optional, skipped)
       "y",                // confirmation
     ].join("\n") + "\n";
 
@@ -727,9 +729,9 @@ describe("claros CLI - interactive (scripted input)", () => {
       "resend",           // valid provider
       "p@example.com",    // from_email
       "",                 // from_name (optional, skipped)
+      "",                 // daily_limit (optional, skipped)
       TEST_API_KEY,       // api_key
       "",                 // webhook_secret
-      "",                 // daily_limit
       "y",                // confirmation
     ].join("\n") + "\n";
 

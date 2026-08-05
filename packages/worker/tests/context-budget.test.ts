@@ -361,6 +361,56 @@ describe("applyBudgetTruncation - protected sections", () => {
     // brain_instruction also preserved (not a truncatable section)
     expect(result.ctx.brain_instruction).toBe(ctx.brain_instruction);
   });
+
+  it("never drops brain_context even when all droppable sections are gone", () => {
+    const ctx = makeCtx({
+      brain_context: "Acme is a kanban tool. No Gantt charts.",
+      kb_context: chars(8),
+      behavior: {
+        recent_events: ["event_a"],
+        most_used_features: ["feature_a"],
+      },
+      cadence: { current_7d: 1, previous_7d: 2, trend: "stable" },
+    });
+
+    // Budget of 0 forces all drops
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = applyBudgetTruncation(ctx, 0);
+    warnSpy.mockRestore();
+
+    // brain_context is protected: present in the result, absent from the drop list
+    expect(result.ctx.brain_context).toBe(ctx.brain_context);
+    expect(result.droppedSections).not.toContain("brain_context");
+  });
+
+  it("applyBudgetForBothPaths also preserves brain_context under full truncation", () => {
+    const ctx = makeCtx({
+      brain_context: "Acme is a kanban tool. No Gantt charts.",
+      kb_context: chars(8),
+      cadence: { current_7d: 1, previous_7d: 2, trend: "stable" },
+    });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = applyBudgetForBothPaths(ctx, "nurture_value", undefined, 0);
+    warnSpy.mockRestore();
+
+    expect(result.ctx.brain_context).toBe(ctx.brain_context);
+  });
+
+  it("brain_context is counted in the estimate (can trigger truncation of droppables)", () => {
+    // A large brain_context pushes the assembly over budget; the droppable
+    // kb_context is sacrificed while brain_context stays.
+    const ctx = makeCtx({
+      brain_context: chars(8000),
+      kb_context: chars(8000),
+    });
+
+    const result = applyBudgetTruncation(ctx);
+
+    expect(result.droppedSections).toContain("kb_context");
+    expect(result.ctx.kb_context).toBeUndefined();
+    expect(result.ctx.brain_context).toBe(chars(8000));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -514,6 +564,7 @@ describe("draftContextToDecideContext", () => {
       prior_contact: { last_message_date: "2026-07-01", last_message_type: "nurture_value", total_messages_sent: 3, messages_opened: 2, messages_clicked: 1 },
       first_contact: false,
       kb_context: "Some knowledge base content",
+      brain_context: "Acme is a kanban tool.",
       sender_name: "Alice from Acme",
       product_name: "Acme Pro",
     };
@@ -536,6 +587,7 @@ describe("draftContextToDecideContext", () => {
     expect(decideCtx.firstContact).toBe(false);
     expect(decideCtx.brainInstruction).toBe("Write a welcome email.");
     expect(decideCtx.kbContext).toBe("Some knowledge base content");
+    expect(decideCtx.brainContext).toBe("Acme is a kanban tool.");
   });
 
   it("handles minimal draft context with missing optional fields", () => {
@@ -555,6 +607,7 @@ describe("draftContextToDecideContext", () => {
     expect(decideCtx.firstContact).toBeUndefined();
     expect(decideCtx.brainInstruction).toBeUndefined();
     expect(decideCtx.kbContext).toBeUndefined();
+    expect(decideCtx.brainContext).toBeUndefined();
   });
 });
 

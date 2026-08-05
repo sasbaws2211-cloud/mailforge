@@ -301,6 +301,18 @@ describe("buildDraftMessages()", () => {
     expect(user).toContain("KNOWLEDGE BASE CONTEXT:\nOur product helps teams collaborate.");
   });
 
+  it("includes brain_context as PRODUCT CONTEXT", () => {
+    const messages = buildDraftMessages({ brain_context: "Acme is a kanban tool. No Gantt charts." });
+    const user = messages[1]!.content;
+    expect(user).toContain("PRODUCT CONTEXT:\nAcme is a kanban tool. No Gantt charts.");
+  });
+
+  it("omits PRODUCT CONTEXT when brain_context is absent", () => {
+    const messages = buildDraftMessages({ product_name: "Acme" });
+    const user = messages[1]!.content;
+    expect(user).not.toContain("PRODUCT CONTEXT:");
+  });
+
   it("produces minimal messages when context is empty", () => {
     const messages = buildDraftMessages({});
     expect(messages).toHaveLength(2);

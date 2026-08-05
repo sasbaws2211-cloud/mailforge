@@ -256,61 +256,112 @@ describe("POST /auth/login", () => {
   });
 });
 
-describe("GET /auth/verify", () => {
-  it("verifies a valid token and returns session cookie", async () => {
+/**
+ * Helper: redeem a token via POST /auth/verify as the interstitial form does
+ * (application/x-www-form-urlencoded body).
+ */
+async function postVerify(app: Awaited<ReturnType<typeof buildApp>>, rawToken: string) {
+  return app.inject({
+    method: "POST",
+    url: "/auth/verify",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    payload: `token=${encodeURIComponent(rawToken)}`,
+  });
+}
+
+describe("GET /auth/verify (interstitial)", () => {
+  it("shows the confirmation page for a valid token and does NOT consume it", async () => {
     if (!dbAvailable) return;
-    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: "http://localhost:3000",
+      dashboardUrl: "http://localhost:3000",
+    });
     const rawToken = await createTestToken();
 
-    const verifyRes = await app.inject({
+    const res = await app.inject({
       method: "GET",
       url: `/auth/verify?token=${rawToken}`,
     });
-    expect(verifyRes.statusCode).toBe(200);
-    const body = JSON.parse(verifyRes.body);
-    expect(body.message).toBe("Login successful.");
-    expect(body.user.email).toBe("test@example.com");
-    expect(body.user.role).toBe("owner");
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/html");
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.body).toContain("test@example.com");
+    expect(res.body).toContain('action="/auth/verify"');
+    expect(res.body).toContain(encodeURIComponent(rawToken));
 
-    // Check that session cookie is set
-    const cookies = verifyRes.cookies;
-    const sessionCookie = cookies.find(
-      (c: { name: string }) => c.name === SESSION_COOKIE_NAME,
-    );
-    expect(sessionCookie).toBeDefined();
-    expect(sessionCookie!.httpOnly).toBe(true);
-    expect(sessionCookie!.sameSite).toBe("Lax");
+    // The token must NOT be consumed by the GET (prefetch safety).
+    const tokens = await db
+      .select({ consumedAt: magicLinkTokens.consumedAt })
+      .from(magicLinkTokens)
+      .where(eq(magicLinkTokens.userId, testUserId));
+    expect(tokens[0]!.consumedAt).toBeNull();
+
+    // No session is created and no cookie is set by the GET.
+    expect(res.cookies.find((c: { name: string }) => c.name === SESSION_COOKIE_NAME)).toBeUndefined();
 
     await app.close();
   });
 
-  it("rejects a reused token (single-use enforcement)", async () => {
+  it("survives repeated prefetch GETs: the link still works afterwards", async () => {
     if (!dbAvailable) return;
-    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: "http://localhost:3000",
+      dashboardUrl: "http://localhost:3000",
+    });
     const rawToken = await createTestToken();
 
-    // First use - should succeed
-    const res1 = await app.inject({
-      method: "GET",
-      url: `/auth/verify?token=${rawToken}`,
-    });
-    expect(res1.statusCode).toBe(200);
+    // A scanner GETs the link twice before the user clicks.
+    for (let i = 0; i < 2; i++) {
+      const res = await app.inject({
+        method: "GET",
+        url: `/auth/verify?token=${rawToken}`,
+      });
+      expect(res.statusCode).toBe(200);
+    }
 
-    // Second use - should fail
-    const res2 = await app.inject({
-      method: "GET",
-      url: `/auth/verify?token=${rawToken}`,
-    });
-    expect(res2.statusCode).toBe(401);
-    const body2 = JSON.parse(res2.body);
-    expect(body2.error).toContain("Invalid or expired");
+    // The user then completes the login via the form POST.
+    const postRes = await postVerify(app, rawToken);
+    expect(postRes.statusCode).toBe(302);
+    expect(postRes.headers["location"]).toBe("http://localhost:3000/");
 
     await app.close();
   });
 
-  it("rejects an expired token", async () => {
+  it("rejects a consumed token: 302 to dashboardUrl/login?error=invalid_link", async () => {
     if (!dbAvailable) return;
-    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: "http://localhost:3000",
+      dashboardUrl: "http://localhost:3000",
+    });
+    const rawToken = await createTestToken();
+
+    const postRes = await postVerify(app, rawToken);
+    expect(postRes.statusCode).toBe(302);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/auth/verify?token=${rawToken}`,
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers["location"]).toBe("http://localhost:3000/login?error=invalid_link");
+
+    await app.close();
+  });
+
+  it("rejects an expired token: 302 to dashboardUrl/login?error=invalid_link", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: "http://localhost:3000",
+      dashboardUrl: "http://localhost:3000",
+    });
 
     // Manually insert an expired token
     const { raw, hash } = generateToken();
@@ -326,37 +377,123 @@ describe("GET /auth/verify", () => {
       method: "GET",
       url: `/auth/verify?token=${raw}`,
     });
-    expect(res.statusCode).toBe(401);
-    const body = JSON.parse(res.body);
-    expect(body.error).toContain("Invalid or expired");
+    expect(res.statusCode).toBe(302);
+    expect(res.headers["location"]).toBe("http://localhost:3000/login?error=invalid_link");
 
     await app.close();
   });
 
-  it("rejects a tampered token (wrong hash)", async () => {
+  it("rejects a tampered token: 302 to dashboardUrl/login?error=invalid_link", async () => {
     if (!dbAvailable) return;
-    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: "http://localhost:3000",
+      dashboardUrl: "http://localhost:3000",
+    });
 
     const res = await app.inject({
       method: "GET",
       url: "/auth/verify?token=completely-fabricated-token-that-does-not-exist",
     });
-    expect(res.statusCode).toBe(401);
-    const body = JSON.parse(res.body);
-    expect(body.error).toContain("Invalid or expired");
+    expect(res.statusCode).toBe(302);
+    expect(res.headers["location"]).toBe("http://localhost:3000/login?error=invalid_link");
 
     await app.close();
   });
 
-  it("rejects an empty token", async () => {
+  it("rejects an empty token: 302 to dashboardUrl/login?error=invalid_link", async () => {
     if (!dbAvailable) return;
-    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: "http://localhost:3000",
+      dashboardUrl: "http://localhost:3000",
+    });
 
     const res = await app.inject({
       method: "GET",
       url: "/auth/verify?token=",
     });
-    expect(res.statusCode).toBe(401);
+    expect(res.statusCode).toBe(302);
+    expect(res.headers["location"]).toBe("http://localhost:3000/login?error=invalid_link");
+
+    await app.close();
+  });
+});
+
+describe("POST /auth/verify (form submit)", () => {
+  it("verifies a valid token: 302 to dashboardUrl/ with session cookie set", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: "http://localhost:3000",
+      dashboardUrl: "http://localhost:3000",
+    });
+    const rawToken = await createTestToken();
+
+    const verifyRes = await postVerify(app, rawToken);
+    // 302 redirect to dashboardUrl/
+    expect(verifyRes.statusCode).toBe(302);
+    expect(verifyRes.headers["location"]).toBe("http://localhost:3000/");
+
+    // Session cookie is set in the redirect response
+    const cookies = verifyRes.cookies;
+    const sessionCookie = cookies.find(
+      (c: { name: string }) => c.name === SESSION_COOKIE_NAME,
+    );
+    expect(sessionCookie).toBeDefined();
+    expect(sessionCookie!.httpOnly).toBe(true);
+    expect(sessionCookie!.sameSite).toBe("Lax");
+
+    await app.close();
+  });
+
+  it("rejects a reused token (single-use enforcement): 302 to dashboardUrl/login?error=invalid_link", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: "http://localhost:3000",
+      dashboardUrl: "http://localhost:3000",
+    });
+    const rawToken = await createTestToken();
+
+    // First use - should succeed with 302 to /
+    const res1 = await postVerify(app, rawToken);
+    expect(res1.statusCode).toBe(302);
+    expect(res1.headers["location"]).toBe("http://localhost:3000/");
+
+    // Second use - should fail with 302 to /login?error=invalid_link
+    const res2 = await postVerify(app, rawToken);
+    expect(res2.statusCode).toBe(302);
+    expect(res2.headers["location"]).toBe("http://localhost:3000/login?error=invalid_link");
+
+    await app.close();
+  });
+
+  it("rejects an expired token: 302 to dashboardUrl/login?error=invalid_link", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: "http://localhost:3000",
+      dashboardUrl: "http://localhost:3000",
+    });
+
+    const { raw, hash } = generateToken();
+    const expiredAt = new Date(Date.now() - 60 * 1000); // 1 minute ago
+    await db.insert(magicLinkTokens).values({
+      tenantId: testTenantId,
+      userId: testUserId,
+      tokenHash: hash,
+      expiresAt: expiredAt,
+    });
+
+    const res = await postVerify(app, raw);
+    expect(res.statusCode).toBe(302);
+    expect(res.headers["location"]).toBe("http://localhost:3000/login?error=invalid_link");
 
     await app.close();
   });
@@ -376,14 +513,18 @@ describe("GET /auth/me", () => {
 
   it("returns user info with valid session", async () => {
     if (!dbAvailable) return;
-    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: "http://localhost:3000",
+      dashboardUrl: "http://localhost:3000",
+    });
     const rawToken = await createTestToken();
 
-    // Verify token to get session
-    const verifyRes = await app.inject({
-      method: "GET",
-      url: `/auth/verify?token=${rawToken}`,
-    });
+    // Redeem the token via POST (the interstitial form action) to get the
+    // session cookie from the redirect response.
+    const verifyRes = await postVerify(app, rawToken);
+    expect(verifyRes.statusCode).toBe(302);
     const sessionCookie = verifyRes.cookies.find(
       (c: { name: string }) => c.name === SESSION_COOKIE_NAME,
     )!;
@@ -470,11 +611,8 @@ describe("POST /auth/logout", () => {
     const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
     const rawToken = await createTestToken();
 
-    // Verify token to get session
-    const verifyRes = await app.inject({
-      method: "GET",
-      url: `/auth/verify?token=${rawToken}`,
-    });
+    // Redeem token to get session
+    const verifyRes = await postVerify(app, rawToken);
     const sessionCookie = verifyRes.cookies.find(
       (c: { name: string }) => c.name === SESSION_COOKIE_NAME,
     )!;
@@ -520,10 +658,7 @@ describe("authenticated /v1 scope", () => {
     const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
     const rawToken = await createTestToken();
 
-    const verifyRes = await app.inject({
-      method: "GET",
-      url: `/auth/verify?token=${rawToken}`,
-    });
+    const verifyRes = await postVerify(app, rawToken);
     const sessionCookie = verifyRes.cookies.find(
       (c: { name: string }) => c.name === SESSION_COOKIE_NAME,
     )!;
@@ -860,5 +995,111 @@ describe("login without ENCRYPTION_KEY or UNSUBSCRIBE_SIGNING_KEY", () => {
       if (savedSigningKey !== undefined) process.env.UNSUBSCRIBE_SIGNING_KEY = savedSigningKey;
       else delete process.env.UNSUBSCRIBE_SIGNING_KEY;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DASHBOARD_URL vs BASE_URL distinction
+// ---------------------------------------------------------------------------
+// These tests build the app with two clearly different origins:
+//   baseUrl      = "http://api.example.com"  (API server, owns unsubscribe)
+//   dashboardUrl = "http://dash.example.com" (SPA origin, owns auth redirects)
+//
+// They prove that:
+//   1. The magic link URL (printed to console) uses the dashboardUrl origin.
+//   2. POST /auth/verify success redirects to dashboardUrl.
+//   3. GET /auth/verify failure redirects to dashboardUrl.
+//
+// The regression guard for BASE_URL semantics (assertion 4 - unsubscribe URL
+// uses baseUrl) lives in packages/worker/tests/compliance.test.ts because
+// buildComplianceOutput is defined in packages/worker/src/compliance.ts and
+// already has a test file there.
+//
+// Each test is written so that reverting loginUrl to baseUrl (i.e. using
+// baseUrl instead of dashboardUrl in the magic link construction) would cause
+// it to fail.
+
+describe("dashboardUrl vs baseUrl: magic link and verify redirect origins", () => {
+  const TEST_BASE_URL = "http://api.example.com";
+  const TEST_DASH_URL = "http://dash.example.com";
+
+  it("POST /auth/login: console-printed link uses dashboardUrl origin, not baseUrl", async () => {
+    if (!dbAvailable) return;
+    process.env.NODE_ENV = "test";
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const app = await buildApp({
+        logger: false,
+        db,
+        baseUrl: TEST_BASE_URL,
+        dashboardUrl: TEST_DASH_URL,
+      });
+
+      await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: { email: "test@example.com" },
+      });
+
+      // The printed URL must start with dashboardUrl, not baseUrl.
+      const printedLines = consoleSpy.mock.calls.flat().filter(
+        (a): a is string => typeof a === "string",
+      );
+      const urlLine = printedLines.find((a) => a.includes("/auth/verify?token="));
+      expect(urlLine).toBeDefined();
+      // Fails if loginUrl is built from baseUrl ("http://api.example.com")
+      expect(urlLine).toContain(TEST_DASH_URL);
+      expect(urlLine).not.toContain(TEST_BASE_URL);
+
+      await app.close();
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it("POST /auth/verify success: redirects to dashboardUrl/, not baseUrl/", async () => {
+    if (!dbAvailable) return;
+
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: TEST_BASE_URL,
+      dashboardUrl: TEST_DASH_URL,
+    });
+
+    const rawToken = await createTestToken();
+    const res = await postVerify(app, rawToken);
+
+    expect(res.statusCode).toBe(302);
+    // Fails if dashboardUrl is not used for the success redirect.
+    expect(res.headers["location"]).toBe(`${TEST_DASH_URL}/`);
+    expect(res.headers["location"]).not.toContain(TEST_BASE_URL);
+
+    await app.close();
+  });
+
+  it("GET /auth/verify failure: redirects to dashboardUrl/login?error=invalid_link, not baseUrl", async () => {
+    if (!dbAvailable) return;
+
+    const app = await buildApp({
+      logger: false,
+      db,
+      baseUrl: TEST_BASE_URL,
+      dashboardUrl: TEST_DASH_URL,
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/auth/verify?token=completely-fabricated-invalid-token",
+    });
+
+    expect(res.statusCode).toBe(302);
+    // Fails if dashboardUrl is not used for the failure redirect.
+    expect(res.headers["location"]).toBe(`${TEST_DASH_URL}/login?error=invalid_link`);
+    expect(res.headers["location"]).not.toContain(TEST_BASE_URL);
+
+    await app.close();
   });
 });

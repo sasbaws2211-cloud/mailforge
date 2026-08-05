@@ -1,0 +1,290 @@
+/**
+ * Claros design tokens and Tailwind CSS v4 entry point.
+ *
+ * Two first-class themes. Light values live in :root, dark values in .dark.
+ * The .dark class is set on <html> by the inline script in index.html before
+ * first paint (no flash), and by src/lib/theme.ts afterwards. The resolved
+ * theme follows the OS unless the user has stored an explicit choice in
+ * localStorage under "claros-ui-theme".
+ *
+ * SINGLE SOURCE RULE: every color in the app is a var() defined below.
+ * The @theme inline block maps Tailwind utility names to those vars.
+ * No hex, rgb, or oklch literals in components, and no new values outside
+ * this file. Contrast for every sanctioned pair is audited by
+ * scripts/contrast.mjs; the numbers live in docs/BRAND.md.
+ *
+ * Mirror side: PUBLIC (apps/dashboard is mirrored).
+ */
+@import "tailwindcss";
+
+/* Class-based dark variant: .dark on <html> opts the whole tree in. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg:        oklch(0.977 0.003 264);
+  --bg-raised: oklch(1 0 0);
+  --bg-sunken: oklch(0.955 0.004 264);
+
+  /* Borders. --border is decorative (container edges); --border-strong is
+   * the boundary of interactive controls and passes WCAG 1.4.11 (3:1). */
+  --border:        oklch(0.846 0.007 264);
+  --border-strong: oklch(0.62 0.014 264);
+
+  /* Loading placeholders. One step away from the canvas in the "content
+   * will appear here" direction: greyer in light, lighter in dark. */
+  --skeleton: oklch(0.925 0.005 264);
+
+  /* Hover steps for soft surfaces: one small notch darker, so interactive
+   * tinted cells (the retention grid) acknowledge the pointer without a
+   * hue shift. */
+  --sunken-hover:        oklch(0.935 0.005 264);
+  --success-soft-hover:  oklch(0.9 0.03 185);
+  --warning-soft-hover:  oklch(0.9 0.03 80);
+  --danger-soft-hover:   oklch(0.9 0.03 27);
+
+  /* Selected state (active nav, selected rows): a neutral slate-blue tint,
+   * deliberately quieter than --accent-soft so it never reads as raw cyan. */
+  --selected: oklch(0.928 0.014 255);
+
+  /* Text. --fg-subtle is for placeholders and disabled labels only, never
+   * for content the user must read. */
+  --fg:        oklch(0.24 0.014 264);
+  --fg-muted:  oklch(0.452 0.016 264);
+  --fg-subtle: oklch(0.53 0.015 264);
+
+  /* Brand accent: signal cyan (heritage logo hue). Used for links, focus,
+   * active states, chips, and the mark. --accent-deep is the primary-button
+   * fill: deepened cyan that carries --accent-deep-fg text at 4.5+. */
+  --accent:         oklch(0.6 0.13 225);
+  --accent-text:    oklch(0.45 0.12 240);
+  --accent-fg:      oklch(0.2 0.03 240);
+  --accent-soft:    oklch(0.93 0.035 225);
+  --accent-deep:    oklch(0.47 0.13 245);
+  --accent-deep-fg: oklch(0.985 0.005 240);
+
+  /* Energy accent: coral pop. Positive deltas, rare celebratory moments.
+   * Strictly secondary to cyan; never both in one component. */
+  --pop:      oklch(0.55 0.21 35);
+  --pop-text: oklch(0.48 0.19 35);
+  --pop-fg:   oklch(0.97 0.01 35);
+  --pop-soft: oklch(0.93 0.04 35);
+
+  /* Semantic. Text/dot forms; -soft surfaces are banners and tinted chips.
+   * Success hue sits between green and the brand cyan (185) so semantic
+   * color reads as part of the same family, not a foreign accent. */
+  --success:      oklch(0.5 0.11 185);
+  --success-soft: oklch(0.93 0.025 185);
+  --warning:      oklch(0.47 0.1 72);
+  --warning-soft: oklch(0.935 0.025 80);
+  --danger:       oklch(0.52 0.18 27);
+  --danger-soft:  oklch(0.935 0.025 27);
+  --danger-fill:  oklch(0.52 0.18 27);
+
+  /* Direction-split chart bars: pastel step between the -soft surfaces and
+   * the full semantic tones. Full --success/--danger read harsh at bar
+   * scale; pure -soft washes out at 40% slot width. Text (legend, values)
+   * keeps the full tones for contrast. */
+  --chart-positive: oklch(0.72 0.08 185);
+  --chart-negative: oklch(0.74 0.09 27);
+
+  --ring: var(--accent);
+
+  /* Overlay elevation (dropdowns, dialogs). Surfaces themselves stay flat. */
+  --overlay-shadow: 0 8px 24px -8px oklch(0.24 0.014 264 / 0.18);
+
+  /* Motion */
+  --dur-fast: 120ms;
+  --dur-med: 180ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --bg:        oklch(0.185 0.01 264);
+  --bg-raised: oklch(0.232 0.011 264);
+  --bg-sunken: oklch(0.155 0.009 264);
+
+  --border:        oklch(0.335 0.013 264);
+  --border-strong: oklch(0.5 0.015 264);
+
+  --skeleton: oklch(0.28 0.012 264);
+
+  --sunken-hover:        oklch(0.135 0.009 264);
+  --success-soft-hover:  oklch(0.26 0.045 185);
+  --warning-soft-hover:  oklch(0.27 0.04 82);
+  --danger-soft-hover:   oklch(0.27 0.05 27);
+
+  --selected: oklch(0.315 0.028 250);
+
+  --fg:        oklch(0.945 0.005 264);
+  --fg-muted:  oklch(0.715 0.014 264);
+  --fg-subtle: oklch(0.6 0.014 264);
+
+  --accent:         oklch(0.78 0.12 220);
+  --accent-text:    oklch(0.8 0.11 222);
+  --accent-fg:      oklch(0.2 0.04 240);
+  --accent-soft:    oklch(0.33 0.055 230);
+  --accent-deep:    oklch(0.72 0.13 222);
+  --accent-deep-fg: oklch(0.2 0.04 240);
+
+  --pop:      oklch(0.72 0.17 40);
+  --pop-text: oklch(0.76 0.16 40);
+  --pop-fg:   oklch(0.21 0.04 35);
+  --pop-soft: oklch(0.35 0.07 38);
+
+  --success:      oklch(0.755 0.13 185);
+  --success-soft: oklch(0.3 0.045 185);
+  --warning:      oklch(0.8 0.11 82);
+  --warning-soft: oklch(0.31 0.04 82);
+  --danger:       oklch(0.72 0.15 27);
+  --danger-soft:  oklch(0.31 0.05 27);
+  --danger-fill:  oklch(0.55 0.17 27);
+
+  --chart-positive: oklch(0.8 0.07 185);
+  --chart-negative: oklch(0.8 0.08 27);
+
+  --overlay-shadow: 0 8px 24px -8px oklch(0 0 0 / 0.55);
+}
+
+/*
+ * TAILWIND TOKEN BRIDGE
+ *
+ * Components reference these utility names only. Primary actions are the
+ * deep-cyan pair: bg-primary renders as --accent-deep with
+ * text-primary-foreground as --accent-deep-fg (white in light, near-black
+ * in dark). The brand accent is bg-accent / text-accent for links, focus,
+ * active states, and the mark; the coral pop family is for positive deltas
+ * and rare celebratory moments.
+ */
+@theme inline {
+  --color-background:              var(--bg);
+  --color-foreground:              var(--fg);
+  /* Cards are drawn with 1px borders on the canvas, not with a raised
+   * fill: the user rejected the white-card-on-grey-canvas read as
+   * "grey background". --color-card therefore maps to the canvas, not
+   * --bg-raised. (Deliberate divergence from BRAND.md section 2's
+   * raised-card rule.) */
+  --color-card:                    var(--bg);
+  --color-primary:                 var(--accent-deep);
+  --color-primary-foreground:      var(--accent-deep-fg);
+  --color-secondary:               var(--bg-raised);
+  --color-secondary-foreground:    var(--fg);
+  --color-sunken:                  var(--bg-sunken);
+  --color-sunken-hover:            var(--sunken-hover);
+  --color-skeleton:                var(--skeleton);
+  --color-selected:                var(--selected);
+  --color-muted-foreground:        var(--fg-muted);
+  --color-subtle-foreground:       var(--fg-subtle);
+  --color-accent:                  var(--accent);
+  --color-accent-foreground:       var(--accent-fg);
+  --color-accent-text:             var(--accent-text);
+  --color-accent-soft:             var(--accent-soft);
+  --color-pop:                     var(--pop);
+  --color-pop-foreground:          var(--pop-fg);
+  --color-pop-text:                var(--pop-text);
+  --color-pop-soft:                var(--pop-soft);
+  --color-destructive:             var(--danger-fill);
+  --color-destructive-foreground:  oklch(0.985 0.003 264);
+  --color-danger:                  var(--danger);
+  --color-danger-soft:             var(--danger-soft);
+  --color-danger-soft-hover:       var(--danger-soft-hover);
+  --color-success:                 var(--success);
+  --color-success-soft:            var(--success-soft);
+  --color-success-soft-hover:      var(--success-soft-hover);
+  --color-warning:                 var(--warning);
+  --color-warning-soft:            var(--warning-soft);
+  --color-warning-soft-hover:      var(--warning-soft-hover);
+  --color-chart-positive:          var(--chart-positive);
+  --color-chart-negative:          var(--chart-negative);
+  --color-border:                  var(--border);
+  --color-border-strong:           var(--border-strong);
+  --color-input:                   var(--border-strong);
+  --color-ring:                    var(--ring);
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --shadow-overlay: var(--overlay-shadow);
+
+  --font-sans: "Instrument Sans Variable", system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque Variable", "Instrument Sans Variable", system-ui, sans-serif;
+  --font-brand: "Quicksand Variable", "Instrument Sans Variable", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "Fira Mono", monospace;
+}
+
+html,
+body {
+  background-color: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono);
+}
+
+/* Interactive affordance: clickable things get the pointer cursor.
+ * Tailwind v4's preflight leaves button/summary at cursor:default. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+a[href],
+summary,
+select:not(:disabled),
+label:has(> input:not(:disabled)),
+input[type="checkbox"]:not(:disabled),
+input[type="radio"]:not(:disabled) {
+  cursor: pointer;
+}
+
+/* Motion discipline: hover and state transitions are short and ease-out.
+ * Only color, background, border, opacity, and transform may animate. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+
+/* One-time entrance for context banners (e.g. arriving at a filtered
+ * screen from elsewhere in the app). Signals "you just landed in a
+ * different state"; runs once on mount, never repeats. Reduced-motion
+ * collapses it via the global rule above. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise-in {
+  animation: rise-in var(--dur-med) var(--ease);
+}

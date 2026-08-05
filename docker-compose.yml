@@ -31,6 +31,17 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - UNSUBSCRIBE_SIGNING_KEY=${UNSUBSCRIBE_SIGNING_KEY}
       - BASE_URL=${BASE_URL:-http://localhost:3000}
+      # Dashboard URL for /auth/verify redirects. In self-host compose mode the
+      # dashboard is served by Fastify on the same origin as the API, so this
+      # can match BASE_URL. Override if you front Claros with a reverse proxy
+      # that exposes the dashboard on a separate hostname.
+      - DASHBOARD_URL=${DASHBOARD_URL:-http://localhost:3000}
+      # Serve the built dashboard SPA from apps/dashboard/dist (self-host only).
+      # The dev-stage entrypoint (docker/Dockerfile) builds the dashboard from
+      # the mounted source on every container start, so the served dist always
+      # matches the current code; a failed build stops the container instead
+      # of serving stale assets. No manual build step is required.
+      - CLAROS_SERVE_DASHBOARD=${CLAROS_SERVE_DASHBOARD:-true}
     volumes:
       # Mount source directories so file changes are reflected immediately.
       # node_modules is NOT mounted - it stays from the image (Linux binaries).

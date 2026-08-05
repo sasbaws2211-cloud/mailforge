@@ -11,6 +11,7 @@
  */
 import { draftOutputSchema, type DraftOutput } from "@claros/core";
 import type { LlmProvider } from "./providers/types.js";
+import { LlmProviderError } from "./providers/openai-compatible.js";
 import { buildDraftMessages, type DraftPromptContext } from "./prompts/draft.js";
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,13 @@ export interface DraftSuccess {
 export interface DraftFailure {
   ok: false;
   error: string;
+  /**
+   * HTTP status from the provider when the failure came from an LLM call
+   * (LlmProviderError.statusCode), null for network errors, undefined for
+   * non-LLM failures (parse/validation). Lets the worker distinguish
+   * permanent configuration faults (401/403/404) from transient ones.
+   */
+  statusCode?: number | null;
 }
 
 export type DraftResult = DraftSuccess | DraftFailure;
@@ -77,6 +85,7 @@ export async function draft(
     return {
       ok: false,
       error: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
+      statusCode: err instanceof LlmProviderError ? err.statusCode : undefined,
     };
   }
 

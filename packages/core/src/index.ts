@@ -34,6 +34,10 @@ export {
   type PartitionMaintenanceJobData,
   type ContentGenerationJobData,
   type KbEmbedJobData,
+  type AdvanceMembershipJobData,
+  type ProcessMessageJobData,
+  type DrainMessageJobData,
+  type GridSnapshotJobData,
 } from "./jobs.js";
 
 export {
@@ -72,6 +76,20 @@ export {
   type TimeTransitionInput,
   type EngagementDepth,
   type DepthAssignmentInput,
+  RETENTION_TENURE_BUCKETS,
+  RETENTION_RECENCY_BUCKETS,
+  RETENTION_TENURE_THRESHOLDS_DAYS,
+  RETENTION_RECENCY_MULTIPLIERS,
+  tenureBucket,
+  recencyBucket,
+  recencyThresholdDays,
+  tenureBucketRange,
+  recencyBucketRange,
+  isSegmentTriggerConfig,
+  matchesSegmentTrigger,
+  type RetentionTenureBucket,
+  type RetentionRecencyBucket,
+  type SegmentTriggerConfig,
 } from "./lifecycle/index.js";
 
 export {
@@ -86,6 +104,8 @@ export {
   REENTRY_POLICIES,
   FLOW_SOURCES,
   APPROVAL_MODES,
+  CONTENT_MODES,
+  TEMPLATE_APPROVAL_MODES,
   compiledPlanSchema,
   compiledStepSchema,
   compiledTriggerSchema,
@@ -101,6 +121,8 @@ export {
   type ReentryPolicy,
   type FlowSource,
   type ApprovalMode,
+  type ContentMode,
+  type TemplateApprovalMode,
   type CompiledPlan,
   type CompiledStep,
   type CompiledTrigger,
@@ -137,3 +159,21 @@ export {
   type BusinessModelTemplate,
   type TemplateFlow,
 } from "./business-model-templates.js";
+
+export {
+  LIBRARY_TEMPLATES,
+  LIBRARY_FLOW_WELCOME,
+  type LibraryTemplate,
+  type LibraryFlow,
+  type InstallResult,
+} from "./library-flows.js";
+
+export {
+  wrapInShell,
+  wrapInTextShell,
+  buildShellComplianceHtml,
+  buildShellComplianceText,
+  type BrandSettings,
+  type EmailShellInput,
+  type TextShellInput,
+} from "./email-shell.js";

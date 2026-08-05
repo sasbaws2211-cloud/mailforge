@@ -25,16 +25,28 @@
  *   awaiting_content -> pending_approval (draft + assess pass)
  *   awaiting_content -> value_gated (assess returns "fail") - terminal
  *   generating -> skipped (decide returns "skip" or "wait") - terminal
+ *   generating|awaiting_content -> failed (permanent fault) - terminal
  *
- * Failure path: message stays at 'generating' (or 'awaiting_content'). The
- * reap worker (task 15) recovers stuck messages after REAP_STUCK_THRESHOLD_HOURS (2h).
- * 'value_gated' is terminal and is NOT recovered by reap.
+ * Failure classification (step: honest failure modes):
+ *   Permanent - cannot succeed on retry, goes straight to 'failed' with the
+ *   reason in brain_reasoning, visible in the dashboard Approvals screen:
+ *     - provider resolution failure (no llm_configs row, missing/mismatched
+ *       ENCRYPTION_KEY, undecryptable config)
+ *     - LLM call rejected with a 4xx other than 429 (bad key, unknown model,
+ *       malformed request): 400/401/403/404/422
+ *   Transient - left at the current status for reap, which retries with a
+ *   ceiling (MAX_RETRY_COUNT) and then marks 'failed': network errors, 429,
+ *   5xx, invalid LLM output, CAS races, process crashes.
+ *
+ * 'failed', 'value_gated' and 'skipped' are terminal and are NOT recovered
+ * by reap. A generation_failed message can be re-queued by the operator via
+ * POST /v1/messages/:id/retry after the configuration fault is fixed.
  *
  * Mirror side: PUBLIC (packages/worker is mirrored).
  */
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { marked, Renderer, Lexer, type Token } from "marked";
+import { marked, Renderer, Lexer, type Token, type Tokens } from "marked";
 import {
   decide,
   draft,
@@ -45,6 +57,7 @@ import {
 import { resolveTenantProvider } from "./provider-resolver.js";
 import { assembleContext } from "./context-assembler.js";
 import { applyBudgetForBothPaths, draftContextToDecideContext, checkAssessBudget } from "./context-budget.js";
+import { renderTemplate, type TemplateContext } from "./template-renderer.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,6 +82,8 @@ export interface ContentTickResult {
   advanced: number;
   skipped: number;
   valueGated: number;
+  /** Permanent failures terminally marked 'failed' this tick. */
+  failed: number;
   errors: number;
 }
 
@@ -177,6 +192,7 @@ export async function processContentTick(
     advanced: 0,
     skipped: 0,
     valueGated: 0,
+    failed: 0,
     errors: 0,
   };
 
@@ -214,6 +230,9 @@ export async function processContentTick(
       case "value_gated":
         stats.valueGated++;
         break;
+      case "failed":
+        stats.failed++;
+        break;
       case "error":
         stats.errors++;
         break;
@@ -227,7 +246,50 @@ export async function processContentTick(
 // Per-message processing
 // ---------------------------------------------------------------------------
 
-type ContentOutcome = "advanced" | "skipped" | "value_gated" | "error";
+export type ContentOutcome = "advanced" | "skipped" | "value_gated" | "failed" | "error";
+
+/**
+ * HTTP statuses from the LLM provider that no retry can fix: the key is
+ * invalid, the model does not exist, or the request shape is rejected.
+ * 429 and 5xx are deliberately excluded (transient).
+ */
+const PERMANENT_LLM_STATUSES = new Set([400, 401, 403, 404, 422]);
+
+function isPermanentLlmFailure(statusCode: number | null | undefined): boolean {
+  return statusCode != null && PERMANENT_LLM_STATUSES.has(statusCode);
+}
+
+/**
+ * Terminally fail a claimed message, recording the reason where the
+ * dashboard surfaces it. CAS from the expected status; a lost race means
+ * another actor moved the row and this failure no longer applies.
+ */
+async function failPermanently(
+  db: Db,
+  candidate: ContentCandidate,
+  fromStatus: "generating" | "awaiting_content",
+  reason: string,
+  now: Date,
+): Promise<ContentOutcome> {
+  const result = await db.execute<{ id: string }>(sql`
+    UPDATE lifecycle_messages
+    SET
+      status = 'failed',
+      brain_reasoning = ${`generation_failed: ${reason}`},
+      updated_at = ${now}
+    WHERE id = ${candidate.id}
+      AND status = ${fromStatus}
+    RETURNING id
+  `);
+  if (result.rows.length === 0) {
+    return "error";
+  }
+  console.error(
+    `[content] message ${candidate.id} (tenant ${candidate.tenantId}) ` +
+      `permanently failed: ${reason}`,
+  );
+  return "failed";
+}
 
 /**
  * Process a single claimed message through the full Brain pipeline:
@@ -241,31 +303,44 @@ type ContentOutcome = "advanced" | "skipped" | "value_gated" | "error";
  * CAS on every write ensures concurrent actors (reap, another content worker)
  * cannot corrupt state.
  *
- * Failure path: on any error (provider resolution, LLM call, invalid output,
- * or CAS failure), the message remains at its current status and the reap
- * worker will recover it after the stuck threshold.
+ * Failure path: permanent faults (no provider, 4xx auth/model errors) go
+ * straight to 'failed' with the reason recorded; transient faults leave the
+ * message at its current status for reap recovery with a retry ceiling.
  */
-async function processOneContentMessage(
+export async function processOneContentMessage(
   db: Db,
   candidate: ContentCandidate,
   now: Date,
 ): Promise<ContentOutcome> {
   try {
-    // 1. Resolve tenant's LLM provider
-    const providerResult = await resolveTenantProvider(db, candidate.tenantId);
-    if (!providerResult.ok) {
-      // No provider available - leave at generating for reap recovery.
-      // Same handling as a provider error per spec.
-      return "error";
-    }
-    const { provider } = providerResult;
-
-    // 2. Assemble the full context packet for both LLM calls.
+    // 1. Assemble the full context packet (needed for both template and LLM paths).
     const assembled = await assembleContext(db, candidate, now);
     if (assembled === null) {
       // Contact not found - data integrity issue. Leave at generating for reap.
       return "error";
     }
+
+    // 1b. Template path: if the step carries a template_ref, render the
+    // template deterministically without any LLM calls. decide, draft, and
+    // assess are all skipped because:
+    //   - decide: template content is pre-authored, the decision to contact
+    //     was already made by the flow author placing the step in the plan.
+    //   - draft: the template IS the content; there is nothing to generate.
+    //   - assess: pre-authored content is the operator's responsibility and
+    //     does not need an automated quality gate.
+    if (assembled.templateRef) {
+      return processTemplateMessage(db, candidate, assembled.templateRef, now);
+    }
+
+    // 2. Resolve tenant's LLM provider. A resolution failure is always a
+    // configuration fault (no llm_configs row, bad ENCRYPTION_KEY, or an
+    // undecryptable envelope): no amount of retrying generates content, so
+    // the message fails terminally with the reason instead of looping.
+    const providerResult = await resolveTenantProvider(db, candidate.tenantId);
+    if (!providerResult.ok) {
+      return failPermanently(db, candidate, "generating", providerResult.reason, now);
+    }
+    const { provider } = providerResult;
 
     // 3. Apply dual-path budget truncation.
     // The budget step measures both the decide and draft assembled messages
@@ -299,7 +374,10 @@ async function processOneContentMessage(
     // 4. Call decide()
     const decideResult = await decide(provider, decideCtx);
     if (!decideResult.ok) {
-      // LLM error or invalid output - leave at generating for reap.
+      if (isPermanentLlmFailure(decideResult.statusCode)) {
+        return failPermanently(db, candidate, "generating", `decide: ${decideResult.error}`, now);
+      }
+      // Transient LLM error or invalid output - leave at generating for reap.
       return "error";
     }
 
@@ -353,7 +431,10 @@ async function processOneContentMessage(
     // 6. Call draft()
     const draftResult = await draft(provider, draftCtx);
     if (!draftResult.ok) {
-      // LLM error or invalid output - leave at awaiting_content for reap.
+      if (isPermanentLlmFailure(draftResult.statusCode)) {
+        return failPermanently(db, candidate, "awaiting_content", `draft: ${draftResult.error}`, now);
+      }
+      // Transient LLM error or invalid output - leave at awaiting_content for reap.
       return "error";
     }
 
@@ -375,7 +456,10 @@ async function processOneContentMessage(
     });
 
     if (!assessResult.ok) {
-      // Gate call error (LLM failure, parse failure) - transient.
+      if (isPermanentLlmFailure(assessResult.statusCode)) {
+        return failPermanently(db, candidate, "awaiting_content", `assess: ${assessResult.error}`, now);
+      }
+      // Gate call error (transient LLM failure, parse failure).
       // Leave at awaiting_content for reap; do NOT mark value_gated.
       return "error";
     }
@@ -454,6 +538,155 @@ async function processOneContentMessage(
 }
 
 // ---------------------------------------------------------------------------
+// Template rendering path (no LLM calls)
+// ---------------------------------------------------------------------------
+
+/**
+ * Process a template-bearing message: resolve the template from the DB,
+ * render it with variable interpolation, and advance directly to
+ * pending_approval or approved (per flow's approval_mode).
+ *
+ * Skips decide, draft, and assess entirely:
+ *   - decide: the flow author placed this step in the plan; the decision
+ *     to contact is implicit in the template reference.
+ *   - draft: the template IS the content.
+ *   - assess: pre-authored content is the operator's responsibility.
+ *
+ * On render failure (missing variables, template not found), the message
+ * is permanently failed with a clear reason.
+ */
+async function processTemplateMessage(
+  db: Db,
+  candidate: ContentCandidate,
+  templateSlug: string,
+  now: Date,
+): Promise<ContentOutcome> {
+  // 1. Look up the template by slug + tenant
+  const templateRow = await db.execute<{
+    subject: string;
+    body_html: string;
+    body_text: string | null;
+  }>(sql`
+    SELECT subject, body_html, body_text
+    FROM templates
+    WHERE tenant_id = ${candidate.tenantId}
+      AND slug = ${templateSlug}
+      AND is_active = true
+    LIMIT 1
+  `);
+
+  if (templateRow.rows.length === 0) {
+    return failPermanently(
+      db,
+      candidate,
+      "generating",
+      `template_not_found: no active template with slug "${templateSlug}" for this tenant`,
+      now,
+    );
+  }
+
+  const template = templateRow.rows[0]!;
+
+  // 2. Build template context from the candidate's contact/tenant/flow data
+  const contactRow = await db.execute<{
+    first_name: string | null;
+    last_name: string | null;
+    email: string | null;
+    external_id: string;
+    properties: Record<string, unknown> | null;
+  }>(sql`
+    SELECT
+      properties->>'first_name' AS first_name,
+      properties->>'last_name' AS last_name,
+      email,
+      external_id,
+      properties
+    FROM contacts
+    WHERE id = ${candidate.contactId}
+      AND tenant_id = ${candidate.tenantId}
+    LIMIT 1
+  `);
+
+  if (contactRow.rows.length === 0) {
+    return "error"; // Contact not found - integrity issue
+  }
+
+  const contact = contactRow.rows[0]!;
+
+  const tenantRow = await db.execute<{ name: string }>(sql`
+    SELECT name FROM tenants WHERE id = ${candidate.tenantId} LIMIT 1
+  `);
+
+  const tenantName = tenantRow.rows[0]?.name ?? "Unknown";
+
+  const flowRow = await db.execute<{ name: string }>(sql`
+    SELECT name FROM flows WHERE id = ${candidate.flowId} LIMIT 1
+  `);
+
+  const flowName = flowRow.rows[0]?.name ?? "Unknown";
+
+  const ctx: TemplateContext = {
+    contact: {
+      first_name: contact.first_name,
+      last_name: contact.last_name,
+      email: contact.email,
+      external_id: contact.external_id,
+      properties: contact.properties,
+    },
+    tenant: { name: tenantName },
+    flow: { name: flowName },
+  };
+
+  // 3. Render the template
+  const renderResult = renderTemplate(
+    template.subject,
+    template.body_html,
+    template.body_text,
+    ctx,
+  );
+
+  if (!renderResult.ok) {
+    return failPermanently(
+      db,
+      candidate,
+      "generating",
+      `template_render_failed: ${renderResult.reason}`,
+      now,
+    );
+  }
+
+  // 4. Determine target status based on flow's approval_mode
+  const approvalRow = await db.execute<{ approval_mode: string | null }>(sql`
+    SELECT approval_mode FROM flows WHERE id = ${candidate.flowId}
+  `);
+  const approvalMode = approvalRow.rows[0]?.approval_mode ?? "require";
+  const targetStatus = approvalMode === "auto" ? "approved" : "pending_approval";
+  const approvedAt = approvalMode === "auto" ? now : null;
+
+  // 5. Write rendered content and advance status (CAS: generating)
+  const finalResult = await db.execute<{ id: string }>(sql`
+    UPDATE lifecycle_messages
+    SET
+      status = ${targetStatus},
+      subject = ${renderResult.subject},
+      body_html = ${renderResult.bodyHtml},
+      body_text = ${renderResult.bodyText},
+      approved_at = ${approvedAt},
+      brain_reasoning = ${"template_rendered: " + templateSlug},
+      updated_at = ${now}
+    WHERE id = ${candidate.id}
+      AND status = 'generating'
+    RETURNING id
+  `);
+
+  if (finalResult.rows.length === 0) {
+    return "error"; // CAS failed
+  }
+
+  return "advanced";
+}
+
+// ---------------------------------------------------------------------------
 // Markdown rendering helpers
 // ---------------------------------------------------------------------------
 
@@ -498,6 +731,35 @@ function isSafeUrl(url: string): boolean {
  * internal O() function which encodes & < > " ' to entity references, making
  * attribute boundary escape impossible). No post-render string pass is needed.
  */
+/**
+ * Build a marked Renderer that produces email-safe, inline-styled HTML.
+ *
+ * Security overrides:
+ *   1. html(): all raw HTML tokens are escaped to entity references.
+ *   2. link()/image(): dangerous URL schemes are replaced with safe fallbacks.
+ *
+ * Email-safe overrides:
+ *   - Paragraphs, headings, lists, blockquotes, code blocks, and horizontal
+ *     rules all carry inline styles suitable for email rendering.
+ *   - No class names, no external CSS references.
+ *   - Font sizes and spacing designed to look good inside the email shell's
+ *     15px/1.6 body content area.
+ *
+ * Allowed markdown constructs:
+ *   - Paragraphs, bold, italic, strikethrough
+ *   - Headings (h1-h3 only; h4-h6 rendered as h3)
+ *   - Ordered and unordered lists
+ *   - Links (http/https only)
+ *   - Images (http/https only, max-width constrained)
+ *   - Blockquotes
+ *   - Code (inline and fenced blocks)
+ *   - Horizontal rules
+ *
+ * Stripped/escaped:
+ *   - Raw HTML (any tag the model emits becomes visible text)
+ *   - Dangerous URL schemes (javascript:, data:, vbscript:, etc.)
+ *   - Tables (complex layout, unreliable in email clients)
+ */
 function buildSafeRenderer(): Renderer {
   const renderer = new Renderer();
 
@@ -506,19 +768,81 @@ function buildSafeRenderer(): Renderer {
   // and any other tag the model emits, wherever it appears in the document.
   renderer.html = ({ raw }: { raw: string }): string => escapeHtml(raw);
 
-  // Sanitise dangerous URL schemes in link href.
-  const origLink = renderer.link.bind(renderer);
-  renderer.link = (token: Parameters<Renderer["link"]>[0]): string => {
-    const safeHref = isSafeUrl(token.href ?? "") ? token.href : "#";
-    return origLink({ ...token, href: safeHref });
+  // Paragraphs: standard spacing for email
+  renderer.paragraph = ({ tokens }: { tokens: Token[] }): string => {
+    const body = renderer.parser.parseInline(tokens);
+    return `<p style="margin:0 0 16px 0;line-height:1.6;">${body}</p>\n`;
   };
 
-  // Sanitise dangerous URL schemes in image src.
-  const origImage = renderer.image.bind(renderer);
-  renderer.image = (token: Parameters<Renderer["image"]>[0]): string => {
-    const safeHref = isSafeUrl(token.href ?? "") ? token.href : "";
-    return origImage({ ...token, href: safeHref });
+  // Headings: only h1-h3, all others become h3
+  renderer.heading = ({ tokens, depth }: { tokens: Token[]; depth: number }): string => {
+    const body = renderer.parser.parseInline(tokens);
+    const level = Math.min(depth, 3);
+    const styles: Record<number, string> = {
+      1: "font-size:22px;font-weight:700;margin:0 0 16px 0;line-height:1.3;",
+      2: "font-size:18px;font-weight:600;margin:0 0 12px 0;line-height:1.3;",
+      3: "font-size:16px;font-weight:600;margin:0 0 10px 0;line-height:1.4;",
+    };
+    return `<h${level} style="${styles[level]}">${body}</h${level}>\n`;
   };
+
+  // Lists: inline padding for email
+  renderer.list = (token: Tokens.List): string => {
+    const tag = token.ordered ? "ol" : "ul";
+    const startAttr = token.ordered && token.start !== 1 && token.start !== "" ? ` start="${token.start}"` : "";
+    const style = "margin:0 0 16px 0;padding-left:24px;";
+    const itemsHtml = token.items.map((item) => renderer.listitem(item)).join("");
+    return `<${tag}${startAttr} style="${style}">\n${itemsHtml}</${tag}>\n`;
+  };
+
+  renderer.listitem = (item: Tokens.ListItem): string => {
+    const body = renderer.parser.parse(item.tokens);
+    return `<li style="margin:0 0 6px 0;line-height:1.5;">${body}</li>\n`;
+  };
+
+  // Blockquotes: left border with padding
+  renderer.blockquote = ({ tokens }: Tokens.Blockquote): string => {
+    const body = renderer.parser.parse(tokens);
+    return `<blockquote style="margin:0 0 16px 0;padding:12px 16px;border-left:3px solid #d1d5db;color:#4b5563;">${body}</blockquote>\n`;
+  };
+
+  // Code blocks: monospace background
+  renderer.code = ({ text, lang }: { text: string; lang?: string }): string => {
+    void lang;
+    return `<pre style="margin:0 0 16px 0;padding:12px 16px;background-color:#f3f4f6;border-radius:6px;overflow-x:auto;"><code style="font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:13px;line-height:1.5;color:#1f2937;">${escapeHtml(text)}</code></pre>\n`;
+  };
+
+  // Inline code
+  renderer.codespan = ({ text }: { text: string }): string => {
+    return `<code style="font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:13px;padding:2px 5px;background-color:#f3f4f6;border-radius:3px;">${text}</code>`;
+  };
+
+  // Horizontal rule
+  renderer.hr = (): string => {
+    return `<hr style="margin:24px 0;border:none;border-top:1px solid #e5e7eb;" />\n`;
+  };
+
+  // Images: constrained width for email safety
+  renderer.image = ({ href, title, text }: Tokens.Image): string => {
+    const safeHref = isSafeUrl(href ?? "") ? href : "";
+    if (!safeHref) return "";
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+    return `<img src="${escapeHtml(safeHref)}" alt="${escapeHtml(text || "")}"${titleAttr} style="max-width:100%;height:auto;display:block;margin:0 0 16px 0;border:0;" />`;
+  };
+
+  // Links: safe URL with accent color
+  renderer.link = ({ href, title, tokens }: Tokens.Link): string => {
+    const safeHref = isSafeUrl(href ?? "") ? href : "#";
+    const body = renderer.parser.parseInline(tokens);
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+    return `<a href="${escapeHtml(safeHref)}"${titleAttr} style="color:#2563eb;text-decoration:underline;">${body}</a>`;
+  };
+
+  // Tables: strip entirely (unreliable in email clients, and the model
+  // should not be producing tabular data in lifecycle emails)
+  renderer.table = (): string => "";
+  renderer.tablerow = (): string => "";
+  renderer.tablecell = (): string => "";
 
   return renderer;
 }

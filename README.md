@@ -13,7 +13,7 @@ An AI-native alternative to Customer.io, Loops, and Mautic where flows are defin
 - **Magic-link auth** - request/verify/logout/session endpoints, HTTP-only cookie
 - **Console login fallback** - when no transport is configured, the login link is printed to the server console (`docker compose logs app`)
 - **Bootstrap seed** - first boot creates a default tenant and owner from `SEED_ADMIN_EMAIL`
-- **Event ingestion** - `POST /v1/track` and `POST /v1/identify`, Segment-compatible (track and identify calls only - see [Segment-compatible API](#segment-compatible-api)). Contact upsert, trait merge, messageId deduplication, lifecycle state transitions applied on ingest.
+- **Event ingestion** - `POST /v1/track`, `POST /v1/identify`, and `POST /v1/batch` (Segment-compatible). Publishable and secret API keys with per-key rate limits and origin allowlists. Browser snippet (`/claros.js`, CORS-safe, no preflight). Contact upsert, trait merge, messageId deduplication, lifecycle state transitions applied on ingest. Dashboard Integrate screen for key management and first-event verification.
 - **Lifecycle state machine** - 7 contact states (`signed_up`, `activated`, `engaged`, `at_risk`, `dormant`, `churned`, `resurrected`) with a payment overlay. Event-driven and time-driven transitions, CAS writes, full audit log.
 - **Flow CRUD** - create, read, update, delete, and archive flows via `/v1/flows`. Flows hold a trigger, steps, class, reentry policy, and window policy.
 - **Flow compilation** - `POST /v1/flows/:id/compile` kicks off an LLM compile job. `compile()` in `brain-oss` makes real LLM calls (OpenAI-compatible endpoint) and writes the compiled execution plan back to the flow.
@@ -31,17 +31,18 @@ An AI-native alternative to Customer.io, Loops, and Mautic where flows are defin
 - **Operator CLI** (`claros`) - login links, guided setup, transport/LLM/postal-address configuration; see [CLI reference](#cli-reference)
 - **Knowledge base API** - CRUD for KB entries (`POST /v1/kb`, `GET /v1/kb`, `GET /v1/kb/:id`, `PATCH /v1/kb/:id`, `DELETE /v1/kb/:id`, `POST /v1/kb/re-embed`). `kb_entries` table with `vector(1536)` column. Creating or updating an entry enqueues an embedding job. Compile worker reads KB entry titles as context for LLM prompts. No file upload, site crawl, or search (similarity query) endpoint yet.
 - **Business model templates** - `GET /v1/templates` lists the three built-in templates (preview_free, freemium, time_limited_trial). `POST /v1/templates/:id/apply` applies a template to the calling tenant: writes lifecycle and throttle settings, sets brain_context, and creates the suggested flows as drafts (uncompiled).
-- **Message approvals** - `GET /v1/messages` lists messages pending approval. `POST /v1/messages/:id/approve` and `POST /v1/messages/:id/reject` advance the message state with CAS guarantees.
+- **Message approvals** - `GET /v1/messages` lists messages pending approval (filterable by status). `POST /v1/messages/:id/approve`, `/reject`, and `/retry` advance message state with CAS guarantees. Generation failures surface on the Approvals screen with the fault reason and a retry action.
 - **Webhook ingestion** - `POST /webhooks/resend/:tenantId` receives Resend event notifications (bounces, complaints, opens, clicks, deliveries). Verifies Svix HMAC-SHA256 signatures, advances the feedback column with advance-only CAS transitions, suppresses on permanent bounces and complaints. Requires `webhook_secret` in the tenant's transport configuration. No other provider webhook yet.
 - **Docker + docker-compose** - single image, one Postgres dependency, `docker compose up` starts the server and applies migrations automatically
 
+- **Dashboard (React SPA)** - Vite 6 + React 19 + Tailwind v4. Login page (magic link request + check-your-inbox state) and authenticated shell. Served by Fastify at `/` in self-host mode when `apps/dashboard/dist/` is built. Build with `pnpm --filter @claros/dashboard build`.
+
 ### Not yet built
 
-- **Content generation** - `decide()` and `draft()` in `brain-oss` make real LLM calls. The content worker runs the full pipeline: `pending_generation -> generating -> awaiting_content -> pending_approval`. `decide()` picks the action and decides whether to contact, skip, or wait. `draft()` produces subject + body_markdown. `assess()` gates the draft for value before writing to `pending_approval`. Requires an LLM configuration (set via `claros llm set`).
 - Knowledge base file upload, site crawl, and pgvector similarity search endpoint
 - SES and SMTP transport adapters (only Resend is implemented)
 - Webhook ingestion for providers other than Resend
-- Dashboard (React SPA - placeholder package only)
+- Dashboard screens beyond auth shell (flows, people, approvals, analytics, settings)
 
 ---
 
@@ -54,25 +55,36 @@ cd claros
 cp .env.example .env
 # Edit .env: set SEED_ADMIN_EMAIL (default: admin@example.com)
 
-# 2. Start
+# 2. Build the dashboard SPA (required for the browser UI)
+#    Skip this step if you only want the API without the browser UI.
+pnpm install
+pnpm --filter @claros/dashboard build
+
+# 3. Start
 docker compose up -d
 
-# 3. Complete setup: postal address, LLM, and transport (guided wizard)
+# 4. Complete setup: postal address, LLM, and transport (guided wizard)
 docker compose exec app claros setup
 
-# 4. Get a login link
+# 5. Get a login link
 docker compose exec app claros login-link admin@example.com
 
-# 5. Open the URL printed by step 4. You receive a session cookie.
+# 6. Open the URL printed by step 5. You are redirected to the dashboard.
 ```
 
 If you prefer to configure each step separately rather than using the wizard, see [CLI reference](#cli-reference).
 
+If you skip step 2, the server starts and all API routes work normally. Requests to `/` and unknown browser paths return 404 until the dashboard dist exists.
+
 Once you have a session cookie you can exercise ingestion and flows directly:
 
 ```bash
-# Generate an API write key for ingestion (cl_live_... prefix).
-# Run this from inside the container (or from source with pnpm build):
+# Create an API key for ingestion.
+# Open the dashboard at http://localhost:3000/integrate and click
+# "Create publishable key" (for the browser snippet) or "Secret key"
+# (for server-side use). The raw key is shown once; record it.
+#
+# Alternatively, generate a secret key from inside the container:
 docker compose exec app node -e "
 import { randomBytes, createHash } from 'crypto';
 import pg from 'pg';
@@ -80,8 +92,8 @@ const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const tenant = await pool.query(\"SELECT id FROM tenants WHERE slug = 'default'\");
 const raw = 'cl_live_' + randomBytes(32).toString('base64url');
 const hash = createHash('sha256').update(raw).digest('hex');
-await pool.query('INSERT INTO api_keys(tenant_id, key_hash, prefix) VALUES(\$1,\$2,\$3)',
-  [tenant.rows[0].id, hash, raw.slice(0,8)]);
+await pool.query('INSERT INTO api_keys(tenant_id, key_hash, prefix, kind) VALUES(\$1,\$2,\$3,\$4)',
+  [tenant.rows[0].id, hash, raw.slice(0,8), 'secret']);
 console.log(raw);
 await pool.end();
 " --input-type=module 2>/dev/null
@@ -452,7 +464,9 @@ packages/
 apps/
   server/       Entrypoint - role parsing, bootstrap seed, wires api/worker/scheduler.
                 Operator CLI: apps/server/bin/claros.mjs
-  dashboard/    Placeholder. React SPA not yet built.
+  dashboard/    React SPA: Flows, Lifecycle, People, Approvals, Knowledge Base,
+                Analytics, Settings, Integrate (key management + browser snippet
+                + first-event indicator). All screens live; light and dark themes.
 drizzle/        Schema (19 tables), migrations.
 docker/         Dockerfile and initdb scripts
 docker-compose.yml  Single-image compose stack (Postgres + app)

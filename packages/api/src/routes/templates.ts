@@ -21,7 +21,9 @@
  *   4. Writes tenants.settings.throttle with the template's throttle overrides
  *      (merged over THROTTLE_DEFAULTS by the existing resolver).
  *   5. Writes tenants.settings.brain_context with the template's brain_context
- *      string. Nothing consumes this yet; see BACKLOG.md "brain_context wiring".
+ *      string. Consumed by the decide/draft prompts as the PRODUCT CONTEXT
+ *      section (context-flow.ts); the operator can edit it via
+ *      PATCH /v1/settings/tenant.
  *   6. Sets tenants.business_model to the template identifier.
  *   7. Creates each template flow as a draft flow via direct DB insert.
  *      [impl] Flows are NOT compiled. The operator adds their LLM provider in
@@ -52,7 +54,7 @@ const templatesRoutes: FastifyPluginAsync = async (app) => {
    * GET /v1/templates
    * List available business model templates.
    */
-  app.get("/", async () => {
+  app.get("/", { config: { minRole: "member" } }, async () => {
     return {
       templates: BUSINESS_MODEL_TEMPLATE_LIST.map((t) => ({
         id: t.id,
@@ -72,7 +74,7 @@ const templatesRoutes: FastifyPluginAsync = async (app) => {
    * Returns 400 for an unknown template id.
    * Returns 409 if the tenant already has a business_model set.
    */
-  app.post<{ Params: { id: string } }>("/:id/apply", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/:id/apply", { config: { minRole: "member" } }, async (request, reply) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
     const templateId = request.params.id as BusinessModelId;

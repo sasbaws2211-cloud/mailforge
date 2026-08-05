@@ -20,6 +20,7 @@ export const flows = pgTable("flows", {
   triggerConfig: jsonb("trigger_config").notNull(),
   steps: jsonb("steps").notNull(), // FlowStep[]
   source: text("source").default("manual"), // manual|library|brain_suggested
+  contentMode: text("content_mode").default("ai_drafted"), // ai_drafted|fixed_content
   status: text("status").default("draft"), // draft|active|paused|archived
   approvalMode: text("approval_mode").default("require"), // require|auto
   flowClass: text("flow_class").default("nurture").notNull(), // [v2] critical|nurture

@@ -117,6 +117,64 @@ export const QUEUE = {
    * field-only updates must not enqueue this job.
    */
   KB_EMBED: "claros.kb-embed",
+
+  /**
+   * Targeted step advancement: process a single membership's current step.
+   * Payload: tenant_id, membership_id.
+   * Handler: packages/worker (advance-membership.ts).
+   * Trigger: enqueued after successful enrollment (trigger-check, scan-enrollment).
+   *
+   * Eliminates the 15-min scan wait for newly enrolled contacts. The periodic
+   * scan remains as a safety net for memberships that miss the targeted path
+   * (e.g. enqueue failure, process crash).
+   *
+   * No singletonKey: multiple enrollments for different memberships are independent.
+   * If the same membership is enqueued twice, the second job finds the step already
+   * advanced and short-circuits (CAS on current_step prevents double-advance).
+   */
+  ADVANCE_MEMBERSHIP: "claros.advance-membership",
+
+  /**
+   * Targeted content generation: process a single pending_generation message.
+   * Payload: tenant_id, message_id.
+   * Handler: packages/worker (process-message.ts).
+   * Trigger: enqueued after step advancement creates a pending_generation message.
+   *
+   * Eliminates the 5-min content-generation wait. The periodic content tick
+   * remains as a safety net for messages that miss the targeted path.
+   *
+   * singletonKey = message_id: only one content job per message at a time.
+   * If the message is already claimed by the cron tick, the targeted job finds
+   * status != 'pending_generation' and returns immediately.
+   */
+  PROCESS_MESSAGE: "claros.process-message",
+
+  /**
+   * Targeted drain: send a single approved message.
+   * Payload: tenant_id, message_id.
+   * Handler: packages/worker (drain-message.ts).
+   * Trigger: enqueued after a message reaches 'approved' (auto-approve in content
+   * generation, manual approval via POST /v1/messages/:id/approve).
+   *
+   * Eliminates the 15-min drain wait. The periodic drain tick remains as a
+   * safety net for messages that miss the targeted path.
+   *
+   * singletonKey = message_id: only one drain job per message at a time.
+   * If the message is already claimed by the cron drain, the targeted job finds
+   * status != 'approved' and returns immediately.
+   */
+  DRAIN_MESSAGE: "claros.drain-message",
+
+  /**
+   * Grid snapshot: record the day's retention-grid cell populations.
+   * Payload: empty - handler queries contacts per tenant and upserts 16 rows
+   * (one per cell) into retention_grid_snapshots for the current UTC day.
+   * Handler: packages/worker (snapshot-retention-grid.ts).
+   * Schedule: packages/scheduler, cron daily.
+   *
+   * Idempotent: re-running on the same day overwrites that day's rows.
+   */
+  GRID_SNAPSHOT: "claros.grid-snapshot",
 } as const;
 
 export type QueueName = (typeof QUEUE)[keyof typeof QUEUE];
@@ -196,3 +254,38 @@ export interface KbEmbedJobData {
   kb_entry_id: string;
   tenant_id: string;
 }
+
+/**
+ * ADVANCE_MEMBERSHIP job: process a single membership's current step.
+ * Enqueued after enrollment (trigger-check or scan-enrollment).
+ */
+export interface AdvanceMembershipJobData {
+  tenant_id: string;
+  membership_id: string;
+}
+
+/**
+ * PROCESS_MESSAGE job: run content generation for a single message.
+ * Enqueued after step advancement creates a pending_generation message.
+ * singletonKey = message_id.
+ */
+export interface ProcessMessageJobData {
+  tenant_id: string;
+  message_id: string;
+}
+
+/**
+ * DRAIN_MESSAGE job: send a single approved message.
+ * Enqueued after a message reaches 'approved' status.
+ * singletonKey = message_id.
+ */
+export interface DrainMessageJobData {
+  tenant_id: string;
+  message_id: string;
+}
+
+/**
+ * GRID_SNAPSHOT job: no payload. The worker snapshots every tenant's
+ * retention-grid cell populations for the current UTC day.
+ */
+export type GridSnapshotJobData = Record<string, never>;

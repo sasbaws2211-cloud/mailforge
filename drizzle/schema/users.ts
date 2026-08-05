@@ -12,6 +12,16 @@ export const users = pgTable(
     name: text("name"),
     role: text("role").default("member").notNull(), // owner|member
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    /** Soft-delete: set when a member is removed. Sessions are hard-deleted
+     *  for immediate access revocation, but the user row persists for
+     *  attribution (approvals, sent messages). */
+    deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
+    /** Email change flow: the new address pending verification. */
+    pendingEmail: text("pending_email"),
+    /** SHA-256 hash of the email-change verification token. */
+    pendingEmailTokenHash: text("pending_email_token_hash"),
+    /** Expiry for the pending email change (24 hours from request). */
+    pendingEmailExpiresAt: timestamp("pending_email_expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
   (table) => [

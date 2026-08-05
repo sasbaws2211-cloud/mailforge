@@ -11,29 +11,63 @@
  *   3. Tenant resolution (request.tenant via session cookie)
  *   4. Public routes (health, auth - no auth required)
  *   5. Authenticated scope /v1 (all routes that require a resolved tenant)
+ *   6. Ingestion scope /v1 (API key auth)
+ *   7. Static serving + SPA fallback (LAST; only when opts.serveDashboard is true)
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
+import path from "node:path";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
+import fastifyStatic from "@fastify/static";
 import type { FastifyInstance, FastifyServerOptions } from "fastify";
 
 import { registerDbPlugin, type Db } from "./plugins/db.js";
 import { registerTenantPlugin } from "./plugins/tenant.js";
+import { registerRoleEnforcement } from "./plugins/role-enforcement.js";
 import { registerIngestAuthPlugin } from "./plugins/ingest-auth.js";
+import { registerIngestCorsPlugin } from "./plugins/ingest-cors.js";
 import healthRoute from "./routes/health.js";
 import versionRoute from "./routes/version.js";
 import diagnosticsRoute from "./routes/diagnostics.js";
 import authRoutes from "./routes/auth.js";
+import inviteRoutes from "./routes/invite.js";
 import ingestRoutes from "./routes/ingest.js";
 import flowsRoutes from "./routes/flows.js";
+import contactsRoutes from "./routes/contacts.js";
+import analyticsRoutes from "./routes/analytics.js";
 import kbRoutes from "./routes/kb.js";
 import suppressionRoutes from "./routes/suppressions.js";
 import templatesRoutes from "./routes/templates.js";
 import messagesRoutes from "./routes/messages.js";
 import unsubscribeRoutes from "./routes/unsubscribe.js";
+import ingestionRoutes from "./routes/ingestion.js";
 import resendWebhookRoute from "./routes/webhooks/resend.js";
 import settingsRoutes from "./routes/settings.js";
+import libraryRoutes from "./routes/library.js";
+import emailTemplatesRoutes from "./routes/email-templates.js";
+import eventsRoutes from "./routes/events.js";
+import sentLogRoutes from "./routes/sent-log.js";
+import teamRoutes from "./routes/team.js";
+import profileRoutes from "./routes/profile.js";
+
+/**
+ * Top-level path prefixes that are owned by API routes.
+ * The SPA fallback must never intercept these paths and serve index.html.
+ * A GET to /v1/unknown should return a normal 404, not the SPA shell.
+ * Derived from the route registrations below; update when new prefixes are added.
+ */
+export const API_PATH_PREFIXES = [
+  "/health",
+  "/version",
+  "/auth",
+  "/invite",
+  "/unsubscribe",
+  "/webhooks",
+  "/v1",
+] as const;
 
 export interface BuildAppOptions {
   /**
@@ -57,10 +91,16 @@ export interface BuildAppOptions {
    */
   db?: Db;
   /**
-   * Base URL for link generation (magic link, unsubscribe, etc.).
-   * No trailing slash. Defaults to http://localhost:{PORT}.
+   * Base URL of the API server for link generation (magic link verify URL,
+   * unsubscribe headers). No trailing slash. Defaults to http://localhost:{PORT}.
+   * Do not use for dashboard redirects - use dashboardUrl for that.
    */
   baseUrl?: string;
+  /**
+   * Base URL of the dashboard SPA. Used by /auth/verify to redirect the browser
+   * after login. No trailing slash. Defaults to baseUrl when absent.
+   */
+  dashboardUrl?: string;
   /**
    * Job enqueue function. Injected by apps/server when pg-boss is available.
    * Signature matches PgBoss.send() for the subset we need: queue name, data, options.
@@ -68,6 +108,28 @@ export interface BuildAppOptions {
    * When absent (tests without pg-boss), routes that require enqueue return 503.
    */
   enqueue?: (queue: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<string | null>;
+  /**
+   * When true, register @fastify/static to serve the dashboard SPA from dist/
+   * and add a SPA catch-all fallback for unknown paths.
+   *
+   * Used in both self-host and Cloud (Slice 2 deliberate reversal: the
+   * container serves the SPA in Cloud via app.claros.org passthrough).
+   * Defaults to true for community edition, false for cloud edition (the
+   * cloud default becomes relevant only once brain-cloud ships; until then
+   * the container always runs community). Defaults to false in BuildAppOptions
+   * to preserve existing test behaviour that does not set serveDashboard.
+   *
+   * If set to true but the dist directory cannot be found, a startup warning
+   * is logged and static serving is skipped rather than crashing.
+   */
+  serveDashboard?: boolean;
+  /**
+   * Explicit path to the dashboard dist directory. When absent the app
+   * resolves it relative to this file's own location, which works both from
+   * compiled output (dist/app.js) and under tsx --watch (src/app.ts).
+   * Can also be set via CLAROS_DASHBOARD_DIST env var.
+   */
+  dashboardDist?: string;
 }
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {
@@ -75,6 +137,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const edition = opts.edition ?? "community";
   const port = process.env.PORT ?? "3000";
   const baseUrl = opts.baseUrl ?? process.env.BASE_URL ?? `http://localhost:${port}`;
+  const dashboardUrl = opts.dashboardUrl ?? process.env.DASHBOARD_URL ?? baseUrl;
 
   const logger =
     opts.logger !== undefined
@@ -83,7 +146,27 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         ? false
         : { level: process.env.LOG_LEVEL ?? "info" };
 
-  const app = Fastify({ logger });
+  const app = Fastify({
+    logger,
+    // Destroy keep-alive connections immediately when app.close() is called.
+    //
+    // Without this, any open keep-alive connection (for example the one held by
+    // the Cloudflare Worker ingress, or the keep-warm cron ping) prevents
+    // app.close() from resolving until the remote end closes it. The keep-warm
+    // cron fires every 60 s and the Worker proxy maintains a persistent
+    // connection, so without forceCloseConnections the app.close() call in the
+    // shutdown sequence would hang for up to 60 s on every deploy.
+    //
+    // With forceCloseConnections: true, Fastify 4 calls
+    // server.closeAllConnections() (Node 18.2+, available on Node 22 which this
+    // project targets). This is cited from:
+    //   packages/api/node_modules/fastify/fastify.js:455
+    //   packages/api/node_modules/fastify/package.json ("version": "4.29.1")
+    // The default (when omitted) auto-selects 'idle' if available, which closes
+    // only idle keep-alive connections and would still hang on an active one.
+    // 'true' (closeAllConnections) is the correct choice here.
+    forceCloseConnections: true,
+  });
 
   // --- Infrastructure plugins ------------------------------------------------
 
@@ -117,13 +200,19 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   // /auth/*: magic link login, verify, logout, me. No auth required for login/verify.
   if (opts.db) {
-    await app.register(authRoutes, { prefix: "/auth", baseUrl });
+    await app.register(authRoutes, { prefix: "/auth", baseUrl, dashboardUrl });
   }
 
   // /unsubscribe/*: public one-click (RFC 8058) + browser unsubscribe page.
   // No authentication. Token carries tenant + contact by ID; email resolved server-side.
   if (opts.db) {
     await app.register(unsubscribeRoutes, { prefix: "/unsubscribe" });
+  }
+
+  // /invite/*: public invite acceptance flow (interstitial + accept).
+  // No authentication - the invitee is not yet a user.
+  if (opts.db) {
+    await app.register(inviteRoutes, { prefix: "/invite", dashboardUrl });
   }
 
   // /webhooks/resend/:tenantId: Resend provider webhook (bounces, opens, clicks, complaints).
@@ -140,12 +229,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   // This scope uses SESSION COOKIE authentication only.
   //
   // Route registrations are added as tasks are implemented:
-  //   v1.register(contactsRoutes,  { prefix: "/contacts" });   // task 8+
+  //   v1.register(contactsRoutes,  { prefix: "/contacts" });   // contacts ✓
   //   v1.register(flowsRoutes,     { prefix: "/flows" });       // task 10 ✓
   //   v1.register(kbRoutes,        { prefix: "/kb" });          // task 21 ✓
   //   v1.register(messagesRoutes,  { prefix: "/messages" });    // task 40 (partial) ✓
   //   v1.register(templatesRoutes, { prefix: "/templates" });   // task 25 ✓
-   //   v1.register(analyticsRoutes, { prefix: "/analytics" });
+  //   v1.register(analyticsRoutes, { prefix: "/analytics" }); // analytics ✓
   await app.register(
     async (v1) => {
       // Enforce authentication: reject requests without a resolved tenant.
@@ -156,9 +245,24 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         }
       });
 
+      // Role enforcement: every route must declare config.minRole.
+      // Boot fails if any route omits it. Request-time check returns 403
+      // when the user's role does not meet the route's declared minimum.
+      registerRoleEnforcement(v1);
+
       // task 10: flow CRUD (dashboard operators only)
       if (opts.db) {
         await v1.register(flowsRoutes, { prefix: "/flows" });
+      }
+
+      // contacts: People list, person detail, merged timeline
+      if (opts.db) {
+        await v1.register(contactsRoutes, { prefix: "/contacts" });
+      }
+
+      // analytics: lifecycle distribution/movement + sending performance
+      if (opts.db) {
+        await v1.register(analyticsRoutes, { prefix: "/analytics" });
       }
 
       // task 21: knowledge base CRUD (dashboard operators only)
@@ -186,6 +290,42 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         await v1.register(settingsRoutes, { prefix: "/settings" });
       }
 
+      // ingestion: API key management + first-event status for the
+      // Integrate screen (dashboard operators only)
+      if (opts.db) {
+        await v1.register(ingestionRoutes, { prefix: "/ingestion" });
+      }
+
+      // library: install pre-built flows and templates (no LLM required)
+      if (opts.db) {
+        await v1.register(libraryRoutes, { prefix: "/library" });
+      }
+
+      // email-templates: CRUD for email content templates (operator editing)
+      if (opts.db) {
+        await v1.register(emailTemplatesRoutes, { prefix: "/email-templates" });
+      }
+
+      // events: distinct event names for the flow editor autosuggest
+      if (opts.db) {
+        await v1.register(eventsRoutes, { prefix: "/events" });
+      }
+
+      // sent-log: sent-mail log for operators (what went out, to whom, when)
+      if (opts.db) {
+        await v1.register(sentLogRoutes, { prefix: "/sent-log" });
+      }
+
+      // team: invite, list, remove members, change roles (owner-only)
+      if (opts.db) {
+        await v1.register(teamRoutes, { prefix: "/team" });
+      }
+
+      // profile: view/edit own profile, email change
+      if (opts.db) {
+        await v1.register(profileRoutes, { prefix: "/profile" });
+      }
+
       // /v1/diagnostics: authenticated env fingerprint check for `claros doctor`.
       // Session-cookie auth only (same preHandler as all /v1 routes).
       // Returns commit SHA, edition, and key fingerprints from the running container.
@@ -201,9 +341,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   // A request carrying only a session cookie cannot reach these routes (the
   // ingest auth plugin rejects it). A request carrying only a bearer key
   // cannot reach the dashboard routes (the dashboard preHandler rejects it).
+  // The CORS plugin in this scope emits Access-Control headers ONLY for
+  // ingestion routes and never allows credentials (no cookies involved).
   if (opts.db) {
     await app.register(
       async (ingest) => {
+        registerIngestCorsPlugin(ingest);
         registerIngestAuthPlugin(ingest);
         await ingest.register(ingestRoutes);
       },
@@ -211,5 +354,124 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     );
   }
 
+  // --- Static serving + SPA fallback (LAST) ------------------------------------
+  // Registered when opts.serveDashboard is true. In Cloud, app.claros.org
+  // passthrough routing forwards SPA requests to the container, so the container
+  // serves assets just as in self-host mode (Slice 2 deliberate reversal).
+  // Must come after all API routes to avoid shadowing them.
+  if (opts.serveDashboard) {
+    await registerSpaServing(app, opts);
+  }
+
   return app;
+}
+
+/**
+ * Register @fastify/static and the SPA index.html fallback.
+ *
+ * Separated into its own function to keep buildApp readable and to allow
+ * testing the fallback logic in isolation.
+ *
+ * Path resolution strategy:
+ *   1. opts.dashboardDist if provided
+ *   2. CLAROS_DASHBOARD_DIST env var if set
+ *   3. Resolved relative to this file: works under tsx --watch (src/)
+ *      and from compiled output (dist/) because both are one level below
+ *      packages/api/ and apps/dashboard/dist is always at a fixed
+ *      path relative to the monorepo root.
+ *
+ * If the resolved path does not exist on disk, logs a warning and returns
+ * without registering anything. This prevents a crash when starting the
+ * server before running `pnpm --filter @claros/dashboard build`.
+ */
+async function registerSpaServing(
+  app: FastifyInstance,
+  opts: BuildAppOptions,
+): Promise<void> {
+  // Resolve the dist directory and record how it was resolved so the
+  // warning message is immediately actionable without log archaeology.
+  const { distPath, mechanism } = resolvedDashboardDist(opts);
+
+  if (!existsSync(distPath)) {
+    app.log.warn(
+      `[dashboard] serveDashboard=true but dist directory not found. ` +
+      `mechanism=${mechanism} tried=${distPath} -- ` +
+      "If mechanism=auto, verify WORKDIR is the monorepo root or set CLAROS_DASHBOARD_DIST explicitly. " +
+      "Run `pnpm --filter @claros/dashboard build` to create the dist directory. " +
+      "Static serving and SPA fallback are disabled until the path exists.",
+    );
+    return;
+  }
+
+  // Serve hashed assets under /assets with a long immutable max-age.
+  // Assets emitted by Vite contain a content hash in the filename so stale
+  // cache entries are automatically busted on each deploy.
+  await app.register(fastifyStatic, {
+    root: distPath,
+    prefix: "/",
+    // decorateReply defaults to true; reply.sendFile() is used by the
+    // SPA fallback below. Do not set decorateReply: false.
+    setHeaders(res, filePath) {
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        // Hashed filenames - safe to cache for a year.
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      } else {
+        // index.html and other root files - must not be cached.
+        res.setHeader("Cache-Control", "no-store");
+      }
+    },
+  });
+
+  // SPA fallback: serve index.html for any GET or HEAD request whose path
+  // does not begin with an API prefix. Any other method (POST, PUT, etc.)
+  // and any API-prefixed path fall through to Fastify's normal 404.
+  app.setNotFoundHandler((request, reply) => {
+    const method = request.method.toUpperCase();
+
+    // Only GET and HEAD receive the SPA fallback.
+    if (method !== "GET" && method !== "HEAD") {
+      reply.status(404).send({ error: "Not Found" });
+      return;
+    }
+
+    const pathname = request.url.split("?")[0] ?? "/";
+
+    // Paths beginning with an API prefix must not serve index.html.
+    // An unknown /v1/whatever should return a normal 404, not the SPA.
+    const isApiPath = API_PATH_PREFIXES.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    );
+    if (isApiPath) {
+      reply.status(404).send({ error: "Not Found" });
+      return;
+    }
+
+    // Serve index.html for all other GET/HEAD paths (SPA client-side routing).
+    // Set no-store before sendFile so the header is included in the response.
+    reply.header("Cache-Control", "no-store");
+    reply.sendFile("index.html");
+  });
+}
+
+/**
+ * Resolve the absolute path to apps/dashboard/dist and the mechanism used.
+ * Logic described in registerSpaServing above.
+ *
+ * Returns an object so callers can include the mechanism in log messages
+ * without re-deriving it.
+ */
+export function resolvedDashboardDist(opts: BuildAppOptions): { distPath: string; mechanism: "opts" | "env" | "auto" } {
+  if (opts.dashboardDist) return { distPath: opts.dashboardDist, mechanism: "opts" };
+  if (process.env.CLAROS_DASHBOARD_DIST) return { distPath: process.env.CLAROS_DASHBOARD_DIST, mechanism: "env" };
+
+  // Auto: resolve relative to this file. The layout is fixed:
+  //   packages/api/src/app.ts  (tsx)   -> dirname = packages/api/src
+  //   packages/api/dist/app.js (tsc)   -> dirname = packages/api/dist
+  // Three ".." from dirname reaches the monorepo root in both cases:
+  //   packages/api/src  -> .. -> packages/api -> .. -> packages -> .. -> <root>
+  //   packages/api/dist -> .. -> packages/api -> .. -> packages -> .. -> <root>
+  // apps/dashboard/dist is then a fixed path from that root.
+  const __filename = fileURLToPath(import.meta.url);
+  const monoRoot = path.resolve(path.dirname(__filename), "../../..");
+  return { distPath: path.join(monoRoot, "apps", "dashboard", "dist"), mechanism: "auto" };
 }

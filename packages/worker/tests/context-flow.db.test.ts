@@ -97,6 +97,8 @@ beforeEach(async () => {
   await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id = ${otherTenantId}`);
   await db.execute(sql`DELETE FROM flows WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`DELETE FROM flows WHERE tenant_id = ${otherTenantId}`);
+  // Reset tenant settings (brain_context tests mutate it).
+  await db.execute(sql`UPDATE tenants SET settings = NULL WHERE id IN (${testTenantId}, ${otherTenantId})`);
 });
 
 afterAll(async () => {
@@ -421,6 +423,67 @@ describe("buildFlowStepSection", () => {
 
       expect(result.productName).toBe("Other Tenant");
       expect(result.brainInstruction).toBe("Other tenant step.");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // brain_context: resolved from tenants.settings.brain_context
+  // -------------------------------------------------------------------------
+
+  describe("brain_context - resolved from tenant settings", () => {
+    it("returns brainContext when settings.brain_context is set", async () => {
+      if (!dbAvailable) return;
+
+      await db.execute(sql`
+        UPDATE tenants
+        SET settings = '{"brain_context":"Acme is a kanban tool. No Gantt charts."}'::jsonb
+        WHERE id = ${testTenantId}
+      `);
+      const flowId = await insertFlow({ compiledPlan: null });
+
+      const result = await buildFlowStepSection(db, testTenantId, flowId, 1);
+
+      expect(result.brainContext).toBe("Acme is a kanban tool. No Gantt charts.");
+    });
+
+    it("returns brainContext=undefined when the tenant has no settings", async () => {
+      if (!dbAvailable) return;
+
+      const flowId = await insertFlow({ compiledPlan: null });
+
+      const result = await buildFlowStepSection(db, testTenantId, flowId, 1);
+
+      expect(result.brainContext).toBeUndefined();
+    });
+
+    it("returns brainContext=undefined when brain_context is not a string (corrupt settings)", async () => {
+      if (!dbAvailable) return;
+
+      await db.execute(sql`
+        UPDATE tenants
+        SET settings = '{"brain_context":42}'::jsonb
+        WHERE id = ${testTenantId}
+      `);
+      const flowId = await insertFlow({ compiledPlan: null });
+
+      const result = await buildFlowStepSection(db, testTenantId, flowId, 1);
+
+      expect(result.brainContext).toBeUndefined();
+    });
+
+    it("does not leak another tenant's brain_context", async () => {
+      if (!dbAvailable) return;
+
+      await db.execute(sql`
+        UPDATE tenants
+        SET settings = '{"brain_context":"Other tenant context."}'::jsonb
+        WHERE id = ${otherTenantId}
+      `);
+      const flowId = await insertFlow({ compiledPlan: null });
+
+      const result = await buildFlowStepSection(db, testTenantId, flowId, 1);
+
+      expect(result.brainContext).toBeUndefined();
     });
   });
 

@@ -10,9 +10,11 @@
  * - In production: malformed URL is rejected
  * - In production: valid https URL is accepted
  * - startup behavior: resolveBaseUrl strips trailing slash and falls back to localhost
+ * - buildComplianceOutput: unsubscribe URL uses baseUrl, not dashboardUrl
+ *   (regression guard: BASE_URL must keep its meaning for unsubscribe links)
  */
 import { describe, it, expect } from "vitest";
-import { checkBaseUrl, resolveBaseUrl } from "../src/compliance.js";
+import { checkBaseUrl, resolveBaseUrl, buildComplianceOutput } from "../src/compliance.js";
 
 describe("checkBaseUrl", () => {
   describe("outside production (isProduction=false)", () => {
@@ -116,5 +118,41 @@ describe("resolveBaseUrl", () => {
 
   it("uses override when provided", () => {
     expect(resolveBaseUrl("https://override.example.com")).toBe("https://override.example.com");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildComplianceOutput: baseUrl is used for unsubscribe URLs, not dashboardUrl
+// ---------------------------------------------------------------------------
+// Regression guard: Decision 1 says BASE_URL keeps its current meaning for
+// unsubscribe headers and footer links. buildComplianceOutput takes baseUrl
+// directly (packages/worker/src/compliance.ts buildComplianceOutput).
+// This test proves the unsubscribe URL uses the value passed as baseUrl,
+// which the drain resolves from BASE_URL via resolveBaseUrl(), not from
+// DASHBOARD_URL. The two variables must never be confused in this path.
+
+describe("buildComplianceOutput: unsubscribe URLs use baseUrl, not dashboardUrl", () => {
+  const BASE_URL = "https://api.example.com";
+  const DASH_URL = "https://dash.example.com";
+  const SIGNING_KEY = "a".repeat(64); // 64-char hex key for testing
+
+  it("unsubscribe URL in header contains baseUrl, not dashboardUrl", () => {
+    const out = buildComplianceOutput({
+      tenantId: "00000000-0000-0000-0000-000000000001",
+      messageId: "00000000-0000-0000-0000-000000000002",
+      postalAddress: "123 Test St",
+      baseUrl: BASE_URL,
+      signingKey: SIGNING_KEY,
+    });
+    // The List-Unsubscribe header and footer must use BASE_URL, not DASH_URL.
+    // This test would fail if baseUrl were swapped for dashboardUrl in compliance.ts.
+    expect(out.listUnsubscribeHeader).toContain(BASE_URL);
+    expect(out.listUnsubscribeHeader).not.toContain(DASH_URL);
+    expect(out.unsubscribeUrl).toContain(BASE_URL);
+    expect(out.unsubscribeUrl).not.toContain(DASH_URL);
+    expect(out.htmlFooter).toContain(BASE_URL);
+    expect(out.htmlFooter).not.toContain(DASH_URL);
+    expect(out.textFooter).toContain(BASE_URL);
+    expect(out.textFooter).not.toContain(DASH_URL);
   });
 });

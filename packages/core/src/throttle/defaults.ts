@@ -24,7 +24,6 @@ export const throttleConfigSchema = z.object({
   send_window_timezone: z.enum(["contact_local", "tenant_fixed"]),
   tenant_timezone: z.string().optional(),
   batch_size_per_tick: z.number().int().min(1),
-  drain_interval_minutes: z.number().int().min(1),
   critical_bypass_throttle: z.boolean(),
 });
 
@@ -44,7 +43,6 @@ export const THROTTLE_DEFAULTS: ThrottleConfig = {
   send_window_timezone: "contact_local",
   tenant_timezone: undefined,
   batch_size_per_tick: 10,
-  drain_interval_minutes: 15,
   critical_bypass_throttle: true,
 };
 
@@ -89,7 +87,6 @@ export function resolveThrottleConfig(raw: unknown): ThrottleConfig {
   intField("max_emails_per_user_per_week", 0);
   numField("min_interval_between_emails_hours", 0);
   intField("batch_size_per_tick", 1);
-  intField("drain_interval_minutes", 1);
 
   // send_window_start / end: HH:MM format
   if (typeof input.send_window_start === "string" && /^\d{2}:\d{2}$/.test(input.send_window_start)) {

@@ -19,10 +19,9 @@
  * [impl] Brain context: stored at the tenant level in settings.brain_context
  * (no new column - settings is already a JSONB field). It is product-level
  * context, so duplicating it into every flow prompt_source would make it
- * uneditable in one place. Nothing in the current pipeline consumes
- * settings.brain_context yet; a BACKLOG entry ("brain_context wiring")
- * tracks the change to the context assembler required to inject it into the
- * draft prompt.
+ * uneditable in one place. The context assembler injects it into the
+ * decide/draft prompts as the PRODUCT CONTEXT section (context-flow.ts);
+ * the operator edits it via PATCH /v1/settings/tenant.
  *
  * [impl] Throttle fields sourced from the spec:
  *   max_emails_per_user_per_week and min_interval_between_emails_hours.
@@ -120,8 +119,9 @@ export interface BusinessModelTemplate {
   >;
   /**
    * Brain context paragraph written verbatim from the spec.
-   * Stored in tenants.settings.brain_context. Not yet consumed by the
-   * context assembler (see BACKLOG "brain_context wiring").
+   * Stored in tenants.settings.brain_context. Consumed by the context
+   * assembler (context-flow.ts) as the PRODUCT CONTEXT section of the
+   * decide/draft prompts; operator-editable via PATCH /v1/settings/tenant.
    */
   brain_context: string;
   /** Suggested flows to create when the template is applied. */

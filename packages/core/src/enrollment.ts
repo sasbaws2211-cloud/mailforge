@@ -7,6 +7,7 @@
  * Mirror side: PUBLIC (packages/core is mirrored).
  */
 
+import { createHash } from "node:crypto";
 import type { FlowTriggerType, ReentryPolicy, FlowClass } from "./flow/index.js";
 
 // ---------------------------------------------------------------------------
@@ -207,26 +208,29 @@ export function contactEnrollmentLockKey(contactId: string): bigint {
  *
  * Namespace separation from enrollment locks: enrollment uses
  * 0x636C6172 XOR contactHex[0..15]; dedup uses 0x64656475 XOR
- * (tenantHex[0..7] + msgHex[0..8]). For a collision to occur between
- * the two namespaces, (tenantHex + msgHex) XOR 0x64656475 would have to
- * equal contactHex XOR 0x636C6172 - with UUIDv4 randomness this is
- * ~1 in 2^60, and even if it occurs the effect is harmless serialization
- * of unrelated operations (enrollment vs dedup), never data corruption.
+ * sha256("tenantId:messageId")[0..15]. A cross-namespace collision is
+ * ~1 in 2^60 with random inputs, and even if it occurs the effect is
+ * harmless serialization of unrelated operations (enrollment vs dedup),
+ * never data corruption.
  */
 const DEDUP_LOCK_NAMESPACE = BigInt("0x64656475");
 
 /**
  * Compute an advisory lock key for event dedup.
  *
- * Combines the first 7 hex chars of tenant_id with the first 8 hex chars of
- * messageId (15 hex total, fits in int8), then XORs with the dedup namespace.
+ * Derivation: SHA-256 of "tenantId:messageId", first 15 hex digits, XOR the
+ * dedup namespace. Hashing (rather than slicing raw characters, as an earlier
+ * version did) accepts arbitrary messageIds: the raw-slice version threw on
+ * any non-hex character, turning a client-supplied messageId like "m-1" or
+ * "order-55-retry" into a 500 on the ingest hot path. Lock keys are
+ * transaction-scoped and never persisted, so the derivation can change
+ * between deploys without consequence.
  *
  * Cost: one extra round trip per event that carries a messageId, none for
  * events without one.
  */
 export function dedupLockKey(tenantId: string, messageId: string): bigint {
-  const tenantHex = tenantId.replace(/-/g, "").slice(0, 7);
-  const msgHex = messageId.replace(/-/g, "").slice(0, 8);
-  const combined = BigInt("0x" + tenantHex + msgHex); // 15 hex digits fits in int8
+  const hash = createHash("sha256").update(`${tenantId}:${messageId}`).digest("hex");
+  const combined = BigInt("0x" + hash.slice(0, 15)); // 15 hex digits fits in int8
   return combined ^ DEDUP_LOCK_NAMESPACE;
 }

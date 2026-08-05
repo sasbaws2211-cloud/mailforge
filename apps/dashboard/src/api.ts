@@ -1,0 +1,1614 @@
+/**
+ * API client helpers.
+ *
+ * Thin wrappers over fetch. All paths are relative so they work through
+ * Vite's dev proxy and through the Fastify server when the SPA is served
+ * as static files.
+ *
+ * Session expiry: apiFetch() handles a 401 from any authenticated endpoint
+ * as an expired session: it flags the login page (sessionStorage) and hard
+ * navigates to /login. A hard navigation is used instead of clearing the me
+ * query cache because TanStack Query v5 does not propagate removeQueries to
+ * active observers: useMe() in App.tsx keeps its stale data and no redirect
+ * fires (verified in a browser run). The hard reload matches the logout
+ * path and cannot leave stale state behind.
+ * This path must not trigger for /auth/me itself - fetchMe() does not go
+ * through apiFetch().
+ *
+ * Mirror side: PUBLIC (apps/dashboard is mirrored).
+ */
+
+export interface MeResponse {
+  user: {
+    id: string;
+    email: string;
+    name: string | null;
+    role: string;
+    tenantId: string;
+  };
+}
+
+export interface LoginResponse {
+  message: string;
+}
+
+// ---------------------------------------------------------------------------
+// Shared authenticated fetch helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch wrapper for authenticated endpoints (anything under /v1).
+ *
+ * On a 401 response the session is gone: flag the login page so it can say
+ * why, then hard navigate there. Do not use this for /auth/me. A 401 from
+ * /auth/me is the normal unauthenticated state, not session expiry;
+ * fetchMe() handles it directly.
+ */
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, { credentials: "include", ...init });
+  if (res.status === 401) {
+    // Tell the login page WHY the user is landing there. sessionStorage
+    // survives the navigation and dies with the tab; LoginPage clears it on
+    // read so a later manual visit to /login shows no stale notice.
+    try {
+      sessionStorage.setItem("claros-session-expired", "1");
+    } catch {
+      // storage unavailable; the redirect still works, the notice is lost
+    }
+    window.location.assign("/login");
+  }
+  return res;
+}
+
+// ---------------------------------------------------------------------------
+// Auth endpoints (do NOT use apiFetch - these are pre-auth paths)
+// ---------------------------------------------------------------------------
+
+/** GET /auth/me - returns the signed-in user or throws on 401. */
+export async function fetchMe(): Promise<MeResponse> {
+  const res = await fetch("/auth/me", { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`/auth/me returned ${res.status}`);
+  }
+  return res.json() as Promise<MeResponse>;
+}
+
+/** POST /auth/login - request a magic link. */
+export async function postLogin(email: string): Promise<LoginResponse> {
+  const res = await fetch("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string };
+    throw new Error(body.message ?? `Login failed (${res.status})`);
+  }
+  return res.json() as Promise<LoginResponse>;
+}
+
+/** POST /auth/logout - destroy the current session. */
+export async function postLogout(): Promise<void> {
+  await fetch("/auth/logout", {
+    method: "POST",
+    credentials: "include",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Flows
+// ---------------------------------------------------------------------------
+
+export interface Flow {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string | null;
+  priority: number;
+  trigger_type: "lifecycle_transition" | "event" | "segment" | "manual";
+  trigger_config: Record<string, unknown>;
+  steps: unknown;
+  source: "manual" | "library" | "brain_suggested";
+  content_mode: "ai_drafted" | "fixed_content";
+  status: "draft" | "active" | "paused" | "archived";
+  approval_mode: "require" | "auto";
+  flow_class: "critical" | "nurture";
+  reentry_policy: "once" | "cooldown" | "every_time";
+  reentry_cooldown_days: number;
+  prompt_source: string | null;
+  compiled_plan: Record<string, unknown> | null;
+  compiled_at: string | null;
+  compile_status: "pending" | "ready" | "failed" | null;
+  compile_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FlowsResponse {
+  flows: Flow[];
+}
+
+/** GET /v1/flows - list flows for the current tenant. */
+export async function fetchFlows(): Promise<FlowsResponse> {
+  const res = await apiFetch("/v1/flows");
+  if (!res.ok) {
+    throw new Error(`/v1/flows returned ${res.status}`);
+  }
+  return res.json() as Promise<FlowsResponse>;
+}
+
+/** GET /v1/flows/:id - fetch a single flow. */
+export async function fetchFlow(id: string): Promise<Flow> {
+  const res = await apiFetch(`/v1/flows/${id}`);
+  if (!res.ok) {
+    throw new Error(`/v1/flows/${id} returned ${res.status}`);
+  }
+  return res.json() as Promise<Flow>;
+}
+
+/**
+ * GET /v1/events/names - distinct recent event names for the event-trigger
+ * autosuggest. Advisory only: a failure yields an empty list, never an error.
+ */
+export async function fetchEventNames(): Promise<string[]> {
+  const res = await apiFetch("/v1/events/names");
+  if (!res.ok) {
+    return [];
+  }
+  const body = (await res.json()) as { event_names?: unknown };
+  return Array.isArray(body.event_names)
+    ? body.event_names.filter((n): n is string => typeof n === "string")
+    : [];
+}
+
+// ---------------------------------------------------------------------------
+// Flow mutation types
+// ---------------------------------------------------------------------------
+
+export interface FlowFieldError {
+  path: string;
+  message: string;
+}
+
+export interface FlowValidationError {
+  error: "Validation failed";
+  issues: FlowFieldError[];
+}
+
+export type FlowApiError =
+  | { kind: "validation"; issues: FlowFieldError[] }
+  | { kind: "unprocessable"; message: string }
+  | { kind: "unknown"; message: string };
+
+export interface CreateFlowInput {
+  name: string;
+  trigger_type: Flow["trigger_type"];
+  trigger_config: Record<string, unknown>;
+  prompt_source?: string;
+  content_mode?: Flow["content_mode"];
+  steps: [];
+  approval_mode?: Flow["approval_mode"];
+}
+
+export interface UpdateFlowInput {
+  name?: string;
+  trigger_type?: Flow["trigger_type"];
+  trigger_config?: Record<string, unknown>;
+  prompt_source?: string;
+  content_mode?: Flow["content_mode"];
+  status?: Flow["status"];
+  approval_mode?: Flow["approval_mode"];
+}
+
+function parseFlowError(status: number, body: unknown): FlowApiError {
+  if (
+    status === 400 &&
+    body !== null &&
+    typeof body === "object" &&
+    "issues" in body &&
+    Array.isArray((body as FlowValidationError).issues)
+  ) {
+    return { kind: "validation", issues: (body as FlowValidationError).issues };
+  }
+  if (status === 422 && body !== null && typeof body === "object" && "error" in body) {
+    return { kind: "unprocessable", message: String((body as { error: string }).error) };
+  }
+  const msg = body !== null && typeof body === "object" && "error" in body
+    ? String((body as { error: string }).error)
+    : `HTTP ${status}`;
+  return { kind: "unknown", message: msg };
+}
+
+/** POST /v1/flows - create a new flow. Throws FlowApiError on failure. */
+export async function createFlow(input: CreateFlowInput): Promise<Flow> {
+  const res = await apiFetch("/v1/flows", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body as Flow;
+}
+
+/** PATCH /v1/flows/:id - update an existing flow. Throws FlowApiError on failure. */
+export async function updateFlow(id: string, input: UpdateFlowInput): Promise<Flow> {
+  const res = await apiFetch(`/v1/flows/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body as Flow;
+}
+
+export interface CompileFlowResponse {
+  message: string;
+  flow_id: string;
+  compile_status: "pending";
+}
+
+/**
+ * POST /v1/flows/:id/compile - enqueue a compile job. Returns 202 on success.
+ * Throws FlowApiError on 422 (archived, no prompt_source, no LLM config) or other failures.
+ */
+export async function compileFlow(id: string): Promise<CompileFlowResponse> {
+  const res = await apiFetch(`/v1/flows/${id}/compile`, { method: "POST" });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body as CompileFlowResponse;
+}
+
+/**
+ * DELETE /v1/flows/:id - archive a flow. This is NOT a physical delete:
+ * the server sets status = 'archived' and preserves the compiled plan.
+ * Archived is terminal; there is no way back. Idempotent.
+ */
+export async function archiveFlow(id: string): Promise<Flow> {
+  const res = await apiFetch(`/v1/flows/${id}`, { method: "DELETE" });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body as Flow;
+}
+
+/**
+ * POST /v1/flows/:id/plan - save a hand-authored compiled plan.
+ * Only works for fixed_content flows. The plan is validated server-side.
+ */
+export async function saveFlowPlan(
+  id: string,
+  plan: Record<string, unknown>,
+): Promise<Flow> {
+  const res = await apiFetch(`/v1/flows/${id}/plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(plan),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body as Flow;
+}
+
+export interface DraftStepInput {
+  step_order: number;
+  subject?: string;
+  body_html?: string;
+  context?: string;
+}
+
+export interface DraftStepResult {
+  subject: string;
+  body_html: string;
+}
+
+/**
+ * POST /v1/flows/:id/draft-step - ask the AI to draft copy for a step.
+ * Returns subject + body_html for the person to edit.
+ * Requires an active LLM configuration.
+ */
+export async function draftFlowStep(
+  id: string,
+  input: DraftStepInput,
+): Promise<DraftStepResult> {
+  const res = await apiFetch(`/v1/flows/${id}/draft-step`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body as DraftStepResult;
+}
+
+// ---------------------------------------------------------------------------
+// Messages (approval queue)
+// ---------------------------------------------------------------------------
+
+export interface Message {
+  id: string;
+  tenant_id: string;
+  contact_id: string;
+  flow_id: string;
+  flow_step_order: number | null;
+  status: string;
+  subject: string | null;
+  body_html: string | null;
+  body_text: string | null;
+  brain_reasoning: string | null;
+  brain_action_type: string | null;
+  created_at: string;
+  updated_at: string;
+  contact: {
+    email: string | null;
+    name: string | null;
+    external_id: string | null;
+  };
+}
+
+export interface MessagesPage {
+  messages: Message[];
+  next_cursor: string | null;
+}
+
+/** GET /v1/messages - cursor-paginated list, pending_approval by default. */
+export async function fetchMessages(after?: string, status?: string): Promise<MessagesPage> {
+  const params = new URLSearchParams();
+  if (after) params.set("after", after);
+  if (status) params.set("status", status);
+  const qs = params.size > 0 ? `?${params.toString()}` : "";
+  const res = await apiFetch(`/v1/messages${qs}`);
+  if (!res.ok) {
+    throw new Error(`/v1/messages returned ${res.status}`);
+  }
+  return res.json() as Promise<MessagesPage>;
+}
+
+/** GET /v1/messages?status=failed - generation/send failures needing attention. */
+export async function fetchFailedMessages(): Promise<MessagesPage> {
+  return fetchMessages(undefined, "failed");
+}
+
+/** POST /v1/messages/:id/retry - re-queue a generation-failed message. */
+export async function retryMessage(id: string): Promise<void> {
+  const res = await apiFetch(`/v1/messages/${id}/retry`, { method: "POST" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `Retry failed (${res.status})`);
+  }
+}
+
+export interface MessageActionError {
+  status: number;
+  message: string;
+  /** Present on 409: the status the message is actually in now. */
+  currentStatus?: string;
+}
+
+async function messageAction(
+  id: string,
+  action: "approve" | "reject",
+): Promise<void> {
+  const res = await apiFetch(`/v1/messages/${id}/${action}`, { method: "POST" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as {
+      error?: string;
+      status?: string;
+    } | null;
+    const err: MessageActionError = {
+      status: res.status,
+      message: body?.error ?? `HTTP ${res.status}`,
+      currentStatus: body?.status,
+    };
+    throw err;
+  }
+}
+
+/** POST /v1/messages/:id/approve - CAS pending_approval -> approved. */
+export async function approveMessage(id: string): Promise<void> {
+  return messageAction(id, "approve");
+}
+
+/** POST /v1/messages/:id/reject - CAS pending_approval -> rejected (terminal). */
+export async function rejectMessage(id: string): Promise<void> {
+  return messageAction(id, "reject");
+}
+
+export interface BulkActionResult {
+  /** Ids the server actually transitioned. */
+  acted: string[];
+  /** Ids the server left untouched (wrong status or foreign). */
+  skipped: string[];
+}
+
+async function bulkMessageAction(
+  ids: string[],
+  action: "approve" | "reject",
+): Promise<BulkActionResult> {
+  const res = await apiFetch(`/v1/messages/bulk/${action}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `Bulk ${action} failed (${res.status})`);
+  }
+  const body = (await res.json()) as Record<string, string[]>;
+  return {
+    acted: body[action === "approve" ? "approved" : "rejected"] ?? [],
+    skipped: body.skipped ?? [],
+  };
+}
+
+/** POST /v1/messages/bulk/approve - CAS pending_approval -> approved for many. */
+export async function bulkApproveMessages(ids: string[]): Promise<BulkActionResult> {
+  return bulkMessageAction(ids, "approve");
+}
+
+/** POST /v1/messages/bulk/reject - CAS pending_approval -> rejected for many. */
+export async function bulkRejectMessages(ids: string[]): Promise<BulkActionResult> {
+  return bulkMessageAction(ids, "reject");
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge base
+// ---------------------------------------------------------------------------
+
+export interface KbEntryPreview {
+  id: string;
+  tenant_id: string;
+  title: string;
+  content_preview: string;
+  content_type: "markdown" | "html" | "text";
+  source: "manual" | "crawl" | "upload";
+  source_url: string | null;
+  tags: string[];
+  embedding_status: "pending" | "failed" | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KbEntry extends Omit<KbEntryPreview, "content_preview"> {
+  content: string;
+  embedding_error: string | null;
+}
+
+export interface KbListPage {
+  entries: KbEntryPreview[];
+  next_cursor: string | null;
+}
+
+export interface KbEntryInput {
+  title: string;
+  content: string;
+  content_type?: KbEntry["content_type"];
+  source?: KbEntry["source"];
+  source_url?: string;
+  tags?: string[];
+  is_active?: boolean;
+}
+
+/** GET /v1/kb - cursor-paginated list of previews. */
+export async function fetchKbEntries(
+  after?: string,
+  includeInactive = false,
+): Promise<KbListPage> {
+  const params = new URLSearchParams();
+  if (after) params.set("after", after);
+  if (includeInactive) params.set("include_inactive", "true");
+  const qs = params.size > 0 ? `?${params.toString()}` : "";
+  const res = await apiFetch(`/v1/kb${qs}`);
+  if (!res.ok) {
+    throw new Error(`/v1/kb returned ${res.status}`);
+  }
+  return res.json() as Promise<KbListPage>;
+}
+
+/** GET /v1/kb/:id - full entry. */
+export async function fetchKbEntry(id: string): Promise<KbEntry> {
+  const res = await apiFetch(`/v1/kb/${id}`);
+  if (!res.ok) {
+    throw new Error(`/v1/kb/${id} returned ${res.status}`);
+  }
+  return res.json() as Promise<KbEntry>;
+}
+
+/** POST /v1/kb - create an entry. Throws FlowApiError on 400. */
+export async function createKbEntry(input: KbEntryInput): Promise<KbEntry> {
+  const res = await apiFetch("/v1/kb", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body as KbEntry;
+}
+
+/** PATCH /v1/kb/:id - partial update. Throws FlowApiError on 400. */
+export async function updateKbEntry(
+  id: string,
+  input: Partial<KbEntryInput>,
+): Promise<KbEntry> {
+  const res = await apiFetch(`/v1/kb/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body as KbEntry;
+}
+
+/** DELETE /v1/kb/:id - hard delete (physical removal). */
+export async function deleteKbEntry(id: string): Promise<void> {
+  const res = await apiFetch(`/v1/kb/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw parseFlowError(res.status, body);
+  }
+}
+
+export interface ReembedResponse {
+  enqueued: number;
+  remaining: number;
+  total_qualifying: number;
+}
+
+/** POST /v1/kb/re-embed - enqueue embedding jobs for failed/orphaned entries. */
+export async function reembedKb(): Promise<ReembedResponse> {
+  const res = await apiFetch("/v1/kb/re-embed", { method: "POST" });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body as ReembedResponse;
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+export interface TransportConfig {
+  id: string;
+  provider: string;
+  from_email: string;
+  from_name: string | null;
+  daily_limit: number | null;
+  dkim_verified: boolean;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface LlmConfig {
+  id: string;
+  provider: string;
+  model: string | null;
+  base_url: string | null;
+  embedding_model: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface BrandSettingsData {
+  brand_name: string | null;
+  logo_url: string | null;
+  logo_height: number | null;
+  accent_color: string | null;
+  footer_text: string | null;
+  reply_to: string | null;
+}
+
+export interface TenantSettings {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  postal_address: string | null;
+  brand: BrandSettingsData;
+  created_at: string;
+}
+
+export interface TransportInput {
+  provider: string;
+  from_email: string;
+  from_name?: string;
+  // Resend fields
+  api_key?: string;
+  webhook_secret?: string;
+  // SMTP fields
+  host?: string;
+  port?: number;
+  secure?: boolean;
+  username?: string;
+  password?: string;
+  reject_unauthorized?: boolean;
+  // Shared
+  daily_limit?: number;
+}
+
+export interface LlmInput {
+  provider: string;
+  api_key?: string;
+  base_url?: string;
+  model?: string;
+  embedding_model?: string;
+}
+
+export interface LlmVerification {
+  ok: boolean;
+  kind?: "http" | "timeout" | "unreachable";
+  status?: number | null;
+  detail?: string;
+}
+
+/** GET /v1/settings/transport - active config, never credentials. */
+export async function fetchTransport(): Promise<{ transport: TransportConfig | null }> {
+  const res = await apiFetch("/v1/settings/transport");
+  if (!res.ok) {
+    throw new Error(`/v1/settings/transport returned ${res.status}`);
+  }
+  return res.json();
+}
+
+/** PUT /v1/settings/transport - write/replace (encrypts server-side). */
+export async function putTransport(
+  input: TransportInput,
+): Promise<{ transport: TransportConfig }> {
+  const res = await apiFetch("/v1/settings/transport", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body;
+}
+
+/** GET /v1/settings/llm - active config, never credentials. */
+export async function fetchLlm(): Promise<{ llm: LlmConfig | null }> {
+  const res = await apiFetch("/v1/settings/llm");
+  if (!res.ok) {
+    throw new Error(`/v1/settings/llm returned ${res.status}`);
+  }
+  return res.json();
+}
+
+/** PUT /v1/settings/llm - verify the key, then write/replace (encrypts server-side). */
+export async function putLlm(
+  input: LlmInput,
+): Promise<{ llm: LlmConfig; verification: LlmVerification }> {
+  const res = await apiFetch("/v1/settings/llm", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body;
+}
+
+/** GET /v1/settings/tenant - tenant metadata and postal address. */
+export async function fetchTenant(): Promise<{ tenant: TenantSettings }> {
+  const res = await apiFetch("/v1/settings/tenant");
+  if (!res.ok) {
+    throw new Error(`/v1/settings/tenant returned ${res.status}`);
+  }
+  return res.json();
+}
+
+/** PATCH /v1/settings/tenant - update postal address and/or brand settings. */
+export async function patchTenant(payload: {
+  postal_address?: string;
+  brand?: Partial<BrandSettingsData>;
+}): Promise<{ tenant: Pick<TenantSettings, "postal_address" | "brand"> }> {
+  const res = await apiFetch("/v1/settings/tenant", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body;
+}
+
+/** POST /v1/settings/test-email - send a test email using current brand settings. */
+export async function sendTestEmail(to: string): Promise<{ sent: boolean; to: string }> {
+  const res = await apiFetch("/v1/settings/test-email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ to }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const msg = body && typeof body === "object" && "error" in body
+      ? String(body.error)
+      : `Send failed (${res.status})`;
+    throw new Error(msg);
+  }
+  return body;
+}
+
+// ---------------------------------------------------------------------------
+// Throttle settings
+// ---------------------------------------------------------------------------
+
+export interface ThrottleConfig {
+  max_emails_per_user_per_day: number;
+  max_emails_per_user_per_week: number;
+  min_interval_between_emails_hours: number;
+  send_window_start: string;
+  send_window_end: string;
+  send_window_days: Array<"mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun">;
+  send_window_timezone: "contact_local" | "tenant_fixed";
+  tenant_timezone: string | null;
+  batch_size_per_tick: number;
+  critical_bypass_throttle: boolean;
+}
+
+export interface ThrottleInput {
+  max_emails_per_user_per_day?: number;
+  max_emails_per_user_per_week?: number;
+  min_interval_between_emails_hours?: number;
+  send_window_start?: string;
+  send_window_end?: string;
+  send_window_days?: Array<"mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun">;
+  send_window_timezone?: "contact_local" | "tenant_fixed";
+  tenant_timezone?: string;
+  batch_size_per_tick?: number;
+}
+
+/** GET /v1/settings/throttle - current throttle configuration. */
+export async function fetchThrottle(): Promise<{ throttle: ThrottleConfig }> {
+  const res = await apiFetch("/v1/settings/throttle");
+  if (!res.ok) {
+    throw new Error(`/v1/settings/throttle returned ${res.status}`);
+  }
+  return res.json();
+}
+
+/** PUT /v1/settings/throttle - update throttle configuration. */
+export async function putThrottle(input: ThrottleInput): Promise<{ throttle: ThrottleConfig }> {
+  const res = await apiFetch("/v1/settings/throttle", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const msg = body && typeof body === "object" && "error" in body
+      ? String(body.error)
+      : `Update failed (${res.status})`;
+    throw new Error(msg);
+  }
+  return body;
+}
+
+// ---------------------------------------------------------------------------
+// Business model templates
+// ---------------------------------------------------------------------------
+
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  description: string;
+  schema_version: number;
+  flow_count: number;
+}
+
+export interface ApplyTemplateResponse {
+  business_model: string;
+  template_name: string;
+  flows_created: Array<{ id: string; name: string; status: string }>;
+}
+
+/** GET /v1/templates - list available business model templates. */
+export async function fetchTemplates(): Promise<{ templates: TemplateSummary[] }> {
+  const res = await apiFetch("/v1/templates");
+  if (!res.ok) {
+    throw new Error(`/v1/templates returned ${res.status}`);
+  }
+  return res.json();
+}
+
+/** POST /v1/templates/:id/apply - apply a template. 409 if already applied. */
+export async function applyTemplate(id: string): Promise<ApplyTemplateResponse> {
+  const res = await apiFetch(`/v1/templates/${id}/apply`, { method: "POST" });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body as ApplyTemplateResponse;
+}
+
+// ---------------------------------------------------------------------------
+// Contacts (People)
+// ---------------------------------------------------------------------------
+
+export interface Contact {
+  id: string;
+  tenant_id: string;
+  external_id: string;
+  email: string | null;
+  name: string | null;
+  company: string | null;
+  lifecycle_state:
+    | "signed_up"
+    | "activated"
+    | "engaged"
+    | "at_risk"
+    | "dormant"
+    | "churned"
+    | "resurrected";
+  engagement_depth: "power" | "regular" | "casual" | "minimal" | null;
+  payment_status: string | null;
+  last_seen_at: string | null;
+  created_at: string;
+}
+
+export interface ContactDetail extends Contact {
+  properties: Record<string, unknown> | null;
+  first_seen_at: string | null;
+  activated_at: string | null;
+}
+
+export interface Membership {
+  id: string;
+  flow_id: string;
+  flow_name: string;
+  status: string;
+  current_step: number;
+  entered_at: string;
+  completed_at: string | null;
+  exited_at: string | null;
+  exit_reason: string | null;
+}
+
+export interface Suppression {
+  id: string;
+  reason: string;
+  source: string | null;
+  created_at: string;
+}
+
+export interface ContactResponse {
+  contact: ContactDetail;
+  memberships: Membership[];
+  suppression: Suppression | null;
+}
+
+export interface ContactsPage {
+  contacts: Contact[];
+  next_cursor: string | null;
+}
+
+export interface ContactFilters {
+  lifecycle_state?: Contact["lifecycle_state"];
+  engagement_depth?: "power" | "regular" | "casual" | "minimal";
+  tenure_bucket?: "new" | "growing" | "established" | "loyal";
+  recency_bucket?: "active" | "cooling" | "idle" | "dormant";
+  search?: string;
+}
+
+/** GET /v1/contacts - cursor-paginated list with search and filters. */
+export async function fetchContacts(
+  after: string | undefined,
+  filters: ContactFilters,
+): Promise<ContactsPage> {
+  const params = new URLSearchParams();
+  if (after) params.set("after", after);
+  if (filters.lifecycle_state) params.set("lifecycle_state", filters.lifecycle_state);
+  if (filters.engagement_depth) params.set("engagement_depth", filters.engagement_depth);
+  if (filters.tenure_bucket) params.set("tenure_bucket", filters.tenure_bucket);
+  if (filters.recency_bucket) params.set("recency_bucket", filters.recency_bucket);
+  if (filters.search) params.set("search", filters.search);
+  const qs = params.size > 0 ? `?${params.toString()}` : "";
+  const res = await apiFetch(`/v1/contacts${qs}`);
+  if (!res.ok) {
+    throw new Error(`/v1/contacts returned ${res.status}`);
+  }
+  return res.json() as Promise<ContactsPage>;
+}
+
+/** GET /v1/contacts/:id - contact, memberships, suppression. */
+export async function fetchContact(id: string): Promise<ContactResponse> {
+  const res = await apiFetch(`/v1/contacts/${id}`);
+  if (!res.ok) {
+    throw new Error(`/v1/contacts/${id} returned ${res.status}`);
+  }
+  return res.json() as Promise<ContactResponse>;
+}
+
+export type TimelineItem =
+  | {
+      kind: "event";
+      id: string;
+      occurred_at: string;
+      event_type: string;
+      event_name: string | null;
+      properties: Record<string, unknown> | null;
+      /** Client context captured at ingest (device, browser, ip, etc). */
+      context: Record<string, unknown> | null;
+    }
+  | {
+      kind: "transition";
+      id: string;
+      occurred_at: string;
+      from_state: string;
+      to_state: string;
+      /** What caused the transition (e.g. { trigger: "scan" }). */
+      metadata: Record<string, unknown> | null;
+    }
+  | {
+      kind: "message";
+      id: string;
+      occurred_at: string;
+      subject: string | null;
+      status: string;
+      feedback: string | null;
+      flow_id: string;
+      flow_name: string;
+      flow_step_order: number | null;
+    };
+
+export interface TimelinePage {
+  items: TimelineItem[];
+  next_cursor: string | null;
+}
+
+/** GET /v1/contacts/:id/timeline - merged timeline, newest first. */
+export async function fetchContactTimeline(
+  id: string,
+  after?: string,
+): Promise<TimelinePage> {
+  const qs = after ? `?after=${encodeURIComponent(after)}` : "";
+  const res = await apiFetch(`/v1/contacts/${id}/timeline${qs}`);
+  if (!res.ok) {
+    throw new Error(`/v1/contacts/${id}/timeline returned ${res.status}`);
+  }
+  return res.json() as Promise<TimelinePage>;
+}
+
+// ---------------------------------------------------------------------------
+// Analytics
+// ---------------------------------------------------------------------------
+
+export interface LifecycleDistributionRow {
+  state: string;
+  total: number;
+  power: number;
+  regular: number;
+  casual: number;
+  minimal: number;
+  unset: number;
+}
+
+export interface LifecycleMovement {
+  per_state: Array<{ state: string; entered: number; exited: number }>;
+  edges: Array<{ from_state: string; to_state: string; count: number }>;
+  days: Array<{ day: string; count: number; positive: number; negative: number }>;
+}
+
+export interface LifecycleAnalytics {
+  range_days: number;
+  contacts_total: number;
+  distribution: LifecycleDistributionRow[];
+  movement: LifecycleMovement;
+}
+
+export interface SendingTotals {
+  sent: number;
+  opened: number;
+  clicked: number;
+  bounced: number;
+  complained: number;
+  suppressed: number;
+  failed: number;
+}
+
+export interface SendingPerFlow extends SendingTotals {
+  flow_id: string;
+  flow_name: string;
+}
+
+export interface SendingAnalytics {
+  range_days: number;
+  days: Array<{ day: string; sent: number }>;
+  engagement_days: Array<{ day: string; opens: number; clicks: number; bounces: number }>;
+  /** ISO date string: the earliest event in message_events, or null if no events exist. */
+  engagement_since: string | null;
+  totals: SendingTotals;
+  per_flow: SendingPerFlow[];
+}
+
+/** GET /v1/analytics/lifecycle?days=N - distribution + movement. */
+export async function fetchLifecycleAnalytics(days: number): Promise<LifecycleAnalytics> {
+  const res = await apiFetch(`/v1/analytics/lifecycle?days=${days}`);
+  if (!res.ok) {
+    throw new Error(`/v1/analytics/lifecycle returned ${res.status}`);
+  }
+  return res.json() as Promise<LifecycleAnalytics>;
+}
+
+/** GET /v1/analytics/sending?days=N - sending performance over time and per flow. */
+export async function fetchSendingAnalytics(days: number): Promise<SendingAnalytics> {
+  const res = await apiFetch(`/v1/analytics/sending?days=${days}`);
+  if (!res.ok) {
+    throw new Error(`/v1/analytics/sending returned ${res.status}`);
+  }
+  return res.json() as Promise<SendingAnalytics>;
+}
+
+export interface RetentionGridCell {
+  tenure: string;
+  recency: string;
+  count: number;
+  paying: number;
+}
+
+export interface RetentionGrid {
+  natural_frequency_days: number;
+  tenure_thresholds_days: { growing: number; established: number; loyal: number };
+  recency_thresholds_days: { cooling: number; idle: number; dormant: number };
+  cells: RetentionGridCell[];
+  contacts_total: number;
+}
+
+/** GET /v1/analytics/retention-grid - tenure x recency cell counts. */
+export async function fetchRetentionGrid(): Promise<RetentionGrid> {
+  const res = await apiFetch(`/v1/analytics/retention-grid`);
+  if (!res.ok) {
+    throw new Error(`/v1/analytics/retention-grid returned ${res.status}`);
+  }
+  return res.json() as Promise<RetentionGrid>;
+}
+
+export interface RetentionGridCellTrend {
+  range_days: number;
+  days: Array<{ day: string; count: number; paying: number }>;
+}
+
+/** GET /v1/analytics/retention-grid/:tenure/:recency/trend?days=N - daily cell population. */
+export async function fetchRetentionGridCellTrend(
+  tenure: string,
+  recency: string,
+  days: number,
+): Promise<RetentionGridCellTrend> {
+  const res = await apiFetch(
+    `/v1/analytics/retention-grid/${tenure}/${recency}/trend?days=${days}`,
+  );
+  if (!res.ok) {
+    throw new Error(
+      `/v1/analytics/retention-grid/${tenure}/${recency}/trend returned ${res.status}`,
+    );
+  }
+  return res.json() as Promise<RetentionGridCellTrend>;
+}
+
+// ---------------------------------------------------------------------------
+// Ingestion (Integrate screen)
+// ---------------------------------------------------------------------------
+
+export type ApiKeyKind = "publishable" | "secret";
+
+export interface IngestKey {
+  id: string;
+  kind: ApiKeyKind;
+  prefix: string;
+  label: string | null;
+  allowed_origins: string[];
+  last_used_at: string | null;
+  created_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface CreatedIngestKey extends IngestKey {
+  /** The raw key value. Returned by the create endpoint exactly once. */
+  key: string;
+}
+
+export interface IngestStatus {
+  last_event: {
+    type: string;
+    event_name: string | null;
+    user_id: string;
+    received_at: string;
+  } | null;
+  events_last_24h: number;
+}
+
+/** GET /v1/ingestion/keys - all keys for the tenant (never raw values). */
+export async function fetchIngestKeys(): Promise<{ keys: IngestKey[] }> {
+  const res = await apiFetch(`/v1/ingestion/keys`);
+  if (!res.ok) {
+    throw new Error(`/v1/ingestion/keys returned ${res.status}`);
+  }
+  return res.json() as Promise<{ keys: IngestKey[] }>;
+}
+
+/** POST /v1/ingestion/keys - create a key. Raw value is in the response once. */
+export async function createIngestKey(input: {
+  kind: ApiKeyKind;
+  label?: string;
+  allowed_origins?: string[];
+}): Promise<CreatedIngestKey> {
+  const res = await apiFetch(`/v1/ingestion/keys`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Create key failed (${res.status})`);
+  }
+  return res.json() as Promise<CreatedIngestKey>;
+}
+
+/** PATCH /v1/ingestion/keys/:id - update label and/or allowed_origins. */
+export async function updateIngestKey(
+  id: string,
+  input: { label?: string | null; allowed_origins?: string[] },
+): Promise<IngestKey> {
+  const res = await apiFetch(`/v1/ingestion/keys/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Update key failed (${res.status})`);
+  }
+  return res.json() as Promise<IngestKey>;
+}
+
+/** POST /v1/ingestion/keys/:id/revoke - revoke a key (idempotent). */
+export async function revokeIngestKey(id: string): Promise<void> {
+  const res = await apiFetch(`/v1/ingestion/keys/${id}/revoke`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`Revoke key failed (${res.status})`);
+  }
+}
+
+/** GET /v1/ingestion/status - last received event + 24h count. */
+export async function fetchIngestStatus(): Promise<IngestStatus> {
+  const res = await apiFetch(`/v1/ingestion/status`);
+  if (!res.ok) {
+    throw new Error(`/v1/ingestion/status returned ${res.status}`);
+  }
+  return res.json() as Promise<IngestStatus>;
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+export interface DiagnosticsKeyInfo {
+  present: boolean;
+  byteLength: number | null;
+  fingerprint: string | null;
+  decodeError: string | null;
+}
+
+export interface DiagnosticsResponse {
+  commit: string;
+  edition: string;
+  builtAt: string | null;
+  startedAt: string;
+  keys: {
+    ENCRYPTION_KEY: DiagnosticsKeyInfo;
+    UNSUBSCRIBE_SIGNING_KEY: DiagnosticsKeyInfo;
+  };
+}
+
+/** GET /v1/diagnostics - deployment health and key presence. */
+export async function fetchDiagnostics(): Promise<DiagnosticsResponse> {
+  const res = await apiFetch(`/v1/diagnostics`);
+  if (!res.ok) {
+    throw new Error(`/v1/diagnostics returned ${res.status}`);
+  }
+  return res.json() as Promise<DiagnosticsResponse>;
+}
+
+// ---------------------------------------------------------------------------
+// Library flows
+// ---------------------------------------------------------------------------
+
+export interface LibraryFlowTemplate {
+  slug: string;
+  name: string;
+  subject: string;
+}
+
+export interface LibraryFlowEntry {
+  id: string;
+  name: string;
+  description: string;
+  emails: number;
+  trigger: string;
+  templates: LibraryFlowTemplate[];
+}
+
+export interface LibraryFlowsResponse {
+  flows: LibraryFlowEntry[];
+}
+
+export interface LibraryInstallResponse {
+  message: string;
+  flowId: string;
+  templatesCreated: number;
+  flowCreated: boolean;
+}
+
+/** GET /v1/library - list available library flow sets. */
+export async function fetchLibraryFlows(): Promise<LibraryFlowsResponse> {
+  const res = await apiFetch(`/v1/library`);
+  if (!res.ok) {
+    throw new Error(`/v1/library returned ${res.status}`);
+  }
+  return res.json() as Promise<LibraryFlowsResponse>;
+}
+
+/** POST /v1/library/install - install the welcome flow set. */
+export async function installLibraryFlow(): Promise<LibraryInstallResponse> {
+  const res = await apiFetch(`/v1/library/install`, { method: "POST" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Install failed (${res.status})`);
+  }
+  return res.json() as Promise<LibraryInstallResponse>;
+}
+
+// ---------------------------------------------------------------------------
+// Sent-mail log
+// ---------------------------------------------------------------------------
+
+export interface SentLogMessage {
+  id: string;
+  contact_id: string;
+  flow_id: string;
+  flow_name: string | null;
+  status: string;
+  feedback: string | null;
+  subject: string | null;
+  recipient_address: string | null;
+  sent_at: string | null;
+  created_at: string | null;
+  contact: {
+    email: string | null;
+    name: string | null;
+    external_id: string | null;
+  };
+}
+
+export interface SentLogPage {
+  messages: SentLogMessage[];
+  next_cursor: string | null;
+}
+
+export interface SentLogFilters {
+  status?: string;
+  flow_id?: string;
+  recipient?: string;
+  from?: string;
+  to?: string;
+  feedback?: string;
+}
+
+/** GET /v1/sent-log - cursor-paginated sent-mail log. */
+export async function fetchSentLog(
+  after: string | undefined,
+  filters: SentLogFilters,
+): Promise<SentLogPage> {
+  const params = new URLSearchParams();
+  if (after) params.set("after", after);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.flow_id) params.set("flow_id", filters.flow_id);
+  if (filters.recipient) params.set("recipient", filters.recipient);
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+  if (filters.feedback) params.set("feedback", filters.feedback);
+  const qs = params.size > 0 ? `?${params.toString()}` : "";
+  const res = await apiFetch(`/v1/sent-log${qs}`);
+  if (!res.ok) {
+    throw new Error(`/v1/sent-log returned ${res.status}`);
+  }
+  return res.json() as Promise<SentLogPage>;
+}
+
+export interface MessageEvent {
+  id: string;
+  event_type: string;
+  occurred_at: string;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface SentLogDetailResponse {
+  message: {
+    id: string;
+    contact_id: string;
+    flow_id: string;
+    flow_name: string | null;
+    membership_id: string;
+    flow_step_order: number | null;
+    status: string;
+    feedback: string | null;
+    subject: string | null;
+    body_html: string | null;
+    body_text: string | null;
+    brain_reasoning: string | null;
+    brain_action_type: string | null;
+    scheduled_send_at: string | null;
+    approved_at: string | null;
+    sent_at: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+    retry_count: number;
+    provider_message_id: string | null;
+    recipient_address: string | null;
+    contact: {
+      email: string | null;
+      name: string | null;
+      external_id: string | null;
+    };
+  };
+  events: MessageEvent[];
+}
+
+/** GET /v1/sent-log/:id - single message detail with event timeline. */
+export async function fetchSentLogDetail(id: string): Promise<SentLogDetailResponse> {
+  const res = await apiFetch(`/v1/sent-log/${id}`);
+  if (!res.ok) {
+    throw new Error(`/v1/sent-log/${id} returned ${res.status}`);
+  }
+  return res.json() as Promise<SentLogDetailResponse>;
+}
+
+// ---------------------------------------------------------------------------
+// Suppressions (list + import)
+// ---------------------------------------------------------------------------
+
+export interface SuppressionListItem {
+  id: string;
+  email: string;
+  reason: string;
+  source: string | null;
+  created_at: string;
+}
+
+export interface SuppressionsPage {
+  suppressions: SuppressionListItem[];
+  next_cursor: string | null;
+}
+
+export interface SuppressionImportResult {
+  imported: number;
+  skipped: number;
+  invalid: number;
+  total_rows: number;
+}
+
+/** GET /v1/suppressions - cursor-paginated suppression list. */
+export async function fetchSuppressions(after?: string): Promise<SuppressionsPage> {
+  const params = new URLSearchParams();
+  if (after) params.set("after", after);
+  const qs = params.size > 0 ? `?${params.toString()}` : "";
+  const res = await apiFetch(`/v1/suppressions${qs}`);
+  if (!res.ok) {
+    throw new Error(`/v1/suppressions returned ${res.status}`);
+  }
+  return res.json() as Promise<SuppressionsPage>;
+}
+
+/** POST /v1/suppressions/import - import suppression list (text/csv body). */
+export async function importSuppressions(body: string): Promise<SuppressionImportResult> {
+  const res = await apiFetch(`/v1/suppressions/import`, {
+    method: "POST",
+    headers: { "Content-Type": "text/csv" },
+    body,
+  });
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(errBody.error ?? `Import failed (${res.status})`);
+  }
+  return res.json() as Promise<SuppressionImportResult>;
+}
+
+export interface SuppressionAddResult {
+  email: string;
+  added: boolean;
+}
+
+/** POST /v1/suppressions - manually suppress a single address. */
+export async function addSuppression(email: string): Promise<SuppressionAddResult> {
+  const res = await apiFetch(`/v1/suppressions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(errBody.error ?? `Add failed (${res.status})`);
+  }
+  return res.json() as Promise<SuppressionAddResult>;
+}
+
+// ---------------------------------------------------------------------------
+// Profile
+// ---------------------------------------------------------------------------
+
+export interface Profile {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  pending_email: string | null;
+  created_at: string;
+}
+
+/** GET /v1/profile */
+export async function fetchProfile(): Promise<{ profile: Profile }> {
+  const res = await apiFetch("/v1/profile");
+  if (!res.ok) throw new Error(`/v1/profile returned ${res.status}`);
+  return res.json() as Promise<{ profile: Profile }>;
+}
+
+/** PATCH /v1/profile - update name */
+export async function updateProfile(data: { name?: string | null }): Promise<{ ok: boolean }> {
+  const res = await apiFetch("/v1/profile", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Update failed (${res.status})`);
+  }
+  return res.json() as Promise<{ ok: boolean }>;
+}
+
+/** POST /v1/profile/email - request email change */
+export async function requestEmailChange(email: string): Promise<{ ok: boolean; message: string; verify_url?: string }> {
+  const res = await apiFetch("/v1/profile/email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Request failed (${res.status})`);
+  }
+  return res.json() as Promise<{ ok: boolean; message: string; verify_url?: string }>;
+}
+
+/** POST /v1/profile/email/verify - confirm email change */
+export async function verifyEmailChange(token: string): Promise<{ ok: boolean; email: string }> {
+  const res = await apiFetch("/v1/profile/email/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Verification failed (${res.status})`);
+  }
+  return res.json() as Promise<{ ok: boolean; email: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// Team
+// ---------------------------------------------------------------------------
+
+export interface TeamMember {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  lastLoginAt: string | null;
+  createdAt: string;
+}
+
+export interface Invite {
+  id: string;
+  email: string;
+  role: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+export interface InviteResult {
+  invite: {
+    id: string;
+    email: string;
+    role: string;
+    expires_at: string;
+    invite_url: string;
+    email_sent: boolean;
+  };
+}
+
+/** GET /v1/team */
+export async function fetchTeamMembers(): Promise<{ members: TeamMember[] }> {
+  const res = await apiFetch("/v1/team");
+  if (!res.ok) throw new Error(`/v1/team returned ${res.status}`);
+  return res.json() as Promise<{ members: TeamMember[] }>;
+}
+
+/** POST /v1/team/invites */
+export async function createInvite(email: string, role?: string): Promise<InviteResult> {
+  const res = await apiFetch("/v1/team/invites", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, role }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Invite failed (${res.status})`);
+  }
+  return res.json() as Promise<InviteResult>;
+}
+
+/** GET /v1/team/invites */
+export async function fetchInvites(): Promise<{ invites: Invite[] }> {
+  const res = await apiFetch("/v1/team/invites");
+  if (!res.ok) throw new Error(`/v1/team/invites returned ${res.status}`);
+  return res.json() as Promise<{ invites: Invite[] }>;
+}
+
+/** DELETE /v1/team/invites/:id */
+export async function revokeInvite(id: string): Promise<{ ok: boolean }> {
+  const res = await apiFetch(`/v1/team/invites/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Revoke failed (${res.status})`);
+  }
+  return res.json() as Promise<{ ok: boolean }>;
+}
+
+/** PATCH /v1/team/:id/role */
+export async function changeRole(id: string, role: string): Promise<{ ok: boolean }> {
+  const res = await apiFetch(`/v1/team/${id}/role`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Role change failed (${res.status})`);
+  }
+  return res.json() as Promise<{ ok: boolean }>;
+}
+
+/** DELETE /v1/team/:id */
+export async function removeMember(id: string): Promise<{ ok: boolean }> {
+  const res = await apiFetch(`/v1/team/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Remove failed (${res.status})`);
+  }
+  return res.json() as Promise<{ ok: boolean }>;
+}

@@ -5,6 +5,7 @@
  * They are registered under the /v1 prefix inside the authenticated scope.
  *
  * Endpoints:
+ *   POST /v1/suppressions          add a single address (manual block)
  *   POST /v1/suppressions/import   bulk import from plain-text or CSV body
  *   GET  /v1/suppressions          list tenant's suppressions (paginated)
  *
@@ -145,6 +146,48 @@ const suppressionRoutes: FastifyPluginAsync = async (app) => {
     (_req, body, done) => done(null, body),
   );
   /**
+   * POST /v1/suppressions
+   *
+   * Manually suppress a single address from the dashboard.
+   * Body (JSON): { "email": "a@b.com" }
+   *
+   * The address is lowercased before storage (same normalization as import).
+   * Rows written here get reason = 'manual' and source = 'admin', the
+   * vocabulary the schema already reserves for operator-added blocks.
+   *
+   * Idempotent: an already-suppressed address is not an error. Returns
+   * 201 { email, added: true } on a new row, 200 { email, added: false }
+   * when the address was already suppressed.
+   */
+  app.post("/", {
+    config: { rawBody: false, minRole: "member" as const },
+  }, async (request, reply) => {
+    const db: Db = request.server.db;
+    const tenantId = request.tenant!.id;
+
+    const body = request.body as Record<string, unknown> | null;
+    const email = typeof body?.email === "string"
+      ? body.email.trim().toLowerCase()
+      : "";
+
+    if (!isValidEmail(email)) {
+      reply.status(400);
+      return { error: "Body must contain a valid 'email' address." };
+    }
+
+    const result = await db.execute<{ id: string }>(sql`
+      INSERT INTO suppressions (tenant_id, email, reason, source)
+      VALUES (${tenantId}::uuid, ${email}, 'manual', 'admin')
+      ON CONFLICT (tenant_id, lower(email)) DO NOTHING
+      RETURNING id
+    `);
+
+    const added = result.rows.length > 0;
+    reply.status(added ? 201 : 200);
+    return { email, added };
+  });
+
+  /**
    * POST /v1/suppressions/import
    *
    * Body: plain-text or CSV. Content-Type: text/plain, text/csv, or any text/*.
@@ -154,7 +197,7 @@ const suppressionRoutes: FastifyPluginAsync = async (app) => {
    * Returns { imported, skipped, invalid, total_rows }.
    */
   app.post("/import", {
-    config: { rawBody: false },
+    config: { rawBody: false, minRole: "member" as const },
   }, async (request, reply) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
@@ -251,7 +294,7 @@ const suppressionRoutes: FastifyPluginAsync = async (app) => {
    */
   app.get<{
     Querystring: { limit?: string; after?: string };
-  }>("/", async (request) => {
+  }>("/", { config: { minRole: "member" } }, async (request) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
 

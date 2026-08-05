@@ -71,6 +71,13 @@ export interface DecidePromptContext {
 
   /** Optional KB context relevant to this decision. */
   kbContext?: string;
+
+  /**
+   * Tenant-level product description (tenants.settings.brain_context).
+   * Always injected when present; mirrors DraftPromptContext.brain_context
+   * so both calls see the same product framing.
+   */
+  brainContext?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +129,11 @@ export function buildDecideMessages(ctx: DecidePromptContext): ChatMessage[] {
   const userParts: string[] = [];
 
   userParts.push(`ACTION TYPE UNDER CONSIDERATION: ${ctx.actionType}`);
+
+  // Tenant-level product description
+  if (ctx.brainContext) {
+    userParts.push(`\nPRODUCT CONTEXT:\n${ctx.brainContext}`);
+  }
 
   // Contact info
   const contactLines: string[] = [];

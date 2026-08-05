@@ -324,6 +324,38 @@ describe("KB CRUD", () => {
       expect(res.statusCode).toBe(400);
       expect(res.json().issues.some((i: any) => i.path === "source")).toBe(true);
     });
+
+    it("400 when title exceeds 200 characters", async () => {
+      if (!dbAvailable) return;
+      const app = await buildApp({ db, logger: false });
+      const res = await app.inject({
+        method: "POST", url: "/v1/kb", headers: { cookie: cookieA },
+        payload: minimalEntry({ title: "t".repeat(201) }),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().issues.some((i: any) => i.path === "title")).toBe(true);
+    });
+
+    it("400 when content exceeds 8000 characters", async () => {
+      if (!dbAvailable) return;
+      const app = await buildApp({ db, logger: false });
+      const res = await app.inject({
+        method: "POST", url: "/v1/kb", headers: { cookie: cookieA },
+        payload: minimalEntry({ content: "c".repeat(8001) }),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().issues.some((i: any) => i.path === "content")).toBe(true);
+    });
+
+    it("accepts title and content at exactly the cap", async () => {
+      if (!dbAvailable) return;
+      const app = await buildApp({ db, logger: false });
+      const res = await app.inject({
+        method: "POST", url: "/v1/kb", headers: { cookie: cookieA },
+        payload: minimalEntry({ title: "t".repeat(200), content: "c".repeat(8000) }),
+      });
+      expect(res.statusCode).toBe(201);
+    });
   });
 
   describe("GET /v1/kb (pagination)", () => {
@@ -795,6 +827,23 @@ describe("KB CRUD", () => {
       });
       expect(res.statusCode).toBe(400);
       expect(res.json().issues.some((i: any) => i.path === "content_type")).toBe(true);
+    });
+
+    it("400 when content exceeds 8000 characters in PATCH", async () => {
+      if (!dbAvailable) return;
+      const app = await buildApp({ db, logger: false });
+      const created = await app.inject({
+        method: "POST", url: "/v1/kb", headers: { cookie: cookieA },
+        payload: minimalEntry({ title: "Patch Cap Validation" }),
+      });
+      const id = created.json().id;
+
+      const res = await app.inject({
+        method: "PATCH", url: `/v1/kb/${id}`, headers: { cookie: cookieA },
+        payload: { content: "c".repeat(8001) },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().issues.some((i: any) => i.path === "content")).toBe(true);
     });
 
     it("returns 404 for a non-existent id", async () => {

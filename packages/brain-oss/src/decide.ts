@@ -14,6 +14,7 @@
  */
 import { decideOutputSchema, type DecideOutput } from "@claros/core";
 import type { LlmProvider } from "./providers/types.js";
+import { LlmProviderError } from "./providers/openai-compatible.js";
 import { buildDecideMessages, type DecidePromptContext } from "./prompts/decide.js";
 
 // ---------------------------------------------------------------------------
@@ -36,6 +37,13 @@ export interface DecideSuccess {
 export interface DecideFailure {
   ok: false;
   error: string;
+  /**
+   * HTTP status from the provider when the failure came from an LLM call
+   * (LlmProviderError.statusCode), null for network errors, undefined for
+   * non-LLM failures (parse/validation). Lets the worker distinguish
+   * permanent configuration faults (401/403/404) from transient ones.
+   */
+  statusCode?: number | null;
 }
 
 export type DecideResult = DecideSuccess | DecideFailure;
@@ -79,6 +87,7 @@ export async function decide(
     return {
       ok: false,
       error: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
+      statusCode: err instanceof LlmProviderError ? err.statusCode : undefined,
     };
   }
 

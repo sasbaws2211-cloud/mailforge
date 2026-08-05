@@ -115,6 +115,7 @@ async function cleanup() {
   await db.execute(sql`DELETE FROM flow_memberships WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
   await db.execute(sql`DELETE FROM flows WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
   await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
+  await db.execute(sql`DELETE FROM lifecycle_transitions WHERE contact_id IN (SELECT id FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG}))`);
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
   await db.execute(sql`DELETE FROM scan_checkpoints WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
   await db.execute(sql`DELETE FROM tenants WHERE slug = ${SLUG}`);
@@ -472,7 +473,7 @@ describe("transport resolver", () => {
   // -------------------------------------------------------------------------
 
   describe("unimplemented provider", () => {
-    for (const provider of ["ses", "smtp"]) {
+    for (const provider of ["ses"]) {
       it(`resolver returns null for provider='${provider}' and messages are untouched`, async () => {
         if (!dbAvailable) return;
 

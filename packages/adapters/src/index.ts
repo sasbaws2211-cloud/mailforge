@@ -30,6 +30,11 @@ export {
 } from "./resend.js";
 
 export {
+  SmtpTransportAdapter,
+  type SmtpAdapterConfig,
+} from "./smtp.js";
+
+export {
   resolveTransportAdapter,
   type ResolvedTransport,
   type TransportResolutionFailure,

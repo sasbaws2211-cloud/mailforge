@@ -59,7 +59,12 @@
  *     3. behavior.most_used_features
  *     4. cadence
  *   Protected sections (never truncated): user (contact identity), lifecycle,
- *   tenure, prior_contact.
+ *   tenure, prior_contact, brain_context. brain_context is the tenant-level
+ *   product description - the anti-hallucination anchor. Dropping it under
+ *   budget pressure would remove the very section that bounds what the LLM
+ *   may claim about the product, so it is protected. Its size is capped at
+ *   the write path (BRAIN_CONTEXT_MAX_CHARS in settings.ts) so a protected
+ *   section cannot unboundedly consume the budget.
  *
  * Over-budget with all droppable sections removed:
  *   If dropping every droppable section still leaves the estimate over budget,
@@ -323,13 +328,14 @@ export function applyBudgetTruncation(
 
   // All droppable sections exhausted but still over budget.
   // Return as-is with all dropped sections recorded and emit a warning.
-  // Protected sections (user, lifecycle, tenure, prior_contact) are not touched.
+  // Protected sections (user, lifecycle, tenure, prior_contact, brain_context)
+  // are not touched.
   console.warn(
     `[context-budget] assembled context exceeds budget of ${budget} tokens ` +
       `even after dropping all droppable sections ` +
       `(${sectionNames.join(", ")}). ` +
       `Remaining estimated tokens: ${estimateTokens(working)}. ` +
-      `Protected sections (user, lifecycle, tenure, prior_contact) were not truncated. ` +
+      `Protected sections (user, lifecycle, tenure, prior_contact, brain_context) were not truncated. ` +
       `Consider increasing MAX_CONTEXT_TOKENS if this occurs regularly.`,
   );
 
@@ -411,6 +417,10 @@ export function draftContextToDecideContext(
 
   if (draftCtx.kb_context) {
     decideCtx.kbContext = draftCtx.kb_context;
+  }
+
+  if (draftCtx.brain_context) {
+    decideCtx.brainContext = draftCtx.brain_context;
   }
 
   return decideCtx;
@@ -500,7 +510,7 @@ export function applyBudgetForBothPaths(
       `even after dropping all droppable sections ` +
       `(${sectionNames.join(", ")}). ` +
       `Remaining estimated tokens: draft=${finalDraftEst}, decide=${finalDecideEst}. ` +
-      `Protected sections (user, lifecycle, tenure, prior_contact) were not truncated. ` +
+      `Protected sections (user, lifecycle, tenure, prior_contact, brain_context) were not truncated. ` +
       `Consider increasing MAX_CONTEXT_TOKENS if this occurs regularly.`,
   );
 

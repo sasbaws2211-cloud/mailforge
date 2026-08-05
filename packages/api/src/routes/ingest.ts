@@ -1,16 +1,24 @@
 /**
- * Event ingestion routes: POST /v1/track and POST /v1/identify.
+ * Event ingestion routes: POST /v1/track, POST /v1/identify, POST /v1/batch.
  *
  * Segment-compatible endpoints for receiving behavioral events and identity
  * traits from a tenant's product. Authenticated via per-tenant write keys
- * (Bearer token), NOT via session cookies.
+ * (Bearer token, Segment-style Basic auth, or - publishable keys only - a
+ * body `key` field for the browser beacon path), NOT via session cookies.
  *
  * Design decisions:
- * - Anonymous tracking (no userId) is explicitly out of scope. Both endpoints
+ * - Anonymous tracking (no userId) is explicitly out of scope. All endpoints
  *   require userId, which maps to contacts.external_id. This is a deliberate
- *   decision, not an omission - see docs/BACKLOG.md.
- * - No idempotency: duplicate events are inserted. The client is responsible
- *   for at-most-once delivery. Server-side dedup is a backlog item.
+ *   decision, not an omission - see docs/BACKLOG.md. In a batch, anonymous
+ *   items fail validation and are reported in errors[] without aborting the
+ *   rest.
+ * - Server-side dedup: clients sending messageId get at-most-once insert via
+ *   a transaction-scoped advisory lock plus a lookup on
+ *   idx_events_dedup_lookup. Clients that omit it keep insert-always
+ *   behavior.
+ * - /batch exists because Segment SDKs post only to /v1/batch by default;
+ *   without it the Segment-compatibility claim is false. Caps: 100 items,
+ *   512 KB body.
  *
  * Task 8 additions (contact model):
  * - Identify processes traits: reserved trait names (email, name, company,
@@ -111,6 +119,9 @@ const trackBodySchema = z.object({
   timestamp: z.string().datetime({ offset: true }).optional(),
   context: contextSchema,
   messageId: z.string().optional(),
+  // Browser beacon path: publishable key in the body (see ingest-auth.ts).
+  // Consumed by the auth hook before the handler runs; never persisted.
+  key: z.string().optional(),
 });
 
 const identifyBodySchema = z.object({
@@ -119,10 +130,26 @@ const identifyBodySchema = z.object({
   timestamp: z.string().datetime({ offset: true }).optional(),
   context: contextSchema,
   messageId: z.string().optional(),
+  key: z.string().optional(),
 });
 
 export type TrackBody = z.infer<typeof trackBodySchema>;
 export type IdentifyBody = z.infer<typeof identifyBodySchema>;
+
+/** Batch envelope (Segment-compatible): items carry a type discriminator. */
+const batchItemSchema = z.discriminatedUnion("type", [
+  trackBodySchema.extend({ type: z.literal("track") }),
+  identifyBodySchema.extend({ type: z.literal("identify") }),
+]);
+
+/**
+ * The envelope is validated loosely on purpose: items are validated
+ * individually in the handler so one malformed item fails its own slot in
+ * errors[] instead of rejecting the entire batch.
+ */
+const batchBodySchema = z.object({
+  batch: z.array(z.unknown()).min(1).max(100),
+});
 
 // --- Helpers ---
 
@@ -550,6 +577,252 @@ async function recordConflicts(
 
 // --- Route Plugin ---
 
+/** Job enqueue function shape (subset of PgBoss.send), injected by apps/server. */
+type EnqueueFn = (queue: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<string | null>;
+
+/**
+ * Process one track event: dedup (when messageId present), contact upsert,
+ * event insert, lifecycle transition, trigger-check enqueue.
+ * Shared by POST /v1/track and POST /v1/batch.
+ */
+async function processTrackEvent(
+  db: Db,
+  enqueue: EnqueueFn | undefined,
+  tenantId: string,
+  body: TrackBody,
+): Promise<{ deduplicated: boolean }> {
+  const now = new Date();
+  const rawTimestamp = body.timestamp ? new Date(body.timestamp) : now;
+  const { timestamp: eventTimestamp, clamped } = clampTimestamp(rawTimestamp, now);
+
+  // Build context, annotating if timestamp was clamped
+  const eventContext = clamped
+    ? { ...(body.context ?? {}), _timestamp_clamped: true }
+    : (body.context ?? null);
+
+  // If messageId is present, wrap in transaction with dedup check
+  if (body.messageId) {
+    const result = await db.transaction(async (tx) => {
+      const { deduplicated } = await attemptDedupInsert(tx, tenantId, body.messageId!);
+      if (deduplicated) {
+        return { deduplicated: true as const };
+      }
+
+      // Contact upsert (includes event counter increment)
+      const { id: contactId, lifecycleState } = await ensureContact(tx, tenantId, body.userId, now);
+
+      // Insert event
+      const [insertedEvent] = await tx.insert(events).values({
+        tenantId,
+        contactId,
+        type: "track",
+        eventName: body.event,
+        properties: body.properties ?? null,
+        context: eventContext,
+        messageId: body.messageId ?? null,
+        timestamp: eventTimestamp,
+      }).returning({ id: events.id });
+
+      // Evaluate lifecycle transition
+      await evaluateAndApplyTransition(
+        tx,
+        tenantId,
+        contactId,
+        lifecycleState,
+        body.event,
+        insertedEvent!.id,
+        now,
+      );
+
+      return { deduplicated: false as const, contactId, eventName: body.event };
+    });
+
+    if (result.deduplicated) {
+      return { deduplicated: true };
+    }
+
+    // Enqueue trigger-check job (outside transaction)
+    if (enqueue) {
+      await enqueue(
+        QUEUE.TRIGGER_CHECK,
+        { tenant_id: tenantId, contact_id: result.contactId, event_name: result.eventName },
+        { retryLimit: 2, retryDelay: 10, expireInMinutes: 5 },
+      ).catch(() => {});
+    }
+
+    return { deduplicated: false };
+  }
+
+  // No messageId - original path (no dedup, no transaction wrapper)
+  const { id: contactId, lifecycleState } = await ensureContact(db, tenantId, body.userId, now);
+
+  // Insert event (returning ID for transition audit log)
+  const [insertedEvent] = await db.insert(events).values({
+    tenantId,
+    contactId,
+    type: "track",
+    eventName: body.event,
+    properties: body.properties ?? null,
+    context: eventContext,
+    messageId: body.messageId ?? null,
+    timestamp: eventTimestamp,
+  }).returning({ id: events.id });
+
+  // Evaluate lifecycle transition
+  await evaluateAndApplyTransition(
+    db,
+    tenantId,
+    contactId,
+    lifecycleState,
+    body.event,
+    insertedEvent!.id,
+    now,
+  );
+
+  // Enqueue trigger-check job for event-triggered flow enrollment.
+  // Fire-and-forget: if the queue is unavailable, the event is still recorded
+  // and the contact can be enrolled by the next scan. Latency degrades from
+  // seconds to the 15-min scan interval, which is acceptable.
+  if (enqueue) {
+    await enqueue(
+      QUEUE.TRIGGER_CHECK,
+      { tenant_id: tenantId, contact_id: contactId, event_name: body.event },
+      { retryLimit: 2, retryDelay: 10, expireInMinutes: 5 },
+    ).catch(() => {
+      // Swallow enqueue failures: the event is persisted, enrollment will
+      // happen on the next scan if the job queue is temporarily unavailable.
+    });
+  }
+
+  return { deduplicated: false };
+}
+
+/**
+ * Process one identify event: contact upsert with trait processing, event
+ * insert, conflict recording, lifecycle transition.
+ * Shared by POST /v1/identify and POST /v1/batch.
+ */
+async function processIdentifyEvent(
+  db: Db,
+  tenantId: string,
+  body: IdentifyBody,
+): Promise<{ deduplicated: boolean }> {
+  const now = new Date();
+  const rawTimestamp = body.timestamp ? new Date(body.timestamp) : now;
+  const { timestamp: eventTimestamp, clamped } = clampTimestamp(rawTimestamp, now);
+
+  // Build context, annotating if timestamp was clamped
+  const eventContext = clamped
+    ? { ...(body.context ?? {}), _timestamp_clamped: true }
+    : (body.context ?? null);
+
+  // If messageId is present, wrap in transaction with dedup check
+  if (body.messageId) {
+    const result = await db.transaction(async (tx) => {
+      const { deduplicated } = await attemptDedupInsert(tx, tenantId, body.messageId!);
+      if (deduplicated) {
+        return { deduplicated: true as const };
+      }
+
+      // Upsert contact with trait processing (includes event counter increment)
+      const { contactId, lifecycleState, conflicts } = await upsertContactWithTraits(
+        tx,
+        tenantId,
+        body.userId,
+        body.traits as Record<string, unknown> | undefined,
+        now,
+      );
+
+      // Insert identify event
+      const [insertedEvent] = await tx
+        .insert(events)
+        .values({
+          tenantId,
+          contactId,
+          type: "identify",
+          eventName: null,
+          properties: body.traits ?? null,
+          context: eventContext,
+          messageId: body.messageId ?? null,
+          timestamp: eventTimestamp,
+        })
+        .returning({ id: events.id });
+
+      // Record any conflicts
+      if (conflicts.length > 0) {
+        await recordConflicts(tx, tenantId, contactId, insertedEvent!.id, conflicts);
+      }
+
+      // Evaluate lifecycle transition
+      await evaluateAndApplyTransition(
+        tx,
+        tenantId,
+        contactId,
+        lifecycleState,
+        null,
+        insertedEvent!.id,
+        now,
+      );
+
+      return { deduplicated: false as const };
+    });
+
+    return { deduplicated: result.deduplicated };
+  }
+
+  // No messageId - original path (no dedup, no transaction wrapper)
+
+  // Upsert contact with trait processing
+  const { contactId, lifecycleState, conflicts } = await upsertContactWithTraits(
+    db,
+    tenantId,
+    body.userId,
+    body.traits as Record<string, unknown> | undefined,
+    now,
+  );
+
+  // Insert identify event. Traits are stored in properties column.
+  const [insertedEvent] = await db
+    .insert(events)
+    .values({
+      tenantId,
+      contactId,
+      type: "identify",
+      eventName: null,
+      properties: body.traits ?? null,
+      context: eventContext,
+      messageId: body.messageId ?? null,
+      timestamp: eventTimestamp,
+    })
+    .returning({ id: events.id });
+
+  // Record any conflicts (email conflict, invalid payment_status)
+  if (conflicts.length > 0) {
+    await recordConflicts(
+      db,
+      tenantId,
+      contactId,
+      insertedEvent!.id,
+      conflicts,
+    );
+  }
+
+  // Evaluate lifecycle transition (identify events have no event name -
+  // they still count as "activity" for at_risk/dormant/churned recovery,
+  // but cannot satisfy activation_events since those require named track events)
+  await evaluateAndApplyTransition(
+    db,
+    tenantId,
+    contactId,
+    lifecycleState,
+    null, // identify events have no event name
+    insertedEvent!.id,
+    now,
+  );
+
+  return { deduplicated: false };
+}
+
 /**
  * Lifecycle transition result from evaluateAndApplyTransition.
  * Null if no transition occurred.
@@ -727,114 +1000,17 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
       };
     }
 
-    const body = parsed.data;
     const tenantId = request.ingestTenant!.id;
     const db: Db = request.server.db;
-    const now = new Date();
-    const rawTimestamp = body.timestamp ? new Date(body.timestamp) : now;
-    const { timestamp: eventTimestamp, clamped } = clampTimestamp(rawTimestamp, now);
-
-    // Build context, annotating if timestamp was clamped
-    const eventContext = clamped
-      ? { ...(body.context ?? {}), _timestamp_clamped: true }
-      : (body.context ?? null);
-
-    // If messageId is present, wrap in transaction with dedup check
-    if (body.messageId) {
-      const result = await db.transaction(async (tx) => {
-        const { deduplicated } = await attemptDedupInsert(tx, tenantId, body.messageId!);
-        if (deduplicated) {
-          return { deduplicated: true as const };
-        }
-
-        // Contact upsert (includes event counter increment)
-        const { id: contactId, lifecycleState } = await ensureContact(tx, tenantId, body.userId, now);
-
-        // Insert event
-        const [insertedEvent] = await tx.insert(events).values({
-          tenantId,
-          contactId,
-          type: "track",
-          eventName: body.event,
-          properties: body.properties ?? null,
-          context: eventContext,
-          messageId: body.messageId ?? null,
-          timestamp: eventTimestamp,
-        }).returning({ id: events.id });
-
-        // Evaluate lifecycle transition
-        await evaluateAndApplyTransition(
-          tx,
-          tenantId,
-          contactId,
-          lifecycleState,
-          body.event,
-          insertedEvent!.id,
-          now,
-        );
-
-        return { deduplicated: false as const, contactId, eventName: body.event };
-      });
-
-      if (result.deduplicated) {
-        return { success: true, deduplicated: true };
-      }
-
-      // Enqueue trigger-check job (outside transaction)
-      const enqueue = request.server.enqueue;
-      if (enqueue) {
-        await enqueue(
-          QUEUE.TRIGGER_CHECK,
-          { tenant_id: tenantId, contact_id: result.contactId, event_name: result.eventName },
-          { retryLimit: 2, retryDelay: 10, expireInMinutes: 5 },
-        ).catch(() => {});
-      }
-
-      return { success: true, deduplicated: false };
-    }
-
-    // No messageId - original path (no dedup, no transaction wrapper)
-    const { id: contactId, lifecycleState } = await ensureContact(db, tenantId, body.userId, now);
-
-    // Insert event (returning ID for transition audit log)
-    const [insertedEvent] = await db.insert(events).values({
-      tenantId,
-      contactId,
-      type: "track",
-      eventName: body.event,
-      properties: body.properties ?? null,
-      context: eventContext,
-      messageId: body.messageId ?? null,
-      timestamp: eventTimestamp,
-    }).returning({ id: events.id });
-
-    // Evaluate lifecycle transition
-    await evaluateAndApplyTransition(
+    const { deduplicated } = await processTrackEvent(
       db,
+      request.server.enqueue,
       tenantId,
-      contactId,
-      lifecycleState,
-      body.event,
-      insertedEvent!.id,
-      now,
+      parsed.data,
     );
-
-    // Enqueue trigger-check job for event-triggered flow enrollment.
-    // Fire-and-forget: if the queue is unavailable, the event is still recorded
-    // and the contact can be enrolled by the next scan. Latency degrades from
-    // seconds to the 15-min scan interval, which is acceptable.
-    const enqueue = request.server.enqueue;
-    if (enqueue) {
-      await enqueue(
-        QUEUE.TRIGGER_CHECK,
-        { tenant_id: tenantId, contact_id: contactId, event_name: body.event },
-        { retryLimit: 2, retryDelay: 10, expireInMinutes: 5 },
-      ).catch(() => {
-        // Swallow enqueue failures: the event is persisted, enrollment will
-        // happen on the next scan if the job queue is temporarily unavailable.
-      });
+    if (parsed.data.messageId) {
+      return { success: true, deduplicated };
     }
-
     return { success: true };
   });
 
@@ -862,127 +1038,82 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
       };
     }
 
-    const body = parsed.data;
     const tenantId = request.ingestTenant!.id;
     const db: Db = request.server.db;
-    const now = new Date();
-    const rawTimestamp = body.timestamp ? new Date(body.timestamp) : now;
-    const { timestamp: eventTimestamp, clamped } = clampTimestamp(rawTimestamp, now);
-
-    // Build context, annotating if timestamp was clamped
-    const eventContext = clamped
-      ? { ...(body.context ?? {}), _timestamp_clamped: true }
-      : (body.context ?? null);
-
-    // If messageId is present, wrap in transaction with dedup check
-    if (body.messageId) {
-      const result = await db.transaction(async (tx) => {
-        const { deduplicated } = await attemptDedupInsert(tx, tenantId, body.messageId!);
-        if (deduplicated) {
-          return { deduplicated: true as const };
-        }
-
-        // Upsert contact with trait processing (includes event counter increment)
-        const { contactId, lifecycleState, conflicts } = await upsertContactWithTraits(
-          tx,
-          tenantId,
-          body.userId,
-          body.traits as Record<string, unknown> | undefined,
-          now,
-        );
-
-        // Insert identify event
-        const [insertedEvent] = await tx
-          .insert(events)
-          .values({
-            tenantId,
-            contactId,
-            type: "identify",
-            eventName: null,
-            properties: body.traits ?? null,
-            context: eventContext,
-            messageId: body.messageId ?? null,
-            timestamp: eventTimestamp,
-          })
-          .returning({ id: events.id });
-
-        // Record any conflicts
-        if (conflicts.length > 0) {
-          await recordConflicts(tx, tenantId, contactId, insertedEvent!.id, conflicts);
-        }
-
-        // Evaluate lifecycle transition
-        await evaluateAndApplyTransition(
-          tx,
-          tenantId,
-          contactId,
-          lifecycleState,
-          null,
-          insertedEvent!.id,
-          now,
-        );
-
-        return { deduplicated: false as const };
-      });
-
-      if (result.deduplicated) {
-        return { success: true, deduplicated: true };
-      }
-
-      return { success: true, deduplicated: false };
+    const { deduplicated } = await processIdentifyEvent(db, tenantId, parsed.data);
+    if (parsed.data.messageId) {
+      return { success: true, deduplicated };
     }
-
-    // No messageId - original path (no dedup, no transaction wrapper)
-
-    // Upsert contact with trait processing
-    const { contactId, lifecycleState, conflicts } = await upsertContactWithTraits(
-      db,
-      tenantId,
-      body.userId,
-      body.traits as Record<string, unknown> | undefined,
-      now,
-    );
-
-    // Insert identify event. Traits are stored in properties column.
-    const [insertedEvent] = await db
-      .insert(events)
-      .values({
-        tenantId,
-        contactId,
-        type: "identify",
-        eventName: null,
-        properties: body.traits ?? null,
-        context: eventContext,
-        messageId: body.messageId ?? null,
-        timestamp: eventTimestamp,
-      })
-      .returning({ id: events.id });
-
-    // Record any conflicts (email conflict, invalid payment_status)
-    if (conflicts.length > 0) {
-      await recordConflicts(
-        db,
-        tenantId,
-        contactId,
-        insertedEvent!.id,
-        conflicts,
-      );
-    }
-
-    // Evaluate lifecycle transition (identify events have no event name -
-    // they still count as "activity" for at_risk/dormant/churned recovery,
-    // but cannot satisfy activation_events since those require named track events)
-    await evaluateAndApplyTransition(
-      db,
-      tenantId,
-      contactId,
-      lifecycleState,
-      null, // identify events have no event name
-      insertedEvent!.id,
-      now,
-    );
-
     return { success: true };
+  });
+
+  /**
+   * POST /v1/batch
+   *
+   * Segment-compatible batch envelope: { batch: [...] } where each item is a
+   * track or identify call with a "type" discriminator. This is the endpoint
+   * Segment SDKs post to by default (analytics-node: host + /v1/batch), so
+   * its existence is what makes "point an existing Segment SDK at Claros"
+   * true rather than aspirational.
+   *
+   * Semantics:
+   * - 200 with per-item results; invalid items are reported in errors[] and
+   *   do not abort the batch (Segment's own behavior: a batch is accepted
+   *   or rejected as a unit only on auth/size failure).
+   * - Anonymous items (no userId) fail validation and land in errors[] -
+   *   anonymous tracking is out of scope (see file header).
+   * - Caps: 100 items per batch, 512 KB request body (route bodyLimit),
+   *   matching the spirit of Segment's 32KB/event + 500KB/batch contract.
+   * - The whole batch counts as ONE request against the key's rate limit.
+   */
+  app.post("/batch", { bodyLimit: 512 * 1024 }, async (request, reply) => {
+    const parsed = batchBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.status(400);
+      return {
+        error: "Validation failed",
+        issues: parsed.error.issues.map((i) => ({
+          path: i.path.join("."),
+          message: i.message,
+        })),
+      };
+    }
+
+    const tenantId = request.ingestTenant!.id;
+    const db: Db = request.server.db;
+    const enqueue = request.server.enqueue;
+
+    let received = 0;
+    const errors: Array<{ index: number; message: string }> = [];
+
+    for (const [index, rawItem] of parsed.data.batch.entries()) {
+      const itemParsed = batchItemSchema.safeParse(rawItem);
+      if (!itemParsed.success) {
+        errors.push({
+          index,
+          message: itemParsed.error.issues
+            .map((i) => `${i.path.join(".")}: ${i.message}`)
+            .join("; "),
+        });
+        continue;
+      }
+      const item = itemParsed.data;
+      try {
+        if (item.type === "track") {
+          await processTrackEvent(db, enqueue, tenantId, item);
+        } else {
+          await processIdentifyEvent(db, tenantId, item);
+        }
+        received += 1;
+      } catch (err) {
+        errors.push({
+          index,
+          message: err instanceof Error ? err.message : "processing failed",
+        });
+      }
+    }
+
+    return { success: true, received, errors };
   });
 };
 

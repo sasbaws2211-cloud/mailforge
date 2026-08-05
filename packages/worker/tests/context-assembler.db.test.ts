@@ -120,8 +120,20 @@ beforeEach(async () => {
   await db.execute(sql`DELETE FROM flows WHERE tenant_id = ${otherTenantId}`);
   await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id = ${testTenantId}`);
   await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id = ${otherTenantId}`);
-  await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${testTenantId}`);
-  await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${otherTenantId}`);
+  await db.execute(
+      sql`DELETE FROM lifecycle_transitions WHERE tenant_id = ${testTenantId}`,
+    );
+    await db.execute(
+      sql`DELETE FROM contacts WHERE tenant_id = ${testTenantId}`,
+    );
+  await db.execute(
+      sql`DELETE FROM lifecycle_transitions WHERE tenant_id = ${otherTenantId}`,
+    );
+    await db.execute(
+      sql`DELETE FROM contacts WHERE tenant_id = ${otherTenantId}`,
+    );
+  // Reset tenant settings (brain_context tests mutate it).
+  await db.execute(sql`UPDATE tenants SET settings = NULL WHERE id IN (${testTenantId}, ${otherTenantId})`);
 });
 
 afterAll(async () => {
@@ -147,6 +159,9 @@ async function cleanup() {
     );
     await db.execute(
       sql`DELETE FROM transport_configs WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`,
+    );
+    await db.execute(
+      sql`DELETE FROM lifecycle_transitions WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`,
     );
     await db.execute(
       sql`DELETE FROM contacts WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${slug})`,
@@ -500,6 +515,64 @@ describe("context assembler", () => {
       expect(ctx.draftCtx.sender_name).toBeUndefined();
       // Product name comes from tenant.name - always present
       expect(ctx.draftCtx.product_name).toBe("Test Assembler Product");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // brain_context: tenant settings wired into both contexts
+  // -------------------------------------------------------------------------
+
+  describe("brain_context wiring", () => {
+    it("populates draftCtx.brain_context and decideCtx.brainContext from tenant settings", async () => {
+      if (!dbAvailable) return;
+
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      await db.execute(sql`
+        UPDATE tenants
+        SET settings = '{"brain_context":"Acme is a kanban tool. No Gantt charts."}'::jsonb
+        WHERE id = ${testTenantId}
+      `);
+
+      const contactId = await insertContact("asm-brain", testTenantId, {
+        name: "Carol Context",
+        email: "carol@acme.com",
+        lifecycleState: "engaged",
+        firstSeenAt: new Date("2026-07-01T00:00:00Z"),
+        lastSeenAt: new Date("2026-07-20T00:00:00Z"),
+      });
+      const flowId = await insertFlow("asm-brain-flow", testTenantId, "Write a check-in email.");
+      const membershipId = await insertMembership(contactId, flowId);
+
+      const candidate = makeCandidate({ contactId, flowId, membershipId });
+      const result = await assembleContext(db, candidate, now);
+
+      expect(result).not.toBeNull();
+      expect(result!.draftCtx.brain_context).toBe("Acme is a kanban tool. No Gantt charts.");
+      expect(result!.decideCtx.brainContext).toBe("Acme is a kanban tool. No Gantt charts.");
+    });
+
+    it("brain_context absent from both contexts when the tenant has none", async () => {
+      if (!dbAvailable) return;
+
+      const now = new Date("2026-07-21T10:00:00Z");
+
+      const contactId = await insertContact("asm-nobrain", testTenantId, {
+        name: "Dave Plain",
+        email: "dave@acme.com",
+        lifecycleState: "engaged",
+        firstSeenAt: new Date("2026-07-01T00:00:00Z"),
+        lastSeenAt: new Date("2026-07-20T00:00:00Z"),
+      });
+      const flowId = await insertFlow("asm-nobrain-flow", testTenantId, "Write a check-in email.");
+      const membershipId = await insertMembership(contactId, flowId);
+
+      const candidate = makeCandidate({ contactId, flowId, membershipId });
+      const result = await assembleContext(db, candidate, now);
+
+      expect(result).not.toBeNull();
+      expect(result!.draftCtx.brain_context).toBeUndefined();
+      expect(result!.decideCtx.brainContext).toBeUndefined();
     });
   });
 
