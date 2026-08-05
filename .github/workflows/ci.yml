@@ -42,13 +42,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Apply community schema migrations
-        run: pnpm db:migrate -- --yes
+        run: pnpm db:migrate
 
       - name: Create seed test database
         run: |
           PGPASSWORD=claros createdb -h localhost -U claros claros_seed_test
           DATABASE_URL=postgres://claros:claros@localhost:5432/claros_seed_test \
-            pnpm db:migrate -- --yes
+            pnpm db:migrate
 
       - run: pnpm build
       - run: pnpm test
