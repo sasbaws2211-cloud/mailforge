@@ -118,12 +118,13 @@ function RetentionGrid({ grid, selected, onSelect }: GridProps) {
   }, [grid.cells]);
 
   return (
-    <div
-      role="grid"
-      aria-label="Retention grid: tenure by recency"
-      className="grid gap-1.5"
-      style={{ gridTemplateColumns: "minmax(110px, auto) repeat(4, minmax(0, 1fr))" }}
-    >
+    <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+      <div
+        role="grid"
+        aria-label="Retention grid: tenure by recency"
+        className="grid gap-1.5"
+        style={{ gridTemplateColumns: "minmax(90px, auto) repeat(4, minmax(80px, 1fr))" }}
+      >
       {/* Column headers */}
       <div />
       {RECENCY_COLS.map((r) => (
@@ -178,6 +179,7 @@ function RetentionGrid({ grid, selected, onSelect }: GridProps) {
           })}
         </React.Fragment>
       ))}
+      </div>
     </div>
   );
 }

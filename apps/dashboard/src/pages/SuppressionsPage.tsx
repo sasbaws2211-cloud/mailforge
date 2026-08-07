@@ -151,13 +151,13 @@ export default function SuppressionsPage() {
       />
 
       {/* Manual add */}
-      <form onSubmit={handleAdd} className="mb-6 flex items-center gap-2">
+      <form onSubmit={handleAdd} className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center">
         <Input
           type="email"
           value={address}
           onChange={(e) => setAddress(e.target.value)}
           placeholder="Add an address to suppress"
-          className="max-w-xs"
+          className="w-full sm:max-w-xs"
           aria-label="Email address to suppress"
         />
         <Button

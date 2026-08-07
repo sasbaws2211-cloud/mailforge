@@ -579,7 +579,7 @@ function TestEventCard({ secretKey }: { secretKey: string | null }) {
         through the ingestion API using your secret key. If you have a welcome
         flow active, this triggers it and sends an email to the address below.
       </p>
-      <div className="mt-4 flex items-end gap-3">
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="flex-1">
           <label htmlFor="test-email" className="mb-1.5 block text-[14px] font-medium text-foreground">
             Recipient email

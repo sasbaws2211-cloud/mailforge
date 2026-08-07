@@ -755,21 +755,21 @@ function AllClearState({
     <div className="space-y-4">
       {/* Status banner */}
       <div className="rounded-lg border border-border bg-card px-5 py-4">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-success-soft text-success">
             <Check size={14} strokeWidth={2.5} />
           </span>
           <p className="text-[14px] font-medium text-foreground">
             Nothing needs attention
           </p>
-          <span className="ml-auto text-[13px] text-muted-foreground">
+          <span className="text-[13px] text-muted-foreground sm:ml-auto">
             All systems operating normally.
           </span>
         </div>
       </div>
 
       {/* Three-metric snapshot */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatusMetric
           label="Active flows"
           value={activeCount}
@@ -839,13 +839,13 @@ function StatusMetric({
   return (
     <Link
       to={linkTo}
-      className="group rounded-lg border border-border bg-card px-5 py-4 transition-colors duration-(--dur-fast) hover:bg-secondary"
+      className="group rounded-lg border border-border bg-card px-4 py-3 transition-colors duration-(--dur-fast) hover:bg-secondary sm:px-5 sm:py-4"
     >
-      <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground sm:text-[12px]">
         {label}
       </p>
       <div className="mt-2 flex items-end justify-between">
-        <p className="font-display text-[28px] font-bold leading-none tracking-[-0.02em] text-foreground">
+        <p className="font-display text-[22px] font-bold leading-none tracking-[-0.02em] text-foreground sm:text-[28px]">
           {value.toLocaleString()}
         </p>
         <ArrowRight

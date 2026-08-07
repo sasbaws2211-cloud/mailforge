@@ -8,13 +8,16 @@
  * a data tool) to hold three small controls; the footer puts them where
  * every comparable product puts identity.
  *
+ * On mobile (<lg) the sidebar becomes an overlay triggered by a hamburger
+ * button in a slim top bar. Tapping a nav link or the backdrop closes it.
+ *
  * Navigation is driven by the NAV_ITEMS array. Activating a future
  * destination is a one-line change (set enabled: true and add the route).
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */
-import React from "react";
-import { Outlet, NavLink } from "react-router-dom";
+import React, { useCallback, useEffect, useState } from "react";
+import { Outlet, NavLink, useLocation } from "react-router-dom";
 import {
   Home,
   Workflow,
@@ -27,6 +30,8 @@ import {
   Plug,
   LogOut,
   Send,
+  Menu,
+  X,
 } from "lucide-react";
 import { useLogout } from "../auth.js";
 import { BrandLockup } from "../components/brand-lockup.js";
@@ -81,6 +86,23 @@ interface ShellPageProps {
 
 export default function ShellPage({ me }: ShellPageProps) {
   const logout = useLogout();
+  const location = useLocation();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Close mobile sidebar on route change.
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname]);
+
+  // Prevent body scroll while the mobile sidebar overlay is open.
+  useEffect(() => {
+    if (sidebarOpen) {
+      document.body.style.overflow = "hidden";
+      return () => { document.body.style.overflow = ""; };
+    }
+  }, [sidebarOpen]);
+
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
   function handleLogout() {
     logout.mutate(undefined, {
@@ -91,88 +113,135 @@ export default function ShellPage({ me }: ShellPageProps) {
     });
   }
 
-  return (
-    <div className="flex h-screen bg-background text-foreground">
-      {/* Sidebar: the only chrome column */}
-      <aside className="flex w-60 flex-col bg-sunken">
-        {/* Brand lockup: mark + Quicksand wordmark. Padding-left matches
-            the nav items below (nav px-3 + item px-3 = 24px) so the mark
-            and the nav icons share one vertical axis. */}
-        <div className="flex h-16 shrink-0 items-center px-6">
-          <BrandLockup markSize={26} />
-        </div>
+  // Shared sidebar content rendered in both desktop and mobile wrappers.
+  const sidebarContent = (
+    <>
+      {/* Brand lockup: mark + Quicksand wordmark. Padding-left matches
+          the nav items below (nav px-3 + item px-3 = 24px) so the mark
+          and the nav icons share one vertical axis. */}
+      <div className="flex h-16 shrink-0 items-center justify-between px-6">
+        <BrandLockup markSize={26} />
+        {/* Mobile close button */}
+        <button
+          type="button"
+          onClick={closeSidebar}
+          aria-label="Close menu"
+          className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors duration-(--dur-fast) hover:bg-secondary hover:text-foreground lg:hidden"
+        >
+          <X size={20} strokeWidth={1.5} />
+        </button>
+      </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
+      {/* Navigation */}
+      <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
+        {NAV_ITEMS.map((item) => {
+          const Icon = item.icon;
 
-            if (!item.enabled) {
-              return (
-                <span
-                  key={item.path}
-                  aria-disabled="true"
-                  className="flex items-center gap-3 rounded-md px-3 py-2 text-[14px] text-subtle-foreground select-none"
-                >
-                  <Icon size={16} strokeWidth={1.75} />
-                  {item.label}
-                </span>
-              );
-            }
-
+          if (!item.enabled) {
             return (
-              <NavLink
+              <span
                 key={item.path}
-                to={item.path}
-                className={({ isActive }) =>
-                  [
-                    "flex items-center gap-3 rounded-md px-3 py-2 text-[14px] transition-colors duration-(--dur-fast) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    isActive
-                      ? "bg-selected font-semibold text-foreground"
-                      : "font-medium text-muted-foreground hover:bg-sunken hover:text-foreground",
-                  ].join(" ")
-                }
+                aria-disabled="true"
+                className="flex items-center gap-3 rounded-md px-3 py-2 text-[14px] text-subtle-foreground select-none"
               >
                 <Icon size={16} strokeWidth={1.75} />
                 {item.label}
-              </NavLink>
+              </span>
             );
-          })}
-        </nav>
+          }
 
-        {/* Footer: appearance, identity, session */}
-        <div className="shrink-0 border-t border-border px-3 py-3">
-          <div className="flex items-center justify-between px-1 pb-2">
-            <span className="text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-              Theme
-            </span>
-            <ThemeToggle />
-          </div>
-          <div className="flex items-center gap-1 rounded-md px-1 py-1">
-            <span
-              className="min-w-0 flex-1 truncate text-[14px] text-muted-foreground"
-              title={me.user.email}
+          return (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              className={({ isActive }) =>
+                [
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-[14px] transition-colors duration-(--dur-fast) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  isActive
+                    ? "bg-selected font-semibold text-foreground"
+                    : "font-medium text-muted-foreground hover:bg-sunken hover:text-foreground",
+                ].join(" ")
+              }
             >
-              {me.user.email}
-            </span>
-            <button
-              type="button"
-              onClick={handleLogout}
-              disabled={logout.isPending}
-              title={logout.isPending ? "Signing out..." : "Sign out"}
-              aria-label="Sign out"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-(--dur-fast) hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:text-subtle-foreground"
-            >
-              <LogOut size={16} strokeWidth={1.5} />
-            </button>
-          </div>
+              <Icon size={16} strokeWidth={1.75} />
+              {item.label}
+            </NavLink>
+          );
+        })}
+      </nav>
+
+      {/* Footer: appearance, identity, session */}
+      <div className="shrink-0 border-t border-border px-3 py-3">
+        <div className="flex items-center justify-between px-1 pb-2">
+          <span className="text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+            Theme
+          </span>
+          <ThemeToggle />
         </div>
+        <div className="flex items-center gap-1 rounded-md px-1 py-1">
+          <span
+            className="min-w-0 flex-1 truncate text-[14px] text-muted-foreground"
+            title={me.user.email}
+          >
+            {me.user.email}
+          </span>
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={logout.isPending}
+            title={logout.isPending ? "Signing out..." : "Sign out"}
+            aria-label="Sign out"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-(--dur-fast) hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:text-subtle-foreground"
+          >
+            <LogOut size={16} strokeWidth={1.5} />
+          </button>
+        </div>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="flex h-screen bg-background text-foreground">
+      {/* Desktop sidebar: always visible at lg+ */}
+      <aside className="hidden w-60 flex-col bg-sunken lg:flex">
+        {sidebarContent}
       </aside>
 
-      {/* Content */}
-      <main className="flex-1 overflow-y-auto px-8 py-8">
-        <Outlet />
-      </main>
+      {/* Mobile sidebar overlay */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-50 flex lg:hidden">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-foreground/20"
+            onClick={closeSidebar}
+            aria-hidden="true"
+          />
+          {/* Sidebar panel */}
+          <aside className="relative flex w-72 max-w-[85vw] flex-col bg-sunken shadow-overlay">
+            {sidebarContent}
+          </aside>
+        </div>
+      )}
+
+      {/* Content column */}
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Mobile top bar: visible below lg */}
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-4 lg:hidden">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open menu"
+            className="flex h-9 w-9 items-center justify-center rounded-md text-foreground transition-colors duration-(--dur-fast) hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Menu size={20} strokeWidth={1.5} />
+          </button>
+          <BrandLockup markSize={22} />
+        </header>
+
+        <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-7 lg:px-8 lg:py-8">
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }

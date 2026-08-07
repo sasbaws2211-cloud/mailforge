@@ -69,17 +69,17 @@ function StatCard({
   sparkLabel?: string;
 }) {
   return (
-    <div className="rounded-lg border border-border bg-card p-5">
-      <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+    <div className="rounded-lg border border-border bg-card p-4 sm:p-5">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground sm:text-[12px]">
         {label}
       </p>
-      <p className="mt-2 font-display text-[28px] font-bold leading-none tracking-[-0.02em] text-foreground">
+      <p className="mt-2 font-display text-[22px] font-bold leading-none tracking-[-0.02em] text-foreground sm:text-[28px]">
         {value}
       </p>
       {delta && (
         <p
           className={cn(
-            "mt-1.5 font-mono text-[12px] font-medium",
+            "mt-1.5 font-mono text-[11px] font-medium sm:text-[12px]",
             delta.tone === "good"
               ? "text-success"
               : delta.tone === "bad"
@@ -90,7 +90,7 @@ function StatCard({
           {delta.text}
         </p>
       )}
-      {sub && <p className="mt-1.5 font-mono text-[12px] text-muted-foreground">{sub}</p>}
+      {sub && <p className="mt-1.5 font-mono text-[11px] text-muted-foreground sm:text-[12px]">{sub}</p>}
       {spark && sparkLabel && (
         <div className="mt-3">
           {spark.reduce((a, d) => a + d.count, 0) === 0 ? (

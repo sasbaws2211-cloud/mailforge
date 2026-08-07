@@ -129,7 +129,7 @@ function DraftBody({ message }: { message: Message }) {
         referrerPolicy="no-referrer"
         title="Draft preview"
         srcDoc={message.body_html}
-        className="h-[420px] w-full rounded-md border border-border bg-white"
+        className="h-[300px] w-full rounded-md border border-border bg-white sm:h-[420px]"
       />
     );
   }

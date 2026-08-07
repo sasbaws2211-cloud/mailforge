@@ -148,7 +148,7 @@ export default function SentLogPage() {
       {/* Toolbar: separated from the log by a hairline, so controls read
           as chrome and the table reads as content. */}
       <div className="mb-6 flex flex-wrap items-center gap-3 border-b border-border pb-5">
-        <div className="relative w-72">
+        <div className="relative w-full sm:w-72">
           <Search
             size={16}
             className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
@@ -163,7 +163,7 @@ export default function SentLogPage() {
         <Select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="w-36"
+          className="w-[calc(50%-6px)] sm:w-36"
         >
           <option value="">All statuses</option>
           <option value="sent">Sent</option>
@@ -174,7 +174,7 @@ export default function SentLogPage() {
         <Select
           value={feedbackFilter}
           onChange={(e) => setFeedbackFilter(e.target.value)}
-          className="w-36"
+          className="w-[calc(50%-6px)] sm:w-36"
         >
           <option value="">All feedback</option>
           <option value="opened">Opened</option>
@@ -185,7 +185,7 @@ export default function SentLogPage() {
         <Select
           value={flowFilter}
           onChange={(e) => setFlowFilter(e.target.value)}
-          className="w-48"
+          className="w-full sm:w-48"
         >
           <option value="">All flows</option>
           {flows.map((f) => (

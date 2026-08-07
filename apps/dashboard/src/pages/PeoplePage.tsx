@@ -283,7 +283,7 @@ export default function PeoplePage() {
       {/* Toolbar: separated from the data by a hairline, so controls read
           as chrome and the table reads as content. */}
       <div className="mb-6 flex flex-wrap items-center gap-3 border-b border-border pb-5">
-        <div className="relative w-72">
+        <div className="relative w-full sm:w-72">
           <Search
             size={16}
             className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
@@ -297,7 +297,7 @@ export default function PeoplePage() {
             className="pl-9"
           />
         </div>
-        <div className="w-48">
+        <div className="w-[calc(50%-6px)] sm:w-48">
           <Select
             aria-label="Filter by lifecycle state"
             value={state}
@@ -309,7 +309,7 @@ export default function PeoplePage() {
             ))}
           </Select>
         </div>
-        <div className="w-44">
+        <div className="w-[calc(50%-6px)] sm:w-44">
           <Select
             aria-label="Filter by engagement depth"
             value={depth}
