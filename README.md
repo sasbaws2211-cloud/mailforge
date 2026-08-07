@@ -19,6 +19,10 @@ An AI-native alternative to Customer.io, Loops, and Mautic. Flows are written in
 
 **Your stack, your keys.** Emails go through your Resend or SMTP account. AI runs against your OpenAI-compatible endpoint (OpenAI, Anthropic, Gemini, Groq, Ollama). Postgres is the only infrastructure. Nothing phones home.
 
+**A retention grid, not a vanity dashboard.** Contacts are bucketed by tenure and recency into a 4x4 grid. Each cell is an audience you can act on: create a flow, see who is there, watch the trend. The grid adapts to your product's natural rhythm.
+
+![Lifecycle retention grid](guide/assets/lifecycle.png)
+
 ## Get running
 
 ```bash
