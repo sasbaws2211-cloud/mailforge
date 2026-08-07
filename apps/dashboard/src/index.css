@@ -23,10 +23,12 @@
 :root {
   color-scheme: light;
 
-  /* Surfaces */
-  --bg:        oklch(0.977 0.003 264);
+  /* Surfaces. Raised surfaces stay pure white; the canvas and its related
+   * recessed/placeholder surfaces are lightened slightly to reduce the
+   * grey-cast that was making page content look muddy. */
+  --bg:        oklch(0.985 0.002 264);
   --bg-raised: oklch(1 0 0);
-  --bg-sunken: oklch(0.955 0.004 264);
+  --bg-sunken: oklch(0.965 0.003 264);
 
   /* Borders. --border is decorative (container edges); --border-strong is
    * the boundary of interactive controls and passes WCAG 1.4.11 (3:1). */
@@ -35,19 +37,19 @@
 
   /* Loading placeholders. One step away from the canvas in the "content
    * will appear here" direction: greyer in light, lighter in dark. */
-  --skeleton: oklch(0.925 0.005 264);
+  --skeleton: oklch(0.935 0.004 264);
 
   /* Hover steps for soft surfaces: one small notch darker, so interactive
    * tinted cells (the retention grid) acknowledge the pointer without a
    * hue shift. */
-  --sunken-hover:        oklch(0.935 0.005 264);
+  --sunken-hover:        oklch(0.955 0.004 264);
   --success-soft-hover:  oklch(0.9 0.03 185);
   --warning-soft-hover:  oklch(0.9 0.03 80);
   --danger-soft-hover:   oklch(0.9 0.03 27);
 
   /* Selected state (active nav, selected rows): a neutral slate-blue tint,
    * deliberately quieter than --accent-soft so it never reads as raw cyan. */
-  --selected: oklch(0.928 0.014 255);
+  --selected: oklch(0.94 0.012 255);
 
   /* Text. --fg-subtle is for placeholders and disabled labels only, never
    * for content the user must read. */
@@ -104,21 +106,21 @@
 .dark {
   color-scheme: dark;
 
-  --bg:        oklch(0.185 0.01 264);
+  --bg:        oklch(0.205 0.01 264);
   --bg-raised: oklch(0.232 0.011 264);
-  --bg-sunken: oklch(0.155 0.009 264);
+  --bg-sunken: oklch(0.165 0.009 264);
 
   --border:        oklch(0.335 0.013 264);
-  --border-strong: oklch(0.5 0.015 264);
+  --border-strong: oklch(0.53 0.015 264);
 
-  --skeleton: oklch(0.28 0.012 264);
+  --skeleton: oklch(0.30 0.012 264);
 
-  --sunken-hover:        oklch(0.135 0.009 264);
+  --sunken-hover:        oklch(0.145 0.009 264);
   --success-soft-hover:  oklch(0.26 0.045 185);
   --warning-soft-hover:  oklch(0.27 0.04 82);
   --danger-soft-hover:   oklch(0.27 0.05 27);
 
-  --selected: oklch(0.315 0.028 250);
+  --selected: oklch(0.335 0.028 250);
 
   --fg:        oklch(0.945 0.005 264);
   --fg-muted:  oklch(0.715 0.014 264);
