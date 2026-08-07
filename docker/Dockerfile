@@ -5,7 +5,12 @@ RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 WORKDIR /app
 
-# Copy package files first for better layer caching
+# Copy package files first for better layer caching.
+# Only public packages are listed here. Private packages (brain-cloud, billing)
+# are absent from the public mirror and must NOT be referenced in COPY steps;
+# the mirror would fail on day one if they were. Instead, a second
+# `pnpm install` after COPY packages/ sets up their workspace node_modules
+# in the private repo, where the packages exist and the lockfile lists them.
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY packages/core/package.json packages/core/
 COPY packages/adapters/package.json packages/adapters/
@@ -27,6 +32,20 @@ COPY apps/ apps/
 # Full drizzle package: tsconfig.json + schema/ required by tsc --build;
 # migrations/ required at runtime for in-process auto-migrate on startup.
 COPY drizzle/ drizzle/
+
+# Re-run pnpm install to wire workspace symlinks for any packages that arrived
+# via COPY packages/ but were absent from the early package.json COPY above
+# (private packages: brain-cloud, billing). In the public mirror those packages
+# do not exist, so this is a no-op. In the private repo it links them quickly
+# from the local store without downloading anything new.
+RUN pnpm install --frozen-lockfile
+
+# Remove any .tsbuildinfo that may have been included in the build context
+# (e.g. from a development tree where pnpm build was already run). tsbuildinfo
+# files are in .gitignore and absent from a clean git clone, but a direct
+# directory copy can include them. If they exist here, tsc --build considers
+# every package up to date and skips emitting .js/.d.ts without error.
+RUN find . -name 'tsconfig.tsbuildinfo' -not -path '*/node_modules/*' -delete
 
 RUN pnpm build
 

@@ -17,7 +17,7 @@
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */
 import { Fragment, useMemo, useState, type ElementType } from "react";
-import { Check, Copy, Plus, X, Zap, Code2, KeyRound } from "lucide-react";
+import { Check, Copy, Plus, X, Zap, Code2, KeyRound, Send } from "lucide-react";
 import {
   useIngestKeys,
   useCreateIngestKey,
@@ -39,6 +39,7 @@ import {
   TableRow,
   TableCell,
 } from "../components/ui/table.js";
+import { useMe } from "../auth.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -509,6 +510,110 @@ function KeysCard({ keys, onCreated }: { keys: IngestKey[]; onCreated: (k: Creat
 }
 
 // ---------------------------------------------------------------------------
+// Test event sender
+// ---------------------------------------------------------------------------
+
+function TestEventCard({ secretKey }: { secretKey: string | null }) {
+  const { data: me } = useMe();
+  const [email, setEmail] = useState("");
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // Pre-fill email from logged-in user
+  const defaultEmail = me?.user?.email ?? "";
+  const effectiveEmail = email || defaultEmail;
+
+  if (!secretKey) return null;
+
+  async function sendTestEvent() {
+    if (!effectiveEmail || !effectiveEmail.includes("@")) {
+      setResult({ ok: false, message: "Enter a valid email address." });
+      return;
+    }
+    setSending(true);
+    setResult(null);
+    const origin = window.location.origin;
+    const userId = "test-event-user";
+    const headers = {
+      "Authorization": `Bearer ${secretKey}`,
+      "Content-Type": "application/json",
+    };
+    try {
+      // Step 1: identify (sets email on contact)
+      const idRes = await fetch(`${origin}/v1/identify`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ userId, traits: { email: effectiveEmail, name: "Test User" } }),
+      });
+      if (!idRes.ok) {
+        const body = await idRes.text();
+        setResult({ ok: false, message: `Identify failed (${idRes.status}): ${body.slice(0, 100)}` });
+        setSending(false);
+        return;
+      }
+      // Step 2: track signed_up event
+      const trackRes = await fetch(`${origin}/v1/track`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ userId, event: "signed_up" }),
+      });
+      if (!trackRes.ok) {
+        const body = await trackRes.text();
+        setResult({ ok: false, message: `Track failed (${trackRes.status}): ${body.slice(0, 100)}` });
+        setSending(false);
+        return;
+      }
+      setResult({ ok: true, message: `Test event sent. Check People for "${effectiveEmail}" and Sent for the email.` });
+    } catch (err) {
+      setResult({ ok: false, message: `Network error: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-6">
+      <SectionHeading icon={Send} title="Send a test event" />
+      <p className="mt-2 text-[14px] text-muted-foreground">
+        Send a real <code className="rounded bg-sunken px-1 text-[13px]">signed_up</code> event
+        through the ingestion API using your secret key. If you have a welcome
+        flow active, this triggers it and sends an email to the address below.
+      </p>
+      <div className="mt-4 flex items-end gap-3">
+        <div className="flex-1">
+          <label htmlFor="test-email" className="mb-1.5 block text-[14px] font-medium text-foreground">
+            Recipient email
+          </label>
+          <Input
+            id="test-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder={defaultEmail || "you@company.com"}
+          />
+        </div>
+        <Button onClick={sendTestEvent} disabled={sending}>
+          <Send size={16} strokeWidth={1.5} />
+          {sending ? "Sending..." : "Send test event"}
+        </Button>
+      </div>
+      {result && (
+        <div
+          className={`mt-3 rounded-md border px-3.5 py-2.5 text-[14px] ${
+            result.ok
+              ? "border-success bg-success-soft text-foreground"
+              : "border-danger bg-danger-soft text-foreground"
+          }`}
+          role="status"
+        >
+          {result.message}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -521,9 +626,18 @@ export default function IntegratePage() {
   const activePublishable = keys.find((k) => k.kind === "publishable" && !k.revoked_at) ?? null;
   const rawPublishable =
     createdKey && createdKey.kind === "publishable" ? createdKey.key : null;
+  // Track the raw secret key for the test-event panel
+  const rawSecret =
+    createdKey && createdKey.kind === "secret" ? createdKey.key : null;
 
   function createPublishable() {
     create.mutate({ kind: "publishable" }, { onSuccess: (k) => setCreatedKey(k) });
+  }
+
+  // Create a secret key for the test-event panel if none exists
+  const activeSecret = keys.find((k) => k.kind === "secret" && !k.revoked_at) ?? null;
+  function createSecretForTest() {
+    create.mutate({ kind: "secret", label: "Test event key" }, { onSuccess: (k) => setCreatedKey(k) });
   }
 
   return (
@@ -540,6 +654,34 @@ export default function IntegratePage() {
         {createdKey && (
           <CreatedKeyBanner created={createdKey} onDismiss={() => setCreatedKey(null)} />
         )}
+
+        {/* Test event panel: appears when a raw secret key is available */}
+        {rawSecret ? (
+          <TestEventCard secretKey={rawSecret} />
+        ) : activeSecret && !rawSecret ? (
+          <section className="rounded-lg border border-border bg-card p-6">
+            <SectionHeading icon={Send} title="Send a test event" />
+            <p className="mt-2 text-[14px] text-muted-foreground">
+              Create a secret key to send a test event through the real API.
+              The key is shown once at creation and used to send the event.
+            </p>
+            <Button size="sm" className="mt-3" onClick={createSecretForTest} disabled={create.isPending}>
+              <Plus size={16} strokeWidth={1.5} />
+              {create.isPending ? "Creating..." : "Create secret key for testing"}
+            </Button>
+          </section>
+        ) : !activeSecret ? (
+          <section className="rounded-lg border border-border bg-card p-6">
+            <SectionHeading icon={Send} title="Send a test event" />
+            <p className="mt-2 text-[14px] text-muted-foreground">
+              Create a secret key to send a test event through the real API.
+            </p>
+            <Button size="sm" className="mt-3" onClick={createSecretForTest} disabled={create.isPending}>
+              <Plus size={16} strokeWidth={1.5} />
+              {create.isPending ? "Creating..." : "Create secret key"}
+            </Button>
+          </section>
+        ) : null}
 
         {isLoading ? (
           <Skeleton className="h-64 w-full rounded-lg" />

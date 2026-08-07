@@ -17,7 +17,7 @@ import {
   lifecycleMessages,
   transportConfigs,
 } from "@claros/db/schema";
-import { processDrainTick, fetchDrainBatchSimple } from "../src/drain.js";
+import { makeDrainRunner } from "./drain-test-utils.js";
 import type { TransportAdapter, TransportSendResult, TransportSendParams } from "../src/transport.js";
 
 class LogAdapter implements TransportAdapter {
@@ -189,8 +189,8 @@ async function allRows(): Promise<Array<{ id: string; status: string; scheduled_
   }));
 }
 
-function resolver(a: TransportAdapter | null) {
-  return async (tid: string) => tid === tenantId ? a : null;
+function runProofDrain(a: TransportAdapter | null, now: Date, opts: { batchLimit?: number } = {}) {
+  return makeDrainRunner(db, tenantId, a, TEST_SIGNING_KEY, TEST_BASE_URL)(now, opts);
 }
 
 // =============================================================================
@@ -213,19 +213,19 @@ describe("Proof 1: batch_size_per_tick", () => {
 
     const now = new Date();
 
-    const r1 = await processDrainTick(db, now, resolver(adapter), fetchDrainBatchSimple, 2, TEST_BASE_URL, TEST_SIGNING_KEY);
+    const r1 = await runProofDrain(adapter, now, { batchLimit: 2 });
     const s1 = await byStatus();
     console.log("[Proof1] TICK1 (batch=2):", JSON.stringify(s1), " drain:", { sent: r1.sent, candidates: r1.candidatesFetched });
     expect(s1.sent ?? 0).toBe(2);
     expect(s1.approved).toBe(3);
 
-    const r2 = await processDrainTick(db, now, resolver(adapter), fetchDrainBatchSimple, 2, TEST_BASE_URL, TEST_SIGNING_KEY);
+    const r2 = await runProofDrain(adapter, now, { batchLimit: 2 });
     const s2 = await byStatus();
     console.log("[Proof1] TICK2 (batch=2):", JSON.stringify(s2), " drain:", { sent: r2.sent });
     expect(s2.sent ?? 0).toBe(4);
     expect(s2.approved).toBe(1);
 
-    const r3 = await processDrainTick(db, now, resolver(adapter), fetchDrainBatchSimple, 2, TEST_BASE_URL, TEST_SIGNING_KEY);
+    const r3 = await runProofDrain(adapter, now, { batchLimit: 2 });
     const s3 = await byStatus();
     console.log("[Proof1] TICK3 (batch=2):", JSON.stringify(s3), " drain:", { sent: r3.sent });
     expect(s3.sent ?? 0).toBe(5);
@@ -259,7 +259,7 @@ describe("Proof 2: daily_limit", () => {
     expect(before.approved).toBe(4);
 
     const now = new Date();
-    const r1 = await processDrainTick(db, now, resolver(adapter), fetchDrainBatchSimple, 10, TEST_BASE_URL, TEST_SIGNING_KEY);
+    const r1 = await runProofDrain(adapter, now, { batchLimit: 10 });
     const s1 = await byStatus();
     console.log("[Proof2] AFTER DRAIN:", JSON.stringify(s1), " drain:", { sent: r1.sent });
     expect(s1.sent ?? 0).toBe(2);
@@ -285,7 +285,7 @@ describe("Proof 2: daily_limit", () => {
     expect(reset.approved).toBe(4);
 
     const adapter2 = new LogAdapter();
-    const r2 = await processDrainTick(db, new Date(), resolver(adapter2), fetchDrainBatchSimple, 10, TEST_BASE_URL, TEST_SIGNING_KEY);
+    const r2 = await runProofDrain(adapter2, new Date(), { batchLimit: 10 });
     const s2 = await byStatus();
     console.log("[Proof2] AFTER 2ND DRAIN:", JSON.stringify(s2), " drain:", { sent: r2.sent });
     expect(s2.sent ?? 0).toBe(2);
@@ -322,7 +322,7 @@ describe("Proof 3: send_window", () => {
     console.log("\n[Proof3] BEFORE (window 23:00-23:59 UTC, now=12:00 UTC):", JSON.stringify(before));
 
     const outsideTime = new Date("2026-08-05T12:00:00Z");
-    const r1 = await processDrainTick(db, outsideTime, resolver(adapter), fetchDrainBatchSimple, 10, TEST_BASE_URL, TEST_SIGNING_KEY);
+    const r1 = await runProofDrain(adapter, outsideTime, { batchLimit: 10 });
     const s1 = await byStatus();
     const rows1 = await allRows();
     console.log("[Proof3] OUTSIDE WINDOW:", JSON.stringify(s1), " deferredWindow:", r1.deferredWindow, " sent:", r1.sent);
@@ -353,7 +353,7 @@ describe("Proof 3: send_window", () => {
     `);
 
     const adapter2 = new LogAdapter();
-    const r2 = await processDrainTick(db, outsideTime, resolver(adapter2), fetchDrainBatchSimple, 10, TEST_BASE_URL, TEST_SIGNING_KEY);
+    const r2 = await runProofDrain(adapter2, outsideTime, { batchLimit: 10 });
     const s2 = await byStatus();
     const rows2 = await allRows();
     console.log("[Proof3] INSIDE WINDOW (00:00-23:59):", JSON.stringify(s2), " sent:", r2.sent);

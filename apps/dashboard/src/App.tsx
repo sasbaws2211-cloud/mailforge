@@ -40,7 +40,6 @@ import TransportSettings from "./pages/settings/TransportSettings.js";
 import PaceSettings from "./pages/settings/PaceSettings.js";
 import BrandingSettings from "./pages/settings/BrandingSettings.js";
 import PostalSettings from "./pages/settings/PostalSettings.js";
-import WorkspaceSettings from "./pages/settings/WorkspaceSettings.js";
 import NotFoundPage from "./pages/NotFoundPage.js";
 import IntegratePage from "./pages/IntegratePage.js";
 import SentLogPage from "./pages/SentLogPage.js";
@@ -106,7 +105,6 @@ export default function App() {
           <Route path="pace" element={<PaceSettings />} />
           <Route path="branding" element={<BrandingSettings />} />
           <Route path="postal" element={<PostalSettings />} />
-          <Route path="workspace" element={<WorkspaceSettings />} />
         </Route>
         {/* Unknown route inside the shell: the chrome persists, only the
             content region reports the miss. */}

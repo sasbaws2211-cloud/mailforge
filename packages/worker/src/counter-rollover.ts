@@ -50,7 +50,7 @@ export async function processCounterRollover(
       event_count_bucket_current = 0,
       last_counter_reset_at = ${now}
     WHERE last_counter_reset_at IS NULL
-       OR last_counter_reset_at < ${now} - interval '15 days'
+       OR last_counter_reset_at < ${now}::timestamptz - interval '15 days'
   `);
 
   return { contactsRolled: result.rowCount ?? 0 };

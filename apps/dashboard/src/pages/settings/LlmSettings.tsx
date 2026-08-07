@@ -14,7 +14,7 @@ import { Input } from "../../components/ui/input.js";
 import { Select } from "../../components/ui/select.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
 import { llmDefaultsFor } from "../../llm-defaults.js";
-import { Section, FormError, errorMessage, formatDate } from "./shared.js";
+import { Section, FormError, Notice, SummaryList, SummaryItem, errorMessage, formatDate } from "./shared.js";
 
 const LLM_PROVIDERS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "openai", label: "OpenAI" },
@@ -67,42 +67,47 @@ export default function LlmSettings() {
     (!isCustom || (effectiveBaseUrl !== null && effectiveModel !== null));
 
   return (
-    <Section title="LLM provider" configured={llm !== null}>
-      {!formVisible && llm && (
-        <div className="flex items-center justify-between">
-          <p className="text-[14px] text-muted-foreground">
-            <span className="font-mono text-[13px]">{llm.provider}</span>
-            {llm.model && (
-              <>
-                {" · drafts and compiles run on "}
-                <span className="font-mono text-[13px]">{llm.model}</span>
-              </>
-            )}
-            {llm.base_url && (
-              <>
-                {" via "}
-                <span className="font-mono text-[13px]">{llm.base_url}</span>
-              </>
-            )}
-            {" · configured "}
-            <span className="font-mono text-[13px]">{formatDate(llm.created_at)}</span>
-            {" · the key is stored encrypted and never displayed"}
-          </p>
+    <Section
+      title="LLM provider"
+      configured={llm !== null}
+      actions={
+        !formVisible && llm ? (
           <Button variant="outline" size="sm" onClick={() => { setOpen(true); setSaved(false); }}>
             Replace
           </Button>
-        </div>
+        ) : undefined
+      }
+    >
+      {!formVisible && llm && (
+        <>
+          <SummaryList>
+            <SummaryItem label="Provider">
+              {LLM_PROVIDERS.find((p) => p.value === llm.provider)?.label ?? llm.provider}
+            </SummaryItem>
+            <SummaryItem label="Model" mono>{llm.model ?? "default"}</SummaryItem>
+            <SummaryItem label="Configured">{formatDate(llm.created_at)}</SummaryItem>
+            {llm.base_url && (
+              <SummaryItem label="Endpoint" mono span>{llm.base_url}</SummaryItem>
+            )}
+            {llm.embedding_model && (
+              <SummaryItem label="Embedding model" mono>{llm.embedding_model}</SummaryItem>
+            )}
+          </SummaryList>
+          <p className="mt-4 text-[13px] text-muted-foreground">
+            Drafts and compiles run on this provider. The key is stored encrypted and never displayed.
+          </p>
+        </>
       )}
       {saved && !formVisible && (
-        <p className="mt-2 text-[14px] text-muted-foreground" role="status">
+        <p className="mt-3 text-[13px] text-success" role="status">
           Saved. The key was verified with the provider before storing.
         </p>
       )}
       {llm === null && (
-        <p className="mb-4 rounded-md border border-warning bg-warning-soft px-3.5 py-2.5 text-[14px] text-foreground">
+        <Notice className="mb-4">
           Without an LLM provider every flow compile returns 422. Nothing in
           the product can draft or compile until this is set.
-        </p>
+        </Notice>
       )}
       {formVisible && (
         <form onSubmit={handleSubmit} noValidate className="mt-2 space-y-4">

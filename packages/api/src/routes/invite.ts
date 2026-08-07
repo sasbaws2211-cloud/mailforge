@@ -61,8 +61,9 @@ function renderAcceptPage(email: string, tenantName: string, token: string): str
   <body>
     <main>
       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M16.36 16.5 A 7 7 0 1 1 16.36 7.5" stroke="#3d5af1" stroke-width="2.4" stroke-linecap="round" />
-        <circle cx="19.7" cy="12" r="1.9" fill="#3d5af1" />
+        <g transform="translate(12 12) rotate(90)">
+          <path d="M0 -10.8 C0 -10.8 -7.8 -2.5 -7.8 1.6 a7.8 7.8 0 0 0 15.6 0 C7.8 -2.5 0 -10.8 0 -10.8 Z M0 -2.4 a3.7 3.7 0 1 0 0.001 0 Z" fill="#008fba" fill-rule="evenodd" />
+        </g>
       </svg>
       <h1>Join ${escapeHtml(tenantName)}</h1>
       <p>You have been invited to join as <strong>${escapeHtml(email)}</strong>.</p>

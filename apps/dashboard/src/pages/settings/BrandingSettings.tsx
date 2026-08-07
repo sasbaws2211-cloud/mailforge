@@ -79,13 +79,11 @@ export default function BrandingSettings() {
   }
 
   return (
-    <Section title="Email branding" configured={hasAnyBrand ? true : null}>
-      <p className="mb-4 text-[14px] leading-relaxed text-muted-foreground">
-        Every outgoing email is wrapped in a branded shell. Configure your
-        brand identity here. All fields are optional - a fresh install
-        produces clean emails with sensible defaults.
-      </p>
-
+    <Section
+      title="Email branding"
+      configured={hasAnyBrand ? true : null}
+      description="Every outgoing email is wrapped in a branded shell. All fields are optional - a fresh install produces clean emails with sensible defaults."
+    >
       <form onSubmit={handleSave} className="space-y-4" noValidate>
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -181,20 +179,20 @@ export default function BrandingSettings() {
             {patch.isPending ? "Saving..." : "Save brand"}
           </Button>
           {saved && (
-            <span className="text-[14px] text-muted-foreground" role="status">Saved.</span>
+            <span className="text-[13px] text-success" role="status">Saved.</span>
           )}
         </div>
       </form>
 
       {/* Test send */}
-      <div className="mt-6 border-t border-border pt-4">
-        <p className="mb-3 text-[14px] font-medium text-foreground">
+      <div className="mt-6 border-t border-border pt-5">
+        <h3 className="text-[14px] font-medium text-foreground">
           Send a test email
-        </p>
-        <p className="mb-3 text-[12px] text-muted-foreground">
+        </h3>
+        <p className="mt-1 text-[13px] text-muted-foreground">
           See what your emails look like in a real inbox. Requires transport and postal address to be configured.
         </p>
-        <form onSubmit={handleTestSend} className="flex items-end gap-3">
+        <form onSubmit={handleTestSend} className="mt-3 flex items-end gap-3">
           <div className="flex-1">
             <Input
               value={testTo}

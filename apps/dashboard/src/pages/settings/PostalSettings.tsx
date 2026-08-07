@@ -11,7 +11,7 @@ import { useSetupState, usePatchTenant } from "../../settings.js";
 import { Button } from "../../components/ui/button.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
-import { Section, FormError, errorMessage } from "./shared.js";
+import { Section, FormError, Notice, errorMessage } from "./shared.js";
 
 export default function PostalSettings() {
   const { tenant, isLoading } = useSetupState();
@@ -37,16 +37,15 @@ export default function PostalSettings() {
   }
 
   return (
-    <Section title="Postal address" configured={configured}>
-      <p className="mb-4 text-[14px] leading-relaxed text-muted-foreground">
-        A physical postal address is a legal requirement on commercial email
-        (CAN-SPAM). It appears in the footer of every message the product
-        sends. While it is missing, the drain refuses to send anything.
-      </p>
+    <Section
+      title="Postal address"
+      configured={configured}
+      description="A physical postal address is a legal requirement on commercial email (CAN-SPAM). It appears in the footer of every message the product sends."
+    >
       {!configured && (
-        <p className="mb-4 rounded-md border border-warning bg-warning-soft px-3.5 py-2.5 text-[14px] text-foreground">
-          Outgoing mail is blocked until this is set.
-        </p>
+        <Notice className="mb-4">
+          Outgoing mail is blocked until this is set. The drain refuses to send anything.
+        </Notice>
       )}
       <form onSubmit={handleSubmit} noValidate>
         <Textarea
@@ -63,7 +62,7 @@ export default function PostalSettings() {
             {patch.isPending ? "Saving..." : "Save address"}
           </Button>
           {saved && (
-            <span className="text-[14px] text-muted-foreground" role="status">Saved.</span>
+            <span className="text-[13px] text-success" role="status">Saved.</span>
           )}
         </div>
       </form>

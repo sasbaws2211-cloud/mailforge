@@ -1,4 +1,4 @@
-# INGESTION.md - Sending Events to Claros
+# Ingestion: Sending Events to Claros
 
 > Audience: anyone integrating a product with a Claros install. Everything on
 > this page is copy-paste runnable. Replace `https://YOUR_CLAROS_HOST` with

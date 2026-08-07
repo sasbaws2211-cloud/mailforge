@@ -29,7 +29,7 @@ import {
 } from "@claros/db/schema";
 import { encrypt, parseEncryptionKey } from "@claros/adapters";
 import { buildTenantTransportResolver } from "../src/transport-resolver.js";
-import { processDrainTick, fetchDrainBatchSimple } from "../src/drain.js";
+import { makeDrainRunner } from "./drain-test-utils.js";
 
 // ---------------------------------------------------------------------------
 // DB setup
@@ -239,13 +239,10 @@ async function insertUnimplementedConfig(provider: string): Promise<void> {
 }
 
 /**
- * Run processDrainTick with the test signing key and base URL injected,
+ * Run a drain tick with the test signing key and base URL,
  * using the real buildTenantTransportResolver with the test ENCRYPTION_KEY.
- *
- * The resolver is scoped to testTenantId only. Other tenants' rows inserted
- * by concurrently-running test files (e.g. settings-pipeline.db.test.ts)
- * share the same Postgres instance; without this scope the drain tick would
- * pick up those rows, causing spurious candidatesFetched > 0 failures.
+ * Both the resolver and fetch batch are scoped to testTenantId.
+ * See drain-test-utils.ts for why both scopes are needed.
  */
 async function runDrainWithRealResolver(now: Date, encryptionKeyOverride?: string | null) {
   const savedKey = process.env.ENCRYPTION_KEY;
@@ -259,20 +256,8 @@ async function runDrainWithRealResolver(now: Date, encryptionKeyOverride?: strin
 
   try {
     const rawResolver = buildTenantTransportResolver(db);
-    // Scope to this test's tenant only to prevent cross-file test pollution.
-    const resolver = async (tenantId: string) => {
-      if (tenantId !== testTenantId) return null;
-      return rawResolver(tenantId);
-    };
-    return await processDrainTick(
-      db,
-      now,
-      resolver,
-      fetchDrainBatchSimple,
-      50,
-      TEST_BASE_URL,
-      TEST_SIGNING_KEY,
-    );
+    const adapter = await rawResolver(testTenantId);
+    return makeDrainRunner(db, testTenantId, adapter, TEST_SIGNING_KEY, TEST_BASE_URL)(now);
   } finally {
     if (savedKey !== undefined) {
       process.env.ENCRYPTION_KEY = savedKey;

@@ -18,7 +18,6 @@ import {
   Gauge,
   Palette,
   MapPin,
-  Building2,
   type LucideIcon,
 } from "lucide-react";
 import { PageHeader } from "../../components/page-header.js";
@@ -67,12 +66,6 @@ export default function SettingsLayout() {
           icon: MapPin,
           warn: tenant !== null && (tenant.postal_address ?? "") === "",
         },
-      ],
-    },
-    {
-      label: "Workspace",
-      items: [
-        { to: "/settings/workspace", label: "Workspace", icon: Building2 },
       ],
     },
   ];

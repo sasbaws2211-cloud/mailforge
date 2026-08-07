@@ -13,7 +13,7 @@ import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import { Select } from "../../components/ui/select.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
-import { Section, FormError, errorMessage } from "./shared.js";
+import { Section, FormError, SummaryList, SummaryItem, errorMessage } from "./shared.js";
 
 export default function PaceSettings() {
   const throttleQuery = useThrottle();
@@ -92,49 +92,36 @@ export default function PaceSettings() {
   }
 
   return (
-    <Section title="Sending pace" configured={true}>
-      <p className="mb-4 text-[14px] leading-relaxed text-muted-foreground">
-        Control how fast email leaves your relay and when it is allowed to send.
-        These limits protect your sender reputation. Getting them wrong can land
-        you in spam or get your domain blocked.
-      </p>
-
-      {!open && (
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-[14px]">
-            <div>
-              <dt className="text-muted-foreground">Max per contact per day</dt>
-              <dd className="font-mono text-[13px]">{throttle.max_emails_per_user_per_day}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">Max per contact per week</dt>
-              <dd className="font-mono text-[13px]">{throttle.max_emails_per_user_per_week}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">Minimum gap between emails</dt>
-              <dd className="font-mono text-[13px]">{throttle.min_interval_between_emails_hours} hours</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">Batch size per tick</dt>
-              <dd className="font-mono text-[13px]">{throttle.batch_size_per_tick} messages</dd>
-            </div>
-            <div className="col-span-2">
-              <dt className="text-muted-foreground">Send window</dt>
-              <dd className="font-mono text-[13px]">
-                {throttle.send_window_start} - {throttle.send_window_end} ({throttle.send_window_days.join(", ")})
-                {" via "}
-                {throttle.send_window_timezone === "contact_local" ? "contact timezone" : `tenant timezone (${throttle.tenant_timezone ?? "not set"})`}
-              </dd>
-            </div>
-          </div>
+    <Section
+      title="Sending pace"
+      configured={true}
+      description="How fast email leaves your relay and when it is allowed to send. These limits protect your sender reputation - getting them wrong lands you in spam or gets the domain blocked."
+      actions={
+        !open ? (
           <Button variant="outline" size="sm" onClick={() => { setOpen(true); setSaved(false); }}>
             Modify
           </Button>
-        </div>
+        ) : undefined
+      }
+    >
+      {!open && (
+        <>
+          <SummaryList>
+            <SummaryItem label="Max per contact / day" mono>{throttle.max_emails_per_user_per_day}</SummaryItem>
+            <SummaryItem label="Max per contact / week" mono>{throttle.max_emails_per_user_per_week}</SummaryItem>
+            <SummaryItem label="Min gap between emails" mono>{throttle.min_interval_between_emails_hours} hours</SummaryItem>
+            <SummaryItem label="Batch size per tick" mono>{throttle.batch_size_per_tick} messages</SummaryItem>
+            <SummaryItem label="Send window" mono span>
+              {throttle.send_window_start} - {throttle.send_window_end} ({throttle.send_window_days.join(", ")})
+              {" via "}
+              {throttle.send_window_timezone === "contact_local" ? "contact timezone" : `tenant timezone (${throttle.tenant_timezone ?? "not set"})`}
+            </SummaryItem>
+          </SummaryList>
+        </>
       )}
 
       {saved && !open && (
-        <p className="mt-2 text-[14px] text-muted-foreground" role="status">Saved.</p>
+        <p className="mt-3 text-[13px] text-success" role="status">Saved.</p>
       )}
 
       {open && (

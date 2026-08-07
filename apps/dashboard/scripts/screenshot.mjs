@@ -3,7 +3,7 @@
  *
  * Fresh set of screenshots:
  *   docker compose exec app claros login-link <email>   # copy the URL
- *   node scripts/screenshot.mjs --base http://localhost:5175 --verify-url '<url>'
+ *   node scripts/screenshot.mjs --base http://localhost:5173 --verify-url '<url>'
  * or store the URL in .screenshots/.verify-url and run without the flag.
  *
  * Produces PNGs in .screenshots/ at 1440x900 in both color schemes.
@@ -33,7 +33,7 @@ function argValue(flag) {
   return i >= 0 ? args[i + 1] : null;
 }
 
-const BASE = argValue("--base") ?? "http://localhost:5175";
+const BASE = argValue("--base") ?? "http://localhost:5173";
 const OUT = new URL("../.screenshots/", import.meta.url).pathname;
 mkdirSync(OUT, { recursive: true });
 
@@ -370,6 +370,11 @@ for (const scheme of ["light", "dark"]) {
         brain_action_type: "send_email",
         created_at: new Date(Date.now() - i * 3600e3).toISOString(),
         updated_at: new Date(Date.now() - i * 3600e3).toISOString(),
+        contact: {
+          email: `user${i}@example.com`,
+          name: i === 1 ? "Alex Chen" : i === 2 ? "Maria Lopez" : null,
+          external_id: `user_${i}`,
+        },
       },
       overrides,
     );
@@ -407,7 +412,7 @@ for (const scheme of ["light", "dark"]) {
   await shoot(page, `${scheme}-31-approvals-queue`);
 
   // approvals: reasoning disclosure open
-  await page.locator("summary", { hasText: "Why the AI" }).click();
+  await page.locator("summary", { hasText: "Why the AI wrote it this way" }).click();
   await shoot(page, `${scheme}-31b-approvals-reasoning`);
 
   // approvals: approve success advances the queue (STUBBED 200)

@@ -318,7 +318,7 @@ const FREEMIUM: BusinessModelTemplate = {
         "Present the upgrade as a solution, not a warning. Keep the tone matter-of-fact. " +
         "Flow class: critical (usage limit signals bypass throttle). Reentry: every_time.",
       trigger_type: "event",
-      trigger_config: { event_name: "usage_limit_approaching" },
+      trigger_config: { event: "usage_limit_approaching" },
       flow_class: "critical",
       window_policy: "immediate",
       reentry_policy: "every_time",

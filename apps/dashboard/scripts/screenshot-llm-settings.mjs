@@ -6,7 +6,7 @@
  *   advanced disclosure open.
  *
  * Usage:
- *   node scripts/screenshot-llm-settings.mjs --base http://localhost:5175 --verify-url '<url>'
+ *   node scripts/screenshot-llm-settings.mjs --base http://localhost:5173 --verify-url '<url>'
  *
  * The verify URL may point at the dashboard origin; /auth is proxied to the
  * API. "Verifying" and "unconfigured" are produced by intercepting requests;
@@ -23,7 +23,7 @@ function argValue(flag) {
   return i >= 0 ? args[i + 1] : null;
 }
 
-const BASE = argValue("--base") ?? "http://localhost:5175";
+const BASE = argValue("--base") ?? "http://localhost:5173";
 const OUT = new URL("../.screenshots/", import.meta.url).pathname;
 mkdirSync(OUT, { recursive: true });
 

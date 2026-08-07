@@ -1,42 +1,42 @@
 # Contributing to Claros
 
-Thank you for your interest in Claros.
+## How this project works
 
-## Development Model
+Claros uses an open source, not open contribution model. Development happens in a private
+repository. Releases are assembled, verified, and published here as squashed commits. This
+repository is output, not a collaboration space.
 
-Claros uses an **open source, not open contribution** model - similar to SQLite. Here is what that means:
+**Pull requests are not accepted and are closed automatically.**
 
-- Development happens in a private repository.
-- Releases are assembled, verified, and mirrored here as single squash-commits.
-- The public repository is output, not a collaboration space.
+This is not a temporary state. It reflects how the project is built: one maintainer, one
+direction, one private codebase that gets periodically mirrored here. External patches
+cannot be merged into a repo that is not the source.
 
-**Pull requests are automatically closed.** This is not unfriendly - it is a deliberate choice to keep the codebase coherent under solo maintainership. The project moves fast and in a specific direction; accepting external patches would slow both the contributor (waiting for review) and the maintainer (context-switching to evaluate changes against an unpublished roadmap).
+## What you can do
 
-## How You Can Help
+**File a bug report.** Include what you expected, what happened, steps to reproduce, and
+your environment (OS, Docker version, Postgres version, how you deployed). Clear reports
+with reproduction steps are the most useful thing an external contributor can provide.
 
-**Bug reports are welcome.** If you find a bug, please open an Issue with:
+**Request a feature.** Open an Issue. No commitment, but useful ideas surface in the
+roadmap.
 
-- What you expected to happen
-- What actually happened
-- Steps to reproduce
-- Your environment (OS, Docker version, Postgres version)
+**Report a security issue privately.** See [SECURITY.md](./SECURITY.md). Do not open a
+public Issue for vulnerabilities.
 
-Clear bug reports with reproduction steps are genuinely valuable and appreciated.
+## What this project will not accept
 
-**Feature requests:** Open an Issue. No guarantees, but good ideas get heard. The roadmap is informed by real usage patterns.
+- Pull requests (closed automatically)
+- Patches via email or other channels
+- Changes to documentation, tests, or configuration via PR
 
-**Security issues:** See [SECURITY.md](./SECURITY.md) for private disclosure.
+If you have found a bug that is blocking you, file an Issue. If the fix is genuinely urgent
+and simple, describe it in the Issue; the maintainer can apply it to the private repo and
+release.
 
-## Why This Model?
+## Why
 
-Claros is maintained by a solo developer building a commercial product on top of a genuinely open engine. The SQLite model keeps both sides honest:
-
-- The open source is real (MIT, full product, not crippled).
-- The development stays fast (no PR review bottleneck).
-- The direction stays coherent (one vision, executed).
-
-This model works for SQLite (billions of deployments, zero external commits). It can work here too.
-
-## Code of Conduct
-
-Be respectful in Issues. Technical disagreement is fine; personal attacks are not. Life is short.
+The open source is real: MIT license, full engine, nothing crippled. The development model
+is the constraint, not the license. A single maintainer moving fast in a specific direction
+cannot also maintain an external contributor workflow. SQLite operates this way. So does
+this project.

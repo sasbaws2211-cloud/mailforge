@@ -45,7 +45,7 @@
  * Mirror side: PUBLIC (apps/server is mirrored).
  */
 import { createInterface } from "node:readline";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, statSync, chownSync, chmodSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes, createHash } from "node:crypto";
@@ -62,7 +62,32 @@ const { compareCommits, compareKeyFingerprints, formatCommitVerdict, formatKeyVe
   resolve(dirname(fileURLToPath(import.meta.url)), "doctor-compare.mjs")
 );
 
+// ---------------------------------------------------------------------------
+// Argument parsing (runs before dist imports so `install` can early-exit)
+// ---------------------------------------------------------------------------
+
+const args = process.argv.slice(2);
+const isProd = args.includes("--prod");
+const filteredArgs = args.filter((a) => a !== "--prod");
+
+const [topCommand, ...restArgs] = filteredArgs;
+
+// ---------------------------------------------------------------------------
+// claros install - early exit, runs before .env exists
+// ---------------------------------------------------------------------------
+
+if (topCommand === "install") {
+  await cmdInstall(restArgs);
+  process.exit(0);
+}
+
+// ---------------------------------------------------------------------------
 // Import from built dist directories (run `pnpm build` first).
+// These are deferred to after the install early-exit because install does
+// not need compiled packages and must work before `pnpm build` has run
+// (e.g. inside a fresh Docker image where dist is available from the builder
+// stage, but not on the host before the first build).
+// ---------------------------------------------------------------------------
 const { encrypt, decrypt, parseEncryptionKey } = await import(
   resolve(repoRoot, "packages/adapters/dist/index.js")
 );
@@ -73,16 +98,6 @@ const {
   users,
   magicLinkTokens,
 } = await import(resolve(repoRoot, "drizzle/dist/schema/index.js"));
-
-// ---------------------------------------------------------------------------
-// Argument parsing
-// ---------------------------------------------------------------------------
-
-const args = process.argv.slice(2);
-const isProd = args.includes("--prod");
-const filteredArgs = args.filter((a) => a !== "--prod");
-
-const [topCommand, ...restArgs] = filteredArgs;
 
 // ---------------------------------------------------------------------------
 // .env loading (line-by-line, no shell eval, no override of existing env vars)
@@ -1585,18 +1600,31 @@ async function cmdDoctor(db, dbInfo, sessionToken) {
   section("Transport");
 
   try {
-    const allResend = await db
+    const allTransports = await db
       .select({
         isActive: transportConfigs.isActive,
         config:   transportConfigs.config,
         id:       transportConfigs.id,
+        provider: transportConfigs.provider,
       })
-      .from(transportConfigs)
-      .where(eq(transportConfigs.provider, "resend"));
+      .from(transportConfigs);
 
-    const active   = allResend.filter((r) => r.isActive);
-    const inactive = allResend.filter((r) => !r.isActive);
-    out(`    resend rows:  active=${active.length}  inactive=${inactive.length}`);
+    const active   = allTransports.filter((r) => r.isActive);
+    const inactive = allTransports.filter((r) => !r.isActive);
+    // Group by provider for display
+    const providerCounts = {};
+    for (const row of allTransports) {
+      const key = row.provider ?? "unknown";
+      providerCounts[key] = providerCounts[key] || { active: 0, inactive: 0 };
+      if (row.isActive) providerCounts[key].active++;
+      else providerCounts[key].inactive++;
+    }
+    for (const [prov, counts] of Object.entries(providerCounts)) {
+      out(`    ${prov} rows:  active=${counts.active}  inactive=${counts.inactive}`);
+    }
+    if (Object.keys(providerCounts).length === 0) {
+      out("    no transport configured");
+    }
 
     if (active.length > 0) {
       const row = active[0];
@@ -1710,6 +1738,310 @@ async function cmdDoctor(db, dbInfo, sessionToken) {
 
   // Print all at once so the output is never interleaved with other log lines
   for (const line of lines) console.log(line);
+}
+
+// ---------------------------------------------------------------------------
+// claros install
+//
+// Machine-level setup that runs before anything else. Creates .env with
+// generated secrets, tests the database connection, and applies migrations.
+// Designed to run as a one-off container (docker compose run --rm install)
+// or directly on the host (node claros.mjs install).
+//
+// Safe to run twice: existing .env is read and only missing keys are filled.
+// ---------------------------------------------------------------------------
+
+async function cmdInstall(args) {
+  const hostRootIdx = args.indexOf("--host-root");
+  const hostRoot = (hostRootIdx >= 0 && args[hostRootIdx + 1])
+    ? args[hostRootIdx + 1]
+    : repoRoot;
+  const envPath = resolve(hostRoot, ".env");
+  const envExamplePath = resolve(repoRoot, ".env.example");
+
+  console.log("");
+  console.log("╔══════════════════════════════════════════════════════════════╗");
+  console.log("║                     Claros Install                          ║");
+  console.log("╚══════════════════════════════════════════════════════════════╝");
+  console.log("");
+
+  // Step 1: .env file
+  let envContent = "";
+  let envExisted = false;
+  if (existsSync(envPath)) {
+    envContent = readFileSync(envPath, "utf8");
+    envExisted = true;
+    console.log("  .env found - checking for missing keys...");
+  } else if (existsSync(envExamplePath)) {
+    envContent = readFileSync(envExamplePath, "utf8");
+    console.log("  .env created from .env.example");
+  } else {
+    console.error("  ERROR: Neither .env nor .env.example found.");
+    process.exit(1);
+  }
+
+  // Step 2: Generate secrets if missing
+  function getEnvValue(content, key) {
+    const re = new RegExp(`^${key}=(.*)$`, "m");
+    const match = content.match(re);
+    if (!match) return null;
+    let val = match[1].trim();
+    if ((val.startsWith("'") && val.endsWith("'")) ||
+        (val.startsWith('"') && val.endsWith('"'))) {
+      val = val.slice(1, -1);
+    }
+    return val || null;
+  }
+
+  function setEnvValue(content, key, value) {
+    // If key exists as a comment (# KEY=), uncomment and set
+    const commented = new RegExp(`^#\\s*${key}=.*$`, "m");
+    if (commented.test(content)) {
+      return content.replace(commented, `${key}='${value}'`);
+    }
+    // If key exists with empty/no value, replace
+    const existing = new RegExp(`^${key}=.*$`, "m");
+    if (existing.test(content)) {
+      return content.replace(existing, `${key}='${value}'`);
+    }
+    // Append
+    return content.trimEnd() + `\n${key}='${value}'\n`;
+  }
+
+  let encKey = getEnvValue(envContent, "ENCRYPTION_KEY");
+  let signKey = getEnvValue(envContent, "UNSUBSCRIBE_SIGNING_KEY");
+  let generated = [];
+
+  if (!encKey) {
+    encKey = randomBytes(32).toString("base64");
+    envContent = setEnvValue(envContent, "ENCRYPTION_KEY", encKey);
+    generated.push("ENCRYPTION_KEY");
+  }
+  if (!signKey) {
+    signKey = randomBytes(32).toString("hex");
+    envContent = setEnvValue(envContent, "UNSUBSCRIBE_SIGNING_KEY", signKey);
+    generated.push("UNSUBSCRIBE_SIGNING_KEY");
+  }
+
+  // Step 3: Database URL
+  // --database-url flag allows specifying an external Postgres directly.
+  const dbUrlFlagIdx = args.indexOf("--database-url");
+  const externalDbUrl = (dbUrlFlagIdx >= 0 && args[dbUrlFlagIdx + 1])
+    ? args[dbUrlFlagIdx + 1]
+    : null;
+
+  let dbUrl = externalDbUrl || getEnvValue(envContent, "DATABASE_URL");
+  const bundledUrl = "postgres://claros:claros@postgres:5432/claros";
+  const isContainer = existsSync("/.dockerenv") || process.env.container === "docker";
+
+  // dbNote is printed after the .env write alongside generated key names.
+  let dbNote = "";
+
+  if (externalDbUrl) {
+    // Explicit external database - validate and write to .env
+    envContent = setEnvValue(envContent, "DATABASE_URL", externalDbUrl);
+    dbUrl = externalDbUrl;
+    generated.push("DATABASE_URL (external)");
+    dbNote = `  Database:  external (${dbUrl.replace(/:[^:@]+@/, ":***@")})`;
+  } else if (!dbUrl) {
+    if (isContainer) {
+      dbUrl = bundledUrl;
+      // Write the host-facing URL to .env (localhost:5433 is the host port mapping)
+      envContent = setEnvValue(envContent, "DATABASE_URL", "postgres://claros:claros@localhost:5433/claros");
+    } else {
+      dbUrl = "postgres://claros:claros@localhost:5433/claros";
+      envContent = setEnvValue(envContent, "DATABASE_URL", dbUrl);
+    }
+    generated.push("DATABASE_URL (bundled Postgres)");
+    dbNote = "  Database:  bundled Postgres (compose stack)\n" +
+             "             To use your own: add --database-url 'postgres://...' to the command.";
+  } else {
+    // Use existing URL from .env (could have been copied from .env.example)
+    const displayUrl = dbUrl.replace(/:[^:@]+@/, ":***@");
+    if (isContainer && (dbUrl.includes("localhost") || dbUrl.includes("127.0.0.1"))) {
+      // Inside container, localhost means the compose postgres service
+      dbUrl = bundledUrl;
+    }
+    // Detect the default bundled URL from .env.example so the message is useful
+    const isBundledDefault =
+      dbUrl.includes("localhost:5433") ||
+      dbUrl.includes("postgres:5432") ||
+      dbUrl === bundledUrl;
+    if (isBundledDefault) {
+      dbNote = "  Database:  bundled Postgres (compose stack)\n" +
+               "             To use your own: add --database-url 'postgres://...' to the command.";
+    } else {
+      dbNote = `  Database:  ${displayUrl} (from .env)`;
+    }
+  }
+
+  // Write .env 0600, then chown to the owner of the host directory.
+  //
+  // The install service mounts the project root at /hostfs. The /hostfs
+  // directory itself is owned by the host user (on Linux the real UID/GID
+  // are visible; on macOS Docker Desktop VirtioFS maps ownership automatically
+  // and no chown is needed). We stat /hostfs to get the owner UID/GID and
+  // apply them to .env so the person can edit the file without sudo.
+  //
+  // Cases:
+  //   /hostfs UID != 0  - Linux with non-root host user, or running with
+  //                       CLAROS_UID/CLAROS_GID set. chown to those values.
+  //   /hostfs UID == 0  - Two sub-cases:
+  //     macOS Docker Desktop: VirtioFS already maps the file to the host user
+  //       on the host side. No chown needed; the file is accessible.
+  //     Linux with root container and no UID override: file is root-owned.
+  //       We cannot determine the correct owner from inside the container.
+  //       Warn with the override command.
+  writeFileSync(envPath, envContent, { encoding: "utf8", mode: 0o600 });
+  try { chmodSync(envPath, 0o600); } catch { /* VirtioFS may not support; ignore */ }
+
+  let hostDirUid = 0;
+  let hostDirGid = 0;
+  try {
+    const hostStat = statSync(hostRoot);
+    hostDirUid = hostStat.uid;
+    hostDirGid = hostStat.gid;
+  } catch {
+    // stat failed (e.g. running outside a container with no /hostfs); ignore.
+  }
+
+  if (hostDirUid !== 0 || hostDirGid !== 0) {
+    // Host directory has a non-root owner. chown the file to match.
+    try {
+      chownSync(envPath, hostDirUid, hostDirGid);
+    } catch {
+      // chown may fail if running without CAP_CHOWN. Not fatal.
+    }
+  } else {
+    // /hostfs is root:root. This is expected on macOS Docker Desktop (VirtioFS
+    // remaps the file to the host user on the host side automatically) and
+    // acceptable on Linux where the person is running as root anyway.
+    // If running as root in a Linux container without macOS remapping, warn.
+    const isContainer = existsSync("/.dockerenv");
+    const onLinux = process.platform === "linux";
+    if (isContainer && onLinux) {
+      console.log("  Note: running as root inside a Linux container. .env is mode 0600.");
+      console.log("  If the file ends up owned by root on the host and you cannot edit it:");
+      console.log("    CLAROS_UID=$(id -u) CLAROS_GID=$(id -g) docker compose run --rm install");
+    }
+  }
+
+  if (generated.length > 0) {
+    console.log(`  Generated: ${generated.join(", ")}`);
+  } else {
+    console.log("  All keys present - no changes to .env");
+  }
+  if (dbNote) console.log(dbNote);
+
+  // Remove SEED_ADMIN_EMAIL default if still the placeholder
+  const seedEmail = getEnvValue(envContent, "SEED_ADMIN_EMAIL");
+  if (seedEmail === "admin@example.com") {
+    // Clear it - the claim flow will handle first login
+    envContent = envContent.replace(
+      /^SEED_ADMIN_EMAIL='admin@example\.com'$/m,
+      "# SEED_ADMIN_EMAIL="
+    );
+    writeFileSync(envPath, envContent, { encoding: "utf8", mode: 0o600 });
+    try { chmodSync(envPath, 0o600); } catch { /* ignore */ }
+    if (hostDirUid !== 0 || hostDirGid !== 0) {
+      try { chownSync(envPath, hostDirUid, hostDirGid); } catch { /* ignore */ }
+    }
+    console.log("  Cleared default SEED_ADMIN_EMAIL (claim flow will handle first login)");
+  }
+
+  // Step 4: Test database connection
+  console.log("");
+  console.log("  Testing database connection...");
+  let testPool;
+  try {
+    testPool = new Pool({ connectionString: dbUrl, connectionTimeoutMillis: 10000 });
+    const res = await testPool.query("SELECT 1 AS ok");
+    if (res.rows[0]?.ok !== 1) throw new Error("SELECT 1 did not return expected result");
+    console.log("  Database connection OK");
+  } catch (err) {
+    console.error(`  ERROR: Cannot connect to database: ${err.message}`);
+    console.error(`  URL: ${dbUrl.replace(/:[^:@]+@/, ":***@")}`);
+    if (isContainer) {
+      console.error("  The bundled Postgres should be reachable as 'postgres:5432' inside the compose network.");
+    }
+    process.exit(1);
+  }
+
+  // Step 5: Run migrations
+  console.log("  Running migrations...");
+  try {
+    const testDb = drizzle(testPool);
+    const migrationsFolder = resolve(repoRoot, "drizzle/migrations");
+    const { migrate } = await import("drizzle-orm/node-postgres/migrator");
+    await migrate(testDb, { migrationsFolder });
+    console.log("  Migrations applied");
+  } catch (err) {
+    console.error(`  ERROR: Migration failed: ${err.message}`);
+    process.exit(1);
+  } finally {
+    await testPool.end();
+  }
+
+  // Step 5b: pnpm install in the host directory.
+  //
+  // The compose dev-stage mounts ./apps, ./packages, and ./drizzle into the
+  // app container. The container's entrypoint rebuilds the dashboard using
+  // pnpm, which requires node_modules to be present in the mounted paths.
+  // Running `pnpm install` here (inside the install container, which is a
+  // Linux environment matching what the app container needs) writes Linux
+  // node_modules into the host directory so the subsequent `docker compose up`
+  // works without requiring Node.js or pnpm on the host machine.
+  //
+  // This only runs when the install command is executed inside a container
+  // (/.dockerenv present) with a --host-root argument, i.e. the install
+  // service in docker-compose.yml. It is skipped when running claros install
+  // directly on the host (where pnpm install is already done).
+  if (isContainer && hostRoot !== repoRoot) {
+    console.log("  Installing node_modules for compose mounts...");
+    try {
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("pnpm", ["install", "--frozen-lockfile"], {
+        cwd: hostRoot,
+        stdio: ["ignore", "inherit", "inherit"],
+        timeout: 300000,
+      });
+      console.log("  node_modules installed");
+    } catch (err) {
+      console.warn(`  WARNING: pnpm install failed: ${err.message}`);
+      console.warn("  docker compose up may fail. Run 'pnpm install' in the project directory.");
+    }
+
+    console.log("  Building packages for compose mounts...");
+    try {
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("pnpm", ["build"], {
+        cwd: hostRoot,
+        stdio: ["ignore", "inherit", "inherit"],
+        timeout: 300000,
+      });
+      console.log("  Build complete");
+    } catch (err) {
+      console.warn(`  WARNING: pnpm build failed: ${err.message}`);
+      console.warn("  docker compose up may fail. Run 'pnpm build' in the project directory.");
+    }
+  }
+
+  // Step 6: Print summary
+  console.log("");
+  console.log("  ┌─────────────────────────────────────────────────────────┐");
+  console.log("  │ Install complete                                        │");
+  console.log("  ├─────────────────────────────────────────────────────────┤");
+  console.log(`  │ .env:  ${envPath}`);
+  console.log("  │");
+  console.log("  │ BACK THESE UP (required to decrypt stored credentials   │");
+  console.log("  │ and validate unsubscribe links in delivered email):      │");
+  console.log(`  │   ENCRYPTION_KEY=${encKey.slice(0, 8)}...`);
+  console.log(`  │   UNSUBSCRIBE_SIGNING_KEY=${signKey.slice(0, 8)}...`);
+  console.log("  │");
+  console.log("  │ Next: docker compose up -d                              │");
+  console.log("  │ Then: open http://localhost:3000 to claim your account   │");
+  console.log("  └─────────────────────────────────────────────────────────┘");
+  console.log("");
 }
 
 function printHelp(subcommand) {
@@ -1887,6 +2219,7 @@ Usage:
   docker compose exec app claros <command> [options]
 
 Commands:
+  install                      Prepare .env, generate secrets, test DB, run migrations
   doctor [--url <url>]         Read-only deployment diagnostic (commit, DB, transport, env)
   login-link <email>           Generate a one-time login URL (no transport needed)
   setup [tenant_slug]          Guided first-run: postal address, LLM, transport

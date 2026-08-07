@@ -18,7 +18,7 @@ function argValue(flag) {
   return i >= 0 ? args[i + 1] : null;
 }
 
-const BASE = argValue("--base") ?? "http://localhost:5175";
+const BASE = argValue("--base") ?? "http://localhost:5173";
 const OUT = new URL("../.screenshots/", import.meta.url).pathname;
 mkdirSync(OUT, { recursive: true });
 

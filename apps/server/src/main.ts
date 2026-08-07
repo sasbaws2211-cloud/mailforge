@@ -36,7 +36,12 @@ const host = process.env.HOST ?? "0.0.0.0";
 const edition = process.env.CLAROS_EDITION ?? "community";
 
 /**
- * Bootstrap seed: ensure one default tenant and owner user exist on first boot.
+ * Bootstrap seed: ensure one default tenant exists on first boot.
+ *
+ * Changed from original: SEED_ADMIN_EMAIL is now OPTIONAL.
+ * - If set: creates tenant + owner (automated provisioning path, unchanged).
+ * - If unset with empty DB: creates tenant only; the claim flow (below)
+ *   handles first-user creation via the browser.
  *
  * Idempotent at the database level: the entire operation runs inside a single
  * transaction. The tenant insert uses ON CONFLICT (slug) DO NOTHING - the
@@ -52,19 +57,15 @@ const edition = process.env.CLAROS_EDITION ?? "community";
  *
  * Called only on roles that serve HTTP (api, all). Worker and scheduler skip
  * this entirely - they have no login surface and need no seed tenant.
+ *
+ * Returns true if a fresh tenant was created (signals the claim flow should
+ * mint a token), false otherwise.
  */
-async function bootstrapSeed(db: ReturnType<typeof drizzle>): Promise<void> {
+async function bootstrapSeed(db: ReturnType<typeof drizzle>): Promise<boolean> {
   const seedEmail = process.env.SEED_ADMIN_EMAIL;
-  if (!seedEmail || seedEmail.trim().length === 0) {
-    // No seed configured - nothing to do on subsequent boots. On first boot
-    // against an empty DB, the API will fail at login time, which is the
-    // correct signal: "set SEED_ADMIN_EMAIL and restart."
-    // We exit here only if the DB is actually empty, checked inside the tx.
-    // But we cannot know that without a query, so we defer to the tx below.
-    // If no email is set and no tenants exist, we log and exit after the check.
-  }
-
   const normalizedEmail = seedEmail ? seedEmail.toLowerCase().trim() : null;
+
+  let freshInstall = false;
 
   await db.transaction(async (tx) => {
     // Fast-path: if any tenant exists, nothing to do.
@@ -74,22 +75,7 @@ async function bootstrapSeed(db: ReturnType<typeof drizzle>): Promise<void> {
       .limit(1);
     if (existing.length > 0) return;
 
-    // Empty database. Require SEED_ADMIN_EMAIL.
-    if (!normalizedEmail) {
-      console.error("");
-      console.error("==========================================================");
-      console.error("  ERROR: Database has no tenants and SEED_ADMIN_EMAIL is not set.");
-      console.error("");
-      console.error("  On first boot, set SEED_ADMIN_EMAIL in .env to create the");
-      console.error("  default tenant and owner user. Example:");
-      console.error("");
-      console.error("    SEED_ADMIN_EMAIL='admin@example.com'");
-      console.error("");
-      console.error("  Then restart the server.");
-      console.error("==========================================================");
-      console.error("");
-      process.exit(1);
-    }
+    freshInstall = true;
 
     // Attempt to insert the seed tenant. ON CONFLICT (slug) DO NOTHING means
     // exactly one of N concurrent callers inserts; the rest skip silently.
@@ -111,24 +97,33 @@ async function bootstrapSeed(db: ReturnType<typeof drizzle>): Promise<void> {
               .limit(1)
           )[0]!.id;
 
-    // Insert owner user. ON CONFLICT (tenant_id, email) DO NOTHING means the
-    // loser that already found the tenant via SELECT also skips the user insert
-    // safely if another process already inserted it.
-    await tx
-      .insert(users)
-      .values({ tenantId, email: normalizedEmail, role: "owner" })
-      .onConflictDoNothing();
+    // If SEED_ADMIN_EMAIL is set, create the owner user (automated path).
+    if (normalizedEmail) {
+      await tx
+        .insert(users)
+        .values({ tenantId, email: normalizedEmail, role: "owner" })
+        .onConflictDoNothing();
 
-    if (inserted.length > 0) {
+      if (inserted.length > 0) {
+        console.log("");
+        console.log("=== Bootstrap Seed ===");
+        console.log(`  Tenant ID : ${tenantId}`);
+        console.log(`  Owner     : ${normalizedEmail}`);
+        console.log("  Seed complete. You can now request a login link.");
+        console.log("======================");
+        console.log("");
+      }
+    } else if (inserted.length > 0) {
       console.log("");
-      console.log("=== Bootstrap Seed ===");
+      console.log("=== Bootstrap ===");
       console.log(`  Tenant ID : ${tenantId}`);
-      console.log(`  Owner     : ${normalizedEmail}`);
-      console.log("  Seed complete. You can now request a login link.");
-      console.log("======================");
+      console.log("  No SEED_ADMIN_EMAIL - claim flow active (see URL below).");
+      console.log("==================");
       console.log("");
     }
   });
+
+  return freshInstall;
 }
 
 async function start(): Promise<void> {
@@ -363,8 +358,22 @@ async function start(): Promise<void> {
   // a seed tenant exists. Running seed on every role also introduces a
   // startup race: multiple processes against an empty DB all read count=0
   // simultaneously and each inserts a tenant row, producing duplicates.
+  // Claim flow: when no users exist, generate a one-time claim token and log
+  // a prominent URL. The person opens it in a browser to create the first owner.
+  // Regenerated on every restart while unclaimed (latest logs win).
+  let claimToken: string | null = null;
   if (role === "all" || role === "api") {
     await bootstrapSeed(db);
+
+    // Check if any users exist. If not, mint a claim token.
+    const userCount = await db
+      .select({ id: users.id })
+      .from(users)
+      .limit(1);
+    if (userCount.length === 0) {
+      const { randomBytes: rb } = await import("node:crypto");
+      claimToken = rb(32).toString("base64url");
+    }
   }
 
   // pg-boss: every role needs at least one boss instance.
@@ -420,11 +429,29 @@ async function start(): Promise<void> {
           ? false
           : editionDefault;
 
-    app = await buildApp({ role, edition, db, enqueue, serveDashboard });
+    app = await buildApp({ role, edition, db, enqueue, serveDashboard, claimToken });
 
     try {
       await app.listen({ port, host });
       app.log.info(`Claros server started (role=${role}) on ${host}:${port}`);
+
+      // Log the claim URL prominently when no users exist.
+      if (claimToken) {
+        const baseUrl = process.env.BASE_URL ?? `http://localhost:${port}`;
+        const claimUrl = `${baseUrl}/claim?token=${claimToken}`;
+        console.log("");
+        console.log("╔══════════════════════════════════════════════════════════════╗");
+        console.log("║  CLAIM YOUR ACCOUNT                                         ║");
+        console.log("║                                                             ║");
+        console.log("║  No users exist yet. Open this URL to create the first      ║");
+        console.log("║  owner account:                                             ║");
+        console.log("║                                                             ║");
+        console.log(`║  ${claimUrl}`);
+        console.log("║                                                             ║");
+        console.log("║  This link is single-use and regenerates on each restart.   ║");
+        console.log("╚══════════════════════════════════════════════════════════════╝");
+        console.log("");
+      }
     } catch (err) {
       app.log.error(err);
       process.exit(1);

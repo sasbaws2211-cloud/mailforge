@@ -1191,10 +1191,23 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
         `Sent at ${new Date().toISOString()}`,
       ].join("\n");
 
-      // Build compliance fragments (use a placeholder unsubscribe URL for test)
-      const testUnsubscribeUrl = "#test-unsubscribe";
-      const complianceHtml = buildShellComplianceHtml(testUnsubscribeUrl, postalAddress);
-      const complianceText = buildShellComplianceText(testUnsubscribeUrl, postalAddress);
+      // Build compliance fragments with real unsubscribe token and headers.
+      // The test-email must carry List-Unsubscribe headers like every real send.
+      const signingKey = process.env.UNSUBSCRIBE_SIGNING_KEY;
+      if (!signingKey) {
+        reply.status(400);
+        return { error: "UNSUBSCRIBE_SIGNING_KEY is not set. Set it before sending any email (including test emails)." };
+      }
+
+      const testMessageId = `test-${Date.now()}`;
+      const { generateUnsubscribeToken } = await import("@claros/adapters");
+      const token = generateUnsubscribeToken(tenantId, testMessageId, signingKey);
+      const baseUrlForLinks = process.env.BASE_URL ?? `http://localhost:${process.env.PORT ?? 3000}`;
+      const oneClickUrl = `${baseUrlForLinks}/unsubscribe/one-click?token=${token}`;
+      const browserUrl = `${baseUrlForLinks}/unsubscribe?token=${token}`;
+
+      const complianceHtml = buildShellComplianceHtml(browserUrl, postalAddress);
+      const complianceText = buildShellComplianceText(browserUrl, postalAddress);
 
       // Wrap in shell
       const deliveredHtml = wrapInShell({
@@ -1219,8 +1232,11 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
           subject,
           bodyHtml: deliveredHtml,
           bodyText: deliveredText,
-          messageId: `test-${Date.now()}`,
-          headers: {},
+          messageId: testMessageId,
+          headers: {
+            "List-Unsubscribe": `<${oneClickUrl}>`,
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+          },
         });
 
         if (result.success) {

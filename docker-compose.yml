@@ -27,7 +27,7 @@ services:
       - CLAROS_EDITION=${CLAROS_EDITION:-community}
       - PORT=${PORT:-3000}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - SEED_ADMIN_EMAIL=${SEED_ADMIN_EMAIL:-admin@example.com}
+      - SEED_ADMIN_EMAIL=${SEED_ADMIN_EMAIL:-}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - UNSUBSCRIBE_SIGNING_KEY=${UNSUBSCRIBE_SIGNING_KEY}
       - BASE_URL=${BASE_URL:-http://localhost:3000}
@@ -76,6 +76,35 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
+  # One-off container for `docker compose run --rm install`.
+  # Mounts the project root so it can write .env, tests the DB connection,
+  # and runs schema migrations. Profiled so it never starts with `up`.
+  #
+  # The install command reads the owner of the mounted directory and chowns
+  # .env to match, so no UID/GID flags are needed in the common case.
+  #
+  # Override: if the auto-detection does not produce the right owner (rare),
+  # pass your UID and GID explicitly:
+  #
+  #   CLAROS_UID=$(id -u) CLAROS_GID=$(id -g) docker compose run --rm install
+  #
+  install:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: dev
+    entrypoint: ["node", "/app/apps/server/bin/claros.mjs", "install", "--host-root", "/hostfs"]
+    environment:
+      - NODE_ENV=development
+    user: "${CLAROS_UID:-0}:${CLAROS_GID:-0}"
+    volumes:
+      - .:/hostfs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - install
 
 volumes:
   pgdata:

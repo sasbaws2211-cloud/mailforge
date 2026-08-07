@@ -5,7 +5,7 @@
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
 
-const BASE = "http://localhost:5175";
+const BASE = "http://localhost:5173";
 const OUT = new URL("../.screenshots/task/", import.meta.url).pathname;
 mkdirSync(OUT, { recursive: true });
 

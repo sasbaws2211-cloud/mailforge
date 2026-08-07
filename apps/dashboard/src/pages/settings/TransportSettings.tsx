@@ -13,7 +13,8 @@ import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import { Select } from "../../components/ui/select.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
-import { Section, FormError, errorMessage, formatDate } from "./shared.js";
+import { Section, FormError, Notice, SummaryList, SummaryItem, errorMessage, formatDate } from "./shared.js";
+import { Badge } from "../../components/ui/badge.js";
 
 const TRANSPORT_PROVIDERS: ReadonlyArray<{ value: string; label: string; note?: string }> = [
   { value: "resend", label: "Resend" },
@@ -88,30 +89,53 @@ export default function TransportSettings() {
   const canSubmit = isResendValid || isSmtpValid;
 
   return (
-    <Section title="Email transport" configured={transport !== null}>
-      {!formVisible && transport && (
-        <div className="flex items-center justify-between">
-          <p className="text-[14px] text-muted-foreground">
-            <span className="font-mono text-[13px]">{transport.provider}</span>
-            {" · from "}
-            <span className="font-mono text-[13px]">{transport.from_email}</span>
-            {" · configured "}
-            <span className="font-mono text-[13px]">{formatDate(transport.created_at)}</span>
-            {" · credentials are stored encrypted and never displayed"}
-          </p>
+    <Section
+      title="Email transport"
+      configured={transport !== null}
+      actions={
+        !formVisible && transport ? (
           <Button variant="outline" size="sm" onClick={() => { setOpen(true); setSaved(false); }}>
             Replace
           </Button>
-        </div>
+        ) : undefined
+      }
+    >
+      {!formVisible && transport && (
+        <>
+          <SummaryList>
+            <SummaryItem label="Provider">
+              {TRANSPORT_PROVIDERS.find((p) => p.value === transport.provider)?.label ?? transport.provider}
+            </SummaryItem>
+            <SummaryItem label="From" mono>
+              {transport.from_name ? `${transport.from_name} <${transport.from_email}>` : transport.from_email}
+            </SummaryItem>
+            <SummaryItem label="Daily limit" mono>
+              {transport.daily_limit !== null ? `${transport.daily_limit.toLocaleString("en-US")} / day` : "No limit"}
+            </SummaryItem>
+            <SummaryItem label="Domain authentication">
+              {transport.provider === "smtp" ? (
+                <span className="text-muted-foreground">Not applicable for SMTP</span>
+              ) : transport.dkim_verified ? (
+                <Badge variant="success">verified</Badge>
+              ) : (
+                <Badge variant="warning">not verified</Badge>
+              )}
+            </SummaryItem>
+            <SummaryItem label="Configured">{formatDate(transport.created_at)}</SummaryItem>
+          </SummaryList>
+          <p className="mt-4 text-[13px] text-muted-foreground">
+            Every outgoing message leaves through this transport. Credentials are stored encrypted and never displayed.
+          </p>
+        </>
       )}
       {saved && !formVisible && (
-        <p className="mt-2 text-[14px] text-muted-foreground" role="status">Saved.</p>
+        <p className="mt-3 text-[13px] text-success" role="status">Saved.</p>
       )}
       {transport === null && (
-        <p className="mb-4 rounded-md border border-warning bg-warning-soft px-3.5 py-2.5 text-[14px] text-foreground">
+        <Notice className="mb-4">
           Without a transport, approved messages cannot be delivered. The
           product can draft and compile, but nothing sends.
-        </p>
+        </Notice>
       )}
       {formVisible && (
         <form onSubmit={handleSubmit} noValidate className="mt-2 space-y-4">

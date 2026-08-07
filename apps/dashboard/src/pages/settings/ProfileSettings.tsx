@@ -14,7 +14,7 @@ import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
-import { Section } from "./shared.js";
+import { Section, SummaryList, SummaryItem, Notice } from "./shared.js";
 
 export default function ProfileSettings() {
   const qc = useQueryClient();
@@ -41,75 +41,85 @@ export default function ProfileSettings() {
 
   const p = profile.data?.profile;
 
-  return (
-    <Section title="Profile" configured={null}>
-      {profile.isLoading || !p ? (
+  if (profile.isLoading || !p) {
+    return (
+      <Section title="Profile" configured={null}>
         <Skeleton className="h-20 w-full" />
-      ) : (
-        <div className="space-y-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-[14px] text-muted-foreground">Email</p>
-              <p className="mt-0.5 text-[14px] text-foreground">{p.email}</p>
-              {p.pending_email && (
-                <p className="mt-1 text-[13px] text-muted-foreground">
-                  Pending change to <span className="font-mono">{p.pending_email}</span> (check your inbox)
-                </p>
-              )}
-            </div>
-            <Badge variant="neutral">{p.role}</Badge>
-          </div>
+      </Section>
+    );
+  }
 
+  return (
+    <Section
+      title="Profile"
+      configured={null}
+      description="Your account on this install. The display name appears in the team roster; the email is how you sign in."
+    >
+      <SummaryList>
+        <SummaryItem label="Email">
+          <span className="flex items-center gap-2">
+            {p.email}
+            <Badge variant="neutral">{p.role}</Badge>
+          </span>
+        </SummaryItem>
+        <SummaryItem label="Name">
           {editingName ? (
-            <div className="flex items-center gap-2">
+            <span className="flex items-center gap-2">
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Display name"
-                className="max-w-xs"
+                className="h-8 max-w-56"
+                autoFocus
               />
               <Button size="sm" onClick={() => saveName.mutate(name || null)} disabled={saveName.isPending}>
                 Save
               </Button>
-              <Button size="sm" variant="outline" onClick={() => setEditingName(false)}>
+              <Button size="sm" variant="ghost" onClick={() => setEditingName(false)}>
                 Cancel
               </Button>
-            </div>
+            </span>
           ) : (
-            <div className="flex items-center gap-2">
-              <p className="text-[14px] text-muted-foreground">
-                Name: <span className="text-foreground">{p.name || "(not set)"}</span>
-              </p>
-              <Button size="sm" variant="outline" onClick={() => { setName(p.name ?? ""); setEditingName(true); }}>
+            <span className="flex items-center gap-2">
+              {p.name || <span className="text-muted-foreground">Not set</span>}
+              <Button size="sm" variant="ghost" onClick={() => { setName(p.name ?? ""); setEditingName(true); }}>
                 Edit
               </Button>
-            </div>
+            </span>
           )}
+        </SummaryItem>
+      </SummaryList>
 
-          <div className="border-t border-border pt-4">
-            <p className="mb-2 text-[13px] text-muted-foreground">
-              Change your login email. A verification link will be sent to the new address.
-            </p>
-            <div className="flex items-center gap-2">
-              <Input
-                type="email"
-                value={newEmail}
-                onChange={(e) => setNewEmail(e.target.value)}
-                placeholder="new@email.com"
-                className="max-w-xs"
-              />
-              <Button
-                size="sm"
-                onClick={() => requestEmail.mutate(newEmail)}
-                disabled={!newEmail || requestEmail.isPending}
-              >
-                Request change
-              </Button>
-            </div>
-            {emailMsg && <p className="mt-2 text-[13px] text-muted-foreground">{emailMsg}</p>}
-          </div>
-        </div>
+      {p.pending_email && (
+        <Notice variant="info" className="mt-4">
+          A change to <span className="font-mono text-[13px]">{p.pending_email}</span> is
+          pending. Your login switches once you confirm from that inbox.
+        </Notice>
       )}
+
+      <div className="mt-6 border-t border-border pt-5">
+        <h3 className="text-[14px] font-medium text-foreground">Change login email</h3>
+        <p className="mt-1 text-[13px] text-muted-foreground">
+          A verification link goes to the new address. Nothing switches until you confirm.
+        </p>
+        <div className="mt-3 flex items-center gap-2">
+          <Input
+            type="email"
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            placeholder="new@email.com"
+            className="max-w-xs"
+          />
+          <Button
+            size="sm"
+            onClick={() => requestEmail.mutate(newEmail)}
+            disabled={!newEmail || requestEmail.isPending}
+          >
+            Request change
+          </Button>
+        </div>
+        {emailMsg && <p className="mt-2 text-[13px] text-muted-foreground" role="status">{emailMsg}</p>}
+      </div>
     </Section>
   );
 }

@@ -34,9 +34,10 @@ import {
   lifecycleMessages,
   suppressions,
 } from "@claros/db/schema";
-import { processDrainTick, fetchDrainBatchSimple } from "../src/drain.js";
+import { processDrainTick } from "../src/drain.js";
 import { verifyUnsubscribeToken } from "@claros/adapters";
 import type { TransportAdapter, TransportSendResult, TransportSendParams } from "../src/transport.js";
+import { makeDrainRunner } from "./drain-test-utils.js";
 
 // ---------------------------------------------------------------------------
 // Test-only LogTransportAdapter (lives in tests/, never in src/)
@@ -300,35 +301,25 @@ async function insertApprovedMessage(opts: {
   return row!.id;
 }
 
-function makeResolver(adapter: TransportAdapter | null) {
-  // Scope resolver to the test tenant only. If processDrainTick picks up
-  // another tenant's approved messages (e.g., from a concurrently running
-  // reap test), returning null for unknown tenants keeps them untouched.
-  return async (tenantId: string) => tenantId === testTenantId ? adapter : null;
-}
-
 /**
- * Run processDrainTick with the test signing key and base URL injected.
- * All tests that expect sends to succeed use this helper.
+ * Run processDrainTick scoped to testTenantId. Both the transport resolver
+ * and the batch fetch are limited to this tenant so that concurrent test
+ * files cannot inflate count assertions through foreign messages.
+ * See drain-test-utils.ts for the full explanation.
  */
-async function runDrainTick(
+function runDrainTick(
   adapter: TransportAdapter | null,
   now: Date,
   opts: { batchLimit?: number; signingKey?: string | null; baseUrl?: string; isProduction?: boolean } = {},
 ) {
-  // signingKey defaults to TEST_SIGNING_KEY. Pass null to simulate missing key.
-  const signingKeyOverride = opts.signingKey === undefined ? TEST_SIGNING_KEY : (opts.signingKey ?? undefined);
-  const baseUrl = opts.baseUrl !== undefined ? opts.baseUrl : TEST_BASE_URL;
-  return await processDrainTick(
+  const runner = makeDrainRunner(
     db,
-    now,
-    makeResolver(adapter),
-    fetchDrainBatchSimple,
-    opts.batchLimit ?? 50,
-    baseUrl,
-    signingKeyOverride,
-    opts.isProduction,
+    testTenantId,
+    adapter,
+    TEST_SIGNING_KEY,
+    TEST_BASE_URL,
   );
+  return runner(now, opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -596,14 +587,7 @@ describe("drain worker", () => {
       const now = new Date("2026-07-21T10:00:00Z");
 
       // Null resolver - simulates no transport configured (no signing key needed here)
-      const result = await processDrainTick(
-        db,
-        now,
-        makeResolver(null),
-        fetchDrainBatchSimple,
-        50,
-        TEST_BASE_URL,
-      );
+      const result = await runDrainTick(null, now, { signingKey: null });
 
       // skippedNoTransport counts ALL tenants with approved messages whose
       // resolver returned null. Other suites running concurrently may have
@@ -654,7 +638,7 @@ describe("drain worker", () => {
       const beforeMap = new Map(beforeRows.map((r) => [r.id, r.updatedAt!.getTime()]));
 
       const now = new Date("2026-07-21T10:00:00Z");
-      await processDrainTick(db, now, makeResolver(null), fetchDrainBatchSimple, 50, TEST_BASE_URL);
+      await runDrainTick(null, now, { signingKey: null });
 
       // Verify all messages unchanged
       const afterRows = await db
@@ -907,8 +891,8 @@ describe("drain worker", () => {
       // Run two drain ticks concurrently. Each uses batchLimit=2
       // so they should each pick up 2 disjoint messages.
       [result1, result2] = await Promise.all([
-        processDrainTick(db, now, makeResolver(adapter1), fetchDrainBatchSimple, 2, TEST_BASE_URL, TEST_SIGNING_KEY),
-        processDrainTick(db, now, makeResolver(adapter2), fetchDrainBatchSimple, 2, TEST_BASE_URL, TEST_SIGNING_KEY),
+        runDrainTick(adapter1, now, { batchLimit: 2 }),
+        runDrainTick(adapter2, now, { batchLimit: 2 }),
       ]);
 
       // Total sent across both should be <= 4
