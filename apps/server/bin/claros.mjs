@@ -2038,8 +2038,8 @@ async function cmdInstall(args) {
   console.log(`  │   ENCRYPTION_KEY=${encKey.slice(0, 8)}...`);
   console.log(`  │   UNSUBSCRIBE_SIGNING_KEY=${signKey.slice(0, 8)}...`);
   console.log("  │");
-  console.log("  │ Next: docker compose up -d                              │");
-  console.log("  │ Then: open http://localhost:3000 to claim your account   │");
+  console.log("  │ Next: docker compose up                                 │");
+  console.log("  │ Then: open the claim URL printed to the console           │");
   console.log("  └─────────────────────────────────────────────────────────┘");
   console.log("");
 }

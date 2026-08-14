@@ -27,7 +27,7 @@ The compose stack in the repository root runs the app and a Postgres 16 + pgvect
 ```bash
 git clone https://github.com/claroshq/claros.git && cd claros
 docker compose run --rm install   # creates .env with generated secrets, chowns to directory owner
-docker compose up -d
+docker compose up
 ```
 
 The `install` command prepares `.env` with generated secrets, tests the database connection, and applies schema migrations. It is safe to run again (only fills missing values).

@@ -159,7 +159,7 @@ export default function AnalyticsPage() {
   const prevQuery = useSendingAnalytics(days * 2);
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="mx-auto w-full max-w-6xl min-w-0">
       <PageHeader
         eyebrow="Performance"
         title="Analytics"
@@ -185,7 +185,7 @@ export default function AnalyticsPage() {
       )}
 
       {query.data && (
-        <div className="space-y-8">
+        <div className="min-w-0 space-y-8">
           {/* Totals */}
           <section>
             {(() => {
@@ -307,44 +307,48 @@ export default function AnalyticsPage() {
           </section>
 
           {/* Sends per day */}
-          <section>
-            <h2 className="mb-4 text-[20px] font-semibold leading-[28px] tracking-[-0.015em] text-foreground">
+          <section className="min-w-0 overflow-hidden rounded-lg border border-border bg-card p-5 sm:p-6">
+            <h2 className="text-[20px] font-semibold leading-[28px] tracking-[-0.015em] text-foreground">
               Sends per day
             </h2>
-            <DailyBars
-              rows={query.data.days.map((d) => ({ day: d.day, count: d.sent }))}
-              rangeDays={days}
-              emptyNote="Nothing was sent in this range."
-              ariaLabel={`Messages sent per day over the last ${days} days`}
-            />
+            <div className="mt-4">
+              <DailyBars
+                rows={query.data.days.map((d) => ({ day: d.day, count: d.sent }))}
+                rangeDays={days}
+                emptyNote="Nothing was sent in this range."
+                ariaLabel={`Messages sent per day over the last ${days} days`}
+              />
+            </div>
           </section>
 
           {/* Opens and clicks per day (from message_events) */}
           {query.data.engagement_days.length > 0 && (
-            <section>
-              <h2 className="mb-4 text-[20px] font-semibold leading-[28px] tracking-[-0.015em] text-foreground">
+            <section className="min-w-0 overflow-hidden rounded-lg border border-border bg-card p-5 sm:p-6">
+              <h2 className="text-[20px] font-semibold leading-[28px] tracking-[-0.015em] text-foreground">
                 Opens and clicks per day
               </h2>
-              <DailyBars
-                rows={query.data.engagement_days.map((d) => ({ day: d.day, count: d.opens }))}
-                rangeDays={days}
-                emptyNote="No open events in this range."
-                ariaLabel={`Opens per day over the last ${days} days`}
-              />
-              <p className="mt-2 mb-4 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-                Opens
-              </p>
-              <DailyBars
-                rows={query.data.engagement_days.map((d) => ({ day: d.day, count: d.clicks }))}
-                rangeDays={days}
-                emptyNote="No click events in this range."
-                ariaLabel={`Clicks per day over the last ${days} days`}
-              />
-              <p className="mt-2 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-                Clicks
-              </p>
+              <div className="mt-4">
+                <DailyBars
+                  rows={query.data.engagement_days.map((d) => ({ day: d.day, count: d.opens }))}
+                  rangeDays={days}
+                  emptyNote="No open events in this range."
+                  ariaLabel={`Opens per day over the last ${days} days`}
+                />
+                <p className="mt-2 mb-4 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                  Opens
+                </p>
+                <DailyBars
+                  rows={query.data.engagement_days.map((d) => ({ day: d.day, count: d.clicks }))}
+                  rangeDays={days}
+                  emptyNote="No click events in this range."
+                  ariaLabel={`Clicks per day over the last ${days} days`}
+                />
+                <p className="mt-2 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                  Clicks
+                </p>
+              </div>
               {query.data.engagement_since && (
-                <p className="mt-3 text-[13px] text-muted-foreground">
+                <p className="mt-4 border-t border-border pt-3 text-[13px] text-muted-foreground">
                   Event tracking data available since{" "}
                   <span className="font-mono text-[12px]">
                     {query.data.engagement_since}
@@ -356,11 +360,11 @@ export default function AnalyticsPage() {
           )}
 
           {query.data.engagement_days.length === 0 && query.data.totals.sent > 0 && (
-            <section>
-              <h2 className="mb-4 text-[20px] font-semibold leading-[28px] tracking-[-0.015em] text-foreground">
+            <section className="min-w-0 overflow-hidden rounded-lg border border-border bg-card p-5 sm:p-6">
+              <h2 className="text-[20px] font-semibold leading-[28px] tracking-[-0.015em] text-foreground">
                 Opens and clicks per day
               </h2>
-              <div className="rounded-md border border-border bg-card px-6 py-10 text-center">
+              <div className="mt-4 rounded-md border border-dashed border-border-strong px-6 py-10 text-center">
                 <p className="text-[14px] text-muted-foreground">
                   No delivery events recorded yet. Open and click trends appear
                   here once your transport provider reports engagement events
@@ -371,19 +375,20 @@ export default function AnalyticsPage() {
           )}
 
           {/* Per flow */}
-          <section>
-            <h2 className="mb-4 text-[20px] font-semibold leading-[28px] tracking-[-0.015em] text-foreground">
+          <section className="min-w-0 overflow-hidden rounded-lg border border-border bg-card p-5 sm:p-6">
+            <h2 className="text-[20px] font-semibold leading-[28px] tracking-[-0.015em] text-foreground">
               Per flow
             </h2>
-            {query.data.per_flow.length === 0 ? (
-              <div className="rounded-md border border-border bg-card px-6 py-10 text-center">
-                <p className="text-[14px] text-muted-foreground">
-                  No flow activity in this range. When flows send, their
-                  performance breaks down here.
-                </p>
-              </div>
-            ) : (
-              <Table>
+            <div className="mt-4 min-w-0 overflow-x-auto">
+              {query.data.per_flow.length === 0 ? (
+                <div className="rounded-md border border-dashed border-border-strong px-6 py-10 text-center">
+                  <p className="text-[14px] text-muted-foreground">
+                    No flow activity in this range. When flows send, their
+                    performance breaks down here.
+                  </p>
+                </div>
+              ) : (
+                <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Flow</TableHead>
@@ -438,7 +443,8 @@ export default function AnalyticsPage() {
                   ))}
                 </TableBody>
               </Table>
-            )}
+              )}
+            </div>
           </section>
         </div>
       )}

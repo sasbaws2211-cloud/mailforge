@@ -16,7 +16,7 @@ Requirements:
 To use external Postgres:
 1. Run `docker compose run --rm install` and answer "external" when asked (or pass `--database-url <url>` to skip the prompt)
 2. The install command writes your URL to `.env`, tests the connection, and applies migrations
-3. Start with `docker compose up -d`. The compose file passes `DATABASE_URL` from `.env` to the app container
+3. Start with `docker compose up`. The claim URL is printed directly to the console. The compose file passes `DATABASE_URL` from `.env` to the app container
 
 You may remove the `postgres` service from docker-compose.yml entirely once external Postgres is confirmed working.
 

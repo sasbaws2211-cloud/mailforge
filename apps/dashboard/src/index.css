@@ -23,12 +23,15 @@
 :root {
   color-scheme: light;
 
-  /* Surfaces. Raised surfaces stay pure white; the canvas and its related
-   * recessed/placeholder surfaces are lightened slightly to reduce the
-   * grey-cast that was making page content look muddy. */
-  --bg:        oklch(0.985 0.002 264);
+  /* Surfaces. Three-step lift in light: sidebar (--bg-sunken) is
+   * recessed, canvas (--bg) is the marketing-white, cards (--bg-raised)
+   * are pure white. Canvas is lightened to 0.992 to match the landing page's
+   * airy white (claros-web/src/styles/global.css) while the sidebar stays
+   * at 0.95 for a crisp split (ratio ~1.13). Cards stay white and rely on
+   * the 1px border plus the 0.8% lift off the canvas. */
+  --bg:        oklch(0.992 0.002 264);
   --bg-raised: oklch(1 0 0);
-  --bg-sunken: oklch(0.965 0.003 264);
+  --bg-sunken: oklch(0.95 0.003 264);
 
   /* Borders. --border is decorative (container edges); --border-strong is
    * the boundary of interactive controls and passes WCAG 1.4.11 (3:1). */
@@ -42,14 +45,16 @@
   /* Hover steps for soft surfaces: one small notch darker, so interactive
    * tinted cells (the retention grid) acknowledge the pointer without a
    * hue shift. */
-  --sunken-hover:        oklch(0.955 0.004 264);
+  --sunken-hover:        oklch(0.94 0.004 264);
   --success-soft-hover:  oklch(0.9 0.03 185);
   --warning-soft-hover:  oklch(0.9 0.03 80);
   --danger-soft-hover:   oklch(0.9 0.03 27);
 
   /* Selected state (active nav, selected rows): a neutral slate-blue tint,
-   * deliberately quieter than --accent-soft so it never reads as raw cyan. */
-  --selected: oklch(0.94 0.012 255);
+   * deliberately quieter than --accent-soft so it never reads as raw cyan.
+   * Slightly darker than the new --bg-sunken (0.95) so the active nav
+   * lifts off the sidebar. */
+  --selected: oklch(0.93 0.012 255);
 
   /* Text. --fg-subtle is for placeholders and disabled labels only, never
    * for content the user must read. */
@@ -165,12 +170,10 @@
 @theme inline {
   --color-background:              var(--bg);
   --color-foreground:              var(--fg);
-  /* Cards are drawn with 1px borders on the canvas, not with a raised
-   * fill: the user rejected the white-card-on-grey-canvas read as
-   * "grey background". --color-card therefore maps to the canvas, not
-   * --bg-raised. (Deliberate divergence from BRAND.md section 2's
-   * raised-card rule.) */
-  --color-card:                    var(--bg);
+  /* Cards lift off the canvas with a white fill plus a 1px border.
+   * Canvas is 0.985 (near-white), so white cards read as elevation, not
+   * as a grey slab. See BRAND.md section 2. */
+  --color-card:                    var(--bg-raised);
   --color-primary:                 var(--accent-deep);
   --color-primary-foreground:      var(--accent-deep-fg);
   --color-secondary:               var(--bg-raised);
@@ -219,8 +222,15 @@
   --font-mono: "JetBrains Mono Variable", "Fira Mono", monospace;
 }
 
-html,
+html {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
+  height: 100%;
+  overflow: hidden;
   background-color: var(--bg);
   color: var(--fg);
   font-family: var(--font-sans);
@@ -228,6 +238,12 @@ body {
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+#root {
+  height: 100%;
+  overflow: hidden;
 }
 
 *,

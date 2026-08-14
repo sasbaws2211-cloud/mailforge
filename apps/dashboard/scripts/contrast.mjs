@@ -64,15 +64,15 @@ function compositeOver(fg, alpha, bg) {
 
 const themes = {
   light: {
-    bg: [0.985, 0.002, 264],
+    bg: [0.992, 0.002, 264],
     raised: [1.0, 0.0, 0],
-    sunken: [0.965, 0.003, 264],
+    sunken: [0.95, 0.003, 264],
     border: [0.846, 0.007, 264],
     "border-strong": [0.62, 0.014, 264],
     fg: [0.24, 0.014, 264],
     "fg-muted": [0.452, 0.016, 264],
     "fg-subtle": [0.53, 0.015, 264],
-    selected: [0.94, 0.012, 255],
+    selected: [0.93, 0.012, 255],
     accent: [0.6, 0.13, 225],
     "accent-text": [0.45, 0.12, 240],
     "accent-fg": [0.2, 0.03, 240],

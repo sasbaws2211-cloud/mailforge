@@ -35,16 +35,10 @@ The command tests the connection, reports a clear error if it fails, and writes 
 ## 2. Start
 
 ```bash
-docker compose up -d
+docker compose up
 ```
 
-Watch the logs for the claim URL:
-
-```bash
-docker compose logs app
-```
-
-You will see a boxed URL like:
+The claim URL is printed directly to the console. You will see a boxed URL like:
 
 ```
 ╔══════════════════════════════════════════════════════════════╗

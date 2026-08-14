@@ -96,7 +96,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen bg-background">
+    <div className="flex h-full min-h-screen overflow-y-auto overscroll-contain bg-background">
       <BrandPanel />
 
       <div className="relative flex flex-1 items-center justify-center p-6">

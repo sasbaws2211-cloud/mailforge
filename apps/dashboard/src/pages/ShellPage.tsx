@@ -201,7 +201,7 @@ export default function ShellPage({ me }: ShellPageProps) {
   );
 
   return (
-    <div className="flex h-screen bg-background text-foreground">
+    <div className="flex h-full min-h-0 bg-background text-foreground">
       {/* Desktop sidebar: always visible at lg+ */}
       <aside className="hidden w-60 flex-col bg-sunken lg:flex">
         {sidebarContent}
@@ -224,7 +224,7 @@ export default function ShellPage({ me }: ShellPageProps) {
       )}
 
       {/* Content column */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {/* Mobile top bar: visible below lg */}
         <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-4 lg:hidden">
           <button
@@ -238,7 +238,7 @@ export default function ShellPage({ me }: ShellPageProps) {
           <BrandLockup markSize={22} />
         </header>
 
-        <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-7 lg:px-8 lg:py-8">
+        <main className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-6 sm:px-6 sm:py-7 lg:px-8 lg:py-8">
           <Outlet />
         </main>
       </div>

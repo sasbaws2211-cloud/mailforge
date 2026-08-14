@@ -28,10 +28,10 @@ An AI-native alternative to Customer.io, Loops, and Mautic. Flows are written in
 ```bash
 git clone https://github.com/claroshq/claros.git && cd claros
 docker compose run --rm install
-docker compose up -d
+docker compose up
 ```
 
-Open the claim URL from the logs, enter your email, and you are the owner. The **[Quickstart](guide/QUICKSTART.md)** walks through the rest: connect a transport, activate the library flow, send a test event, and receive a real email - all from the browser. About 5 minutes once images are cached.
+Open the claim URL printed to the console, enter your email, and you are the owner. The **[Quickstart](guide/QUICKSTART.md)** walks through the rest: connect a transport, activate the library flow, send a test event, and receive a real email - all from the browser. About 5 minutes once images are cached.
 
 ## What it does
 
