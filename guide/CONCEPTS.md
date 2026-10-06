@@ -1,6 +1,6 @@
 # Concepts and Guides
 
-Claros is unconventional in one deliberate way: there is no visual flow builder. Flows are written as plain-language prompts, compiled once into a deterministic plan, and executed by an engine that never calls an AI. This page explains that model, then gives short guides for the tasks people actually try first.
+Mailforge is unconventional in one deliberate way: there is no visual flow builder. Flows are written as plain-language prompts, compiled once into a deterministic plan, and executed by an engine that never calls an AI. This page explains that model, then gives short guides for the tasks people actually try first.
 
 Contents:
 
@@ -109,7 +109,7 @@ There is no general-purpose segment builder. "Segment" means exactly one cell of
 
 ### Write your first prompt-defined flow
 
-1. Configure an LLM provider (Settings → LLM, or `claros llm set`). Without one, use fixed content instead: steps 2-4 still work, you just skip compilation and write each step's copy yourself.
+1. Configure an LLM provider (Settings → LLM, or `mailforge llm set`). Without one, use fixed content instead: steps 2-4 still work, you just skip compilation and write each step's copy yourself.
 2. Flows → New flow. Choose the trigger (an event name your app sends, a lifecycle transition, or a retention-grid cell) and write the prompt. [FLOW-PROMPTS.md](./FLOW-PROMPTS.md) has working starting points.
 3. Compile. Read the generated plan in the editor; check the delays, conditions, and exit conditions match your intent. Fix the prompt, recompile.
 4. Activate the flow. New matching contacts enroll from that moment.
@@ -121,7 +121,7 @@ Verify it works by firing the trigger at yourself, exactly like steps 9-11 of [Q
 
 1. Save your Resend transport first; note your tenant ID (see [INSTALLATION.md](./INSTALLATION.md#email-transport)).
 2. In the Resend dashboard, create a webhook pointing at `https://<your-host>/webhooks/resend/<tenantId>` and subscribe to the `email.*` events.
-3. Copy the webhook's signing secret into your transport config (`webhook_secret` field, Settings → Transport or `claros transport set`).
+3. Copy the webhook's signing secret into your transport config (`webhook_secret` field, Settings → Transport or `mailforge transport set`).
 4. Opens, clicks, bounces, and complaints now appear on messages and contacts. Permanent bounces and complaints also add the address to your suppression list automatically.
 
 SMTP transports have no feedback channel; there is nothing to configure.
@@ -132,7 +132,7 @@ Settings → Sent → Suppressions → Import, paste one address per line (up to
 
 ```bash
 curl -X POST http://localhost:3000/v1/suppressions/import \
-  -H "Cookie: claros_session=<your-session>" \
+  -H "Cookie: mailforge_session=<your-session>" \
   -H "Content-Type: application/json" \
   -d '{"addresses":["old-unsub-1@example.com","old-unsub-2@example.com"]}'
 ```

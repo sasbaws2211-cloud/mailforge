@@ -39,8 +39,8 @@ import {
   tenants,
   users,
   sessions,
-} from "@claros/db/schema";
-import { decrypt, parseEncryptionKey, encrypt } from "@claros/adapters";
+} from "@mailforge/db/schema";
+import { decrypt, parseEncryptionKey, encrypt } from "@mailforge/adapters";
 
 // ---------------------------------------------------------------------------
 // DB setup
@@ -53,8 +53,8 @@ if (!TEST_DB_URL) {
     `[settings.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 
@@ -146,7 +146,7 @@ async function setupTenants() {
     .insert(sessions)
     .values({ tenantId: tenantAId, userId: uA!.id, expiresAt: new Date(Date.now() + 86400_000) })
     .returning({ id: sessions.id });
-  cookieA = `claros_session=${sA!.id}`;
+  cookieA = `mailforge_session=${sA!.id}`;
 
   const [tB] = await db
     .insert(tenants)
@@ -161,7 +161,7 @@ async function setupTenants() {
     .insert(sessions)
     .values({ tenantId: tenantBId, userId: uB!.id, expiresAt: new Date(Date.now() + 86400_000) })
     .returning({ id: sessions.id });
-  cookieB = `claros_session=${sB!.id}`;
+  cookieB = `mailforge_session=${sB!.id}`;
 }
 
 // ---------------------------------------------------------------------------

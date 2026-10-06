@@ -15,7 +15,7 @@
  */
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import type { ProcessMessageJobData } from "@claros/core";
+import type { ProcessMessageJobData } from "@mailforge/core";
 import { processOneContentMessage, type ContentCandidate } from "./content.js";
 
 // ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ export interface ProcessMessageResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Handle a single claros.process-message job.
+ * Handle a single mailforge.process-message job.
  *
  * Claims the specified message (CAS: pending_generation -> generating) and
  * processes it through the full Brain decide+draft+assess pipeline. If the

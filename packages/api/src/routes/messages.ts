@@ -24,7 +24,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { sql } from "drizzle-orm";
 import type { Db } from "../plugins/db.js";
-import { QUEUE } from "@claros/core";
+import { QUEUE } from "@mailforge/core";
 
 // ---------------------------------------------------------------------------
 // Constants

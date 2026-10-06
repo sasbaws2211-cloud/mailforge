@@ -1,5 +1,5 @@
 /**
- * Pure comparison functions for `claros doctor`.
+ * Pure comparison functions for `mailforge doctor`.
  *
  * Extracted so they can be unit-tested independently of the CLI runtime
  * (which uses top-level await and cannot be imported directly by tests).

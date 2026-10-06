@@ -1,5 +1,5 @@
 /**
- * @claros/brain-oss - Brain interface and community implementation.
+ * @mailforge/brain-oss - Brain interface and community implementation.
  * Provides the Brain contract that brain-cloud also implements.
  *
  * Exports:
@@ -132,7 +132,7 @@ export {
   type DecideOutput,
   type DraftOutput,
   type AssessOutput,
-} from "@claros/core";
+} from "@mailforge/core";
 
 // ---------------------------------------------------------------------------
 // Flow compilation (task 11)
@@ -173,6 +173,15 @@ export type {
 export {
   OpenAICompatibleProvider,
   LlmProviderError,
+  MeteredProvider,
+  FailoverProvider,
+  isFailoverError,
+  buildProviderFromCandidates,
+  type ProviderUsageEvent,
+  type ProviderUsageMeta,
+  type ProviderCandidate,
+  type BuildProviderOptions,
+  type BuildProviderResult,
 } from "./providers/index.js";
 
 // ---------------------------------------------------------------------------

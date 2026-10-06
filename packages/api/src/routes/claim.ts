@@ -20,7 +20,7 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { randomBytes, createHash } from "node:crypto";
-import { users, tenants, sessions } from "@claros/db/schema";
+import { users, tenants, sessions } from "@mailforge/db/schema";
 import { eq, sql } from "drizzle-orm";
 import type { Db } from "../plugins/db.js";
 import { SESSION_COOKIE_NAME } from "./auth.js";
@@ -77,7 +77,7 @@ const claimRoutes: FastifyPluginAsync<ClaimRouteOptions> = async (app, opts) => 
     if (!token || !validToken || token !== validToken) {
       reply.status(403).type("text/html").send(`
         <!doctype html>
-        <html><head><title>Claros</title></head>
+        <html><head><title>Mailforge</title></head>
         <body style="font-family:system-ui,sans-serif;max-width:480px;margin:80px auto;padding:0 20px;">
           <h1>Invalid claim link</h1>
           <p>This link is invalid or has expired. Each server instance generates
@@ -94,7 +94,7 @@ const claimRoutes: FastifyPluginAsync<ClaimRouteOptions> = async (app, opts) => 
 
     reply.type("text/html").send(`
       <!doctype html>
-      <html><head><title>Claim your Claros account</title>
+      <html><head><title>Claim your Mailforge account</title>
       <style>
         body { font-family: system-ui, sans-serif; max-width: 480px; margin: 80px auto; padding: 0 20px; }
         input { display: block; width: 100%; padding: 10px; margin: 12px 0; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; }
@@ -104,7 +104,7 @@ const claimRoutes: FastifyPluginAsync<ClaimRouteOptions> = async (app, opts) => 
       </head>
       <body>
         <h1>Claim your account</h1>
-        <p>Enter your email to become the owner of this Claros instance. This is a one-time action.</p>
+        <p>Enter your email to become the owner of this Mailforge instance. This is a one-time action.</p>
         <form method="POST" action="/claim">
           <input type="hidden" name="token" value="${token}" />
           <label for="email">Your email address</label>
@@ -138,7 +138,7 @@ const claimRoutes: FastifyPluginAsync<ClaimRouteOptions> = async (app, opts) => 
     if (!token || !validToken || token !== validToken) {
       reply.status(403).type("text/html").send(`
         <!doctype html>
-        <html><head><title>Claros</title></head>
+        <html><head><title>Mailforge</title></head>
         <body style="font-family:system-ui,sans-serif;max-width:480px;margin:80px auto;padding:0 20px;">
           <h1>Invalid or expired token</h1>
           <p>This claim link is no longer valid. Check the latest container logs for the current URL.</p>
@@ -150,7 +150,7 @@ const claimRoutes: FastifyPluginAsync<ClaimRouteOptions> = async (app, opts) => 
     if (!email || !email.includes("@") || email.length < 3) {
       reply.status(400).type("text/html").send(`
         <!doctype html>
-        <html><head><title>Claros</title></head>
+        <html><head><title>Mailforge</title></head>
         <body style="font-family:system-ui,sans-serif;max-width:480px;margin:80px auto;padding:0 20px;">
           <h1>Invalid email</h1>
           <p>Please provide a valid email address.</p>
@@ -170,7 +170,7 @@ const claimRoutes: FastifyPluginAsync<ClaimRouteOptions> = async (app, opts) => 
     if (tenantRows.length === 0) {
       reply.status(500).type("text/html").send(`
         <!doctype html>
-        <html><head><title>Claros</title></head>
+        <html><head><title>Mailforge</title></head>
         <body style="font-family:system-ui,sans-serif;max-width:480px;margin:80px auto;padding:0 20px;">
           <h1>Setup error</h1>
           <p>No tenant found. The server may not have completed bootstrap.</p>

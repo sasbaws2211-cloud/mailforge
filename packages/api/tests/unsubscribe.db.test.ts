@@ -43,13 +43,13 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql, eq, and } from "drizzle-orm";
 import { buildApp } from "../src/index.js";
-import { tenants, contacts, lifecycleMessages, flows, flowMemberships, suppressions } from "@claros/db/schema";
-import { generateUnsubscribeToken } from "@claros/adapters";
+import { tenants, contacts, lifecycleMessages, flows, flowMemberships, suppressions } from "@mailforge/db/schema";
+import { generateUnsubscribeToken } from "@mailforge/adapters";
 import {
   THROTTLE_DEFAULTS,
   evaluateThrottleGate,
   type ThrottleGateInput,
-} from "@claros/core";
+} from "@mailforge/core";
 
 // ---------------------------------------------------------------------------
 // DB setup
@@ -62,8 +62,8 @@ if (!TEST_DB_URL) {
     `[unsubscribe.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 

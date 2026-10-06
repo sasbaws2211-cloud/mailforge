@@ -4,7 +4,7 @@
  * Assigns one of four depth buckets to a contact based on their event count
  * within the engagement_depth_window_days window.
  *
- * Bucket boundaries (see CLAROS_HANDOFF_V2.md §4 [impl] note for derivation):
+ * Bucket boundaries (see MAILFORGE_HANDOFF_V2.md §4 [impl] note for derivation):
  *
  *   power   - event_count >= power_cutoff, AND cohort is large enough for the
  *             percentile to be meaningful (cohort >= floor(1/power_user_percentile))

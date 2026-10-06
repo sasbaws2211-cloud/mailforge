@@ -59,6 +59,8 @@ export interface TransportSendParams {
   headers?: Record<string, string>;
   /** Message ID for idempotency / provider deduplication. */
   messageId: string;
+  /** Where replies go, when different from the sender. */
+  replyTo?: string;
 }
 
 // ---------------------------------------------------------------------------

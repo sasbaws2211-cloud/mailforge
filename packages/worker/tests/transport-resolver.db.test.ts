@@ -26,8 +26,8 @@ import {
   flows,
   flowMemberships,
   lifecycleMessages,
-} from "@claros/db/schema";
-import { encrypt, parseEncryptionKey } from "@claros/adapters";
+} from "@mailforge/db/schema";
+import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
 import { buildTenantTransportResolver } from "../src/transport-resolver.js";
 import { makeDrainRunner } from "./drain-test-utils.js";
 
@@ -42,8 +42,8 @@ if (!TEST_DB_URL) {
     `[transport-resolver.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 

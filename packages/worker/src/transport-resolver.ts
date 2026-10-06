@@ -1,7 +1,7 @@
 /**
  * Transport resolver - reads a tenant's active transport configuration and
  * delegates credential decryption + adapter construction to the shared
- * resolveTransportAdapter() in @claros/adapters.
+ * resolveTransportAdapter() in @mailforge/adapters.
  *
  * Called once per drain tick per tenant. No caching - per the recorded
  * [impl] decision: "Transport configuration is read and decrypted per drain
@@ -33,8 +33,9 @@
  */
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { resolveTransportAdapter } from "@claros/adapters";
+import { resolveTransportAdapter } from "@mailforge/adapters";
 import type { TransportAdapter, TransportResolver } from "./transport.js";
+import { resolveManagedTransport } from "./managed-sending.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -73,13 +74,14 @@ export function buildTenantTransportResolver(db: Db): TransportResolver {
     `);
 
     if (rows.rows.length === 0) {
-      // No active transport configured. Messages stay at 'approved'.
-      return null;
+      // No transport of their own: use managed sending if the operator offers it and the workspace turned
+      // it on. Otherwise nothing is configured and messages stay at 'approved'.
+      return resolveManagedTransport(db, tenantId);
     }
 
     const row = rows.rows[0]!;
 
-    // Step 2: Resolve adapter via the shared function in @claros/adapters.
+    // Step 2: Resolve adapter via the shared function in @mailforge/adapters.
     const result = resolveTransportAdapter(row.provider, row.config);
 
     if (!result.ok) {

@@ -16,11 +16,11 @@
  */
 import { eq, and, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { flows } from "@claros/db/schema";
+import { flows } from "@mailforge/db/schema";
 import {
   matchesLifecycleTransition,
   type EnrollableFlow,
-} from "@claros/core";
+} from "@mailforge/core";
 import { enrollContactInFlows } from "./enroll.js";
 
 // ---------------------------------------------------------------------------

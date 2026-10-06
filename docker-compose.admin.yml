@@ -1,0 +1,20 @@
+# Run the platform admin console as its own deployment: its own port (so, behind a
+# reverse proxy, its own hostname), its own sign-in, its own session cookie. With this
+# on, the customer app serves no admin routes at all.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.admin.yml up -d
+#
+# The console is then at http://localhost:3011 . Sign in with an address listed in
+# MAILFORGE_PLATFORM_ADMINS; the link is emailed from the platform sender
+# (PLATFORM_* settings; with docker-compose.mailpit.yml it lands in Mailpit).
+#
+# Set MAILFORGE_ADMIN_PORT / MAILFORGE_ADMIN_URL in .env to change them. In production
+# MAILFORGE_ADMIN_URL must be the public https address of the console, because the
+# sign-in link and the cookie rules are built from it. See guide/ADMIN.md.
+services:
+  app:
+    ports:
+      - "${MAILFORGE_ADMIN_PORT:-3011}:${MAILFORGE_ADMIN_PORT:-3011}"
+    environment:
+      MAILFORGE_ADMIN_PORT: "${MAILFORGE_ADMIN_PORT:-3011}"
+      MAILFORGE_ADMIN_URL: "${MAILFORGE_ADMIN_URL:-http://localhost:3011}"

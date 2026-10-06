@@ -8,23 +8,23 @@ services:
       # below overlays only the source files, leaving node_modules untouched.
       target: dev
     ports:
-      - "${PORT:-3000}:3000"
+      - "${PORT:-3000}:${PORT:-3000}"
     environment:
       # DATABASE_URL overrides the localhost URL in .env: inside the compose
       # network the Postgres service is reachable as "postgres", not localhost.
-      - DATABASE_URL=postgres://claros:claros@postgres:5432/claros
+      - DATABASE_URL=postgres://mailforge:mailforge@postgres:5432/mailforge
       # Bind to all interfaces inside the container.
       - HOST=0.0.0.0
       # Opt-in auto-migrate: applies pending community schema migrations on boot.
-      # This is the ONLY context where CLAROS_MIGRATE_ON_BOOT should be true.
+      # This is the ONLY context where MAILFORGE_MIGRATE_ON_BOOT should be true.
       # Cloud deployments (Neon) must never set this - migrations run via
       # scripts/migrate.sh under Umut's control.
-      - CLAROS_MIGRATE_ON_BOOT=true
+      - MAILFORGE_MIGRATE_ON_BOOT=true
       # Keep NODE_ENV as development so the console login fallback works.
       - NODE_ENV=development
       # Pass-through from .env (Docker Compose auto-loads .env from the same
       # directory as the compose file - the repo root - where .env lives).
-      - CLAROS_EDITION=${CLAROS_EDITION:-community}
+      - MAILFORGE_EDITION=${MAILFORGE_EDITION:-community}
       - PORT=${PORT:-3000}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - SEED_ADMIN_EMAIL=${SEED_ADMIN_EMAIL:-}
@@ -33,7 +33,7 @@ services:
       - BASE_URL=${BASE_URL:-http://localhost:3000}
       # Dashboard URL for /auth/verify redirects. In self-host compose mode the
       # dashboard is served by Fastify on the same origin as the API, so this
-      # can match BASE_URL. Override if you front Claros with a reverse proxy
+      # can match BASE_URL. Override if you front Mailforge with a reverse proxy
       # that exposes the dashboard on a separate hostname.
       - DASHBOARD_URL=${DASHBOARD_URL:-http://localhost:3000}
       # Serve the built dashboard SPA from apps/dashboard/dist (self-host only).
@@ -41,7 +41,66 @@ services:
       # the mounted source on every container start, so the served dist always
       # matches the current code; a failed build stops the container instead
       # of serving stale assets. No manual build step is required.
-      - CLAROS_SERVE_DASHBOARD=${CLAROS_SERVE_DASHBOARD:-true}
+      - MAILFORGE_SERVE_DASHBOARD=${MAILFORGE_SERVE_DASHBOARD:-true}
+      # Public marketing site + self-serve signup (landing page at "/", pricing,
+      # legal pages, /signup). Off by default: self-hosted installs keep "/" as
+      # the dashboard.
+      - MAILFORGE_PUBLIC_SITE=${MAILFORGE_PUBLIC_SITE:-false}
+      # Plan limits (contacts, monthly emails, team seats, trial expiry, the
+      # "Sent with" credit on Free). Off by default: self-hosted installs are
+      # unlimited. Turn on only for a hosted service that sells plans. Existing
+      # "free" workspaces then get the Free limits; grandfather any that should
+      # not by setting their plan to a larger one.
+      - MAILFORGE_ENFORCE_PLANS=${MAILFORGE_ENFORCE_PLANS:-false}
+      # Where a customer-typed SMTP server may point (see guide/DEPLOYMENT.md). Default: restricted on a
+      # hosted service (public site or plans on), unrestricted when self-hosted.
+      - MAILFORGE_RESTRICT_SMTP_HOSTS=${MAILFORGE_RESTRICT_SMTP_HOSTS:-}
+      - MAILFORGE_SMTP_ALLOWED_HOSTS=${MAILFORGE_SMTP_ALLOWED_HOSTS:-}
+      - MAILFORGE_SMTP_ALLOWED_PORTS=${MAILFORGE_SMTP_ALLOWED_PORTS:-}
+      # Managed sending (Mailforge sends customers' email through YOUR Resend account). On only when the
+      # key is set. See guide/SENDING.md.
+      - MAILFORGE_MANAGED_RESEND_API_KEY=${MAILFORGE_MANAGED_RESEND_API_KEY:-}
+      - MAILFORGE_MANAGED_RESEND_WEBHOOK_SECRET=${MAILFORGE_MANAGED_RESEND_WEBHOOK_SECRET:-}
+      - MAILFORGE_MANAGED_SHARED_FROM=${MAILFORGE_MANAGED_SHARED_FROM:-}
+      - MAILFORGE_MANAGED_SHARED_DAILY_LIMIT=${MAILFORGE_MANAGED_SHARED_DAILY_LIMIT:-}
+      - MAILFORGE_MANAGED_SENDING=${MAILFORGE_MANAGED_SENDING:-}
+      - MAILFORGE_SIGNUP_AUTO_SENDING=${MAILFORGE_SIGNUP_AUTO_SENDING:-}
+      - MAILFORGE_MANAGED_RESEND_BASE_URL=${MAILFORGE_MANAGED_RESEND_BASE_URL:-}
+      # Public site URL used for the "Sent with Mailforge" credit link (falls back to BASE_URL).
+      - MAILFORGE_SITE_URL=${MAILFORGE_SITE_URL:-}
+      # Billing (Flutterwave). Online payment is on only when BOTH the secret key and the
+      # webhook secret hash are set. See guide/BILLING.md.
+      - FLUTTERWAVE_SECRET_KEY=${FLUTTERWAVE_SECRET_KEY:-}
+      - FLUTTERWAVE_WEBHOOK_HASH=${FLUTTERWAVE_WEBHOOK_HASH:-}
+      - FLUTTERWAVE_CURRENCY=${FLUTTERWAVE_CURRENCY:-USD}
+      - FLUTTERWAVE_BASE_URL=${FLUTTERWAVE_BASE_URL:-}
+      # Operators of the service: comma-separated emails that get the Admin console.
+      # Leave empty on self-hosted installs. See guide/ADMIN.md.
+      - MAILFORGE_PLATFORM_ADMINS=${MAILFORGE_PLATFORM_ADMINS:-}
+      # Run the admin console as its own deployment (own port and sign-in). Leave unset to keep
+      # it inside the customer app. Easiest to turn on with docker-compose.admin.yml.
+      - MAILFORGE_ADMIN_PORT=${MAILFORGE_ADMIN_PORT:-}
+      - MAILFORGE_ADMIN_URL=${MAILFORGE_ADMIN_URL:-}
+      - MAILFORGE_ADMIN_HOST=${MAILFORGE_ADMIN_HOST:-}
+      # Passkeys for the admin console: off | optional (default) | enforced. RP_ID is the site name
+      # passkeys are bound to (default: the host of MAILFORGE_ADMIN_URL). See guide/ADMIN.md.
+      - MAILFORGE_ADMIN_PASSKEYS=${MAILFORGE_ADMIN_PASSKEYS:-}
+      - MAILFORGE_ADMIN_RP_ID=${MAILFORGE_ADMIN_RP_ID:-}
+      # Days between a workspace owner asking to delete and permanent erasure (1 to 90).
+      - MAILFORGE_DELETION_GRACE_DAYS=${MAILFORGE_DELETION_GRACE_DAYS:-7}
+      - MAILFORGE_SUPPORT_EMAIL=${MAILFORGE_SUPPORT_EMAIL:-}
+      - MAILFORGE_LEGAL_NAME=${MAILFORGE_LEGAL_NAME:-}
+      # Platform sender for account emails (sign-in links) for workspaces that
+      # have no email transport of their own yet. Set PLATFORM_FROM_EMAIL plus
+      # either PLATFORM_RESEND_API_KEY or PLATFORM_SMTP_HOST (see platform-mailer.ts).
+      - PLATFORM_FROM_EMAIL=${PLATFORM_FROM_EMAIL:-}
+      - PLATFORM_FROM_NAME=${PLATFORM_FROM_NAME:-}
+      - PLATFORM_RESEND_API_KEY=${PLATFORM_RESEND_API_KEY:-}
+      - PLATFORM_SMTP_HOST=${PLATFORM_SMTP_HOST:-}
+      - PLATFORM_SMTP_PORT=${PLATFORM_SMTP_PORT:-}
+      - PLATFORM_SMTP_SECURE=${PLATFORM_SMTP_SECURE:-}
+      - PLATFORM_SMTP_USER=${PLATFORM_SMTP_USER:-}
+      - PLATFORM_SMTP_PASSWORD=${PLATFORM_SMTP_PASSWORD:-}
     volumes:
       # Mount source directories so file changes are reflected immediately.
       # node_modules is NOT mounted - it stays from the image (Linux binaries).
@@ -58,20 +117,20 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: claros
-      POSTGRES_PASSWORD: claros
-      POSTGRES_DB: claros
+      POSTGRES_USER: mailforge
+      POSTGRES_PASSWORD: mailforge
+      POSTGRES_DB: mailforge
     ports:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # initdb: create claros_seed_test and apply migrations on first start.
+      # initdb: create mailforge_seed_test and apply migrations on first start.
       # Only runs when the data volume is empty (fresh container).
       # After schema changes: docker compose down -v && docker compose up -d
       - ./docker/initdb/01-seed-test-db.sh:/docker-entrypoint-initdb.d/01-seed-test-db.sh:ro
       - ./drizzle/migrations:/docker-entrypoint-initdb.d/migrations:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U claros"]
+      test: ["CMD-SHELL", "pg_isready -U mailforge"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -87,17 +146,17 @@ services:
   # Override: if the auto-detection does not produce the right owner (rare),
   # pass your UID and GID explicitly:
   #
-  #   CLAROS_UID=$(id -u) CLAROS_GID=$(id -g) docker compose run --rm install
+  #   MAILFORGE_UID=$(id -u) MAILFORGE_GID=$(id -g) docker compose run --rm install
   #
   install:
     build:
       context: .
       dockerfile: docker/Dockerfile
       target: dev
-    entrypoint: ["node", "/app/apps/server/bin/claros.mjs", "install", "--host-root", "/hostfs"]
+    entrypoint: ["node", "/app/apps/server/bin/mailforge.mjs", "install", "--host-root", "/hostfs"]
     environment:
       - NODE_ENV=development
-    user: "${CLAROS_UID:-0}:${CLAROS_GID:-0}"
+    user: "${MAILFORGE_UID:-0}:${MAILFORGE_GID:-0}"
     volumes:
       - .:/hostfs
     depends_on:

@@ -51,7 +51,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
 import { buildApp } from "../src/index.js";
-import { tenants, users, sessions, flows, apiKeys } from "@claros/db/schema";
+import { tenants, users, sessions, flows, apiKeys } from "@mailforge/db/schema";
 import { randomBytes, createHash } from "node:crypto";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
@@ -61,8 +61,8 @@ if (!TEST_DB_URL) {
     `[flows.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 
@@ -131,7 +131,7 @@ beforeAll(async () => {
     })
     .returning({ id: sessions.id });
   sessionAId = sA!.id;
-  cookieA = `claros_session=${sessionAId}`;
+  cookieA = `mailforge_session=${sessionAId}`;
 
   // API key for wrong-scope test
   rawApiKey = randomBytes(24).toString("base64url");
@@ -542,7 +542,7 @@ describe("flow CRUD", () => {
       // Create under tenant B
       const created = await app.inject({
         method: "POST", url: "/v1/flows",
-        headers: { cookie: `claros_session=${sessionBId}` },
+        headers: { cookie: `mailforge_session=${sessionBId}` },
         payload: minimalFlow({ name: "Tenant B Flow" }),
       });
       const idB = created.json().id;
@@ -804,7 +804,7 @@ describe("flow CRUD", () => {
       const app = await buildApp({ db, logger: false });
       const created = await app.inject({
         method: "POST", url: "/v1/flows",
-        headers: { cookie: `claros_session=${sessionBId}` },
+        headers: { cookie: `mailforge_session=${sessionBId}` },
         payload: minimalFlow({ name: "Tenant B Only" }),
       });
       const idB = created.json().id;
@@ -890,7 +890,7 @@ describe("flow CRUD", () => {
       const app = await buildApp({ db, logger: false });
       const created = await app.inject({
         method: "POST", url: "/v1/flows",
-        headers: { cookie: `claros_session=${sessionBId}` },
+        headers: { cookie: `mailforge_session=${sessionBId}` },
         payload: minimalFlow({ name: "B Private Flow" }),
       });
       const idB = created.json().id;

@@ -1,7 +1,7 @@
 /**
  * Library flows: pre-built flows with hand-authored compiled plans and templates.
  *
- * These ship with Claros and can be installed by a self-hoster to get
+ * These ship with Mailforge and can be installed by a self-hoster to get
  * immediate value without configuring an LLM. The flows use template_ref
  * so every email is rendered deterministically from pre-authored content.
  *

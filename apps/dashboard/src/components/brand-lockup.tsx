@@ -1,7 +1,7 @@
 /**
  * BrandLockup component.
  *
- * The brand lockup: the droplet mark plus the lowercase "claros" wordmark
+ * The brand lockup: the envelope mark plus the lowercase "mailforge" wordmark
  * in Quicksand 700. The geometry is optically tuned, not mathematically
  * centered (see docs/BRAND.md section 11):
  *   - gap between mark and wordmark: mark size x 0.09
@@ -39,7 +39,7 @@ export function BrandLockup({ markSize = 24, className }: BrandLockupProps) {
         className="font-brand font-bold tracking-[0.03em] text-foreground"
         style={{ fontSize: `${wordSize}px` }}
       >
-        claros
+        mailforge
       </span>
     </span>
   );

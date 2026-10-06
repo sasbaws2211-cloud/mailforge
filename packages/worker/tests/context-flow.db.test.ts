@@ -29,7 +29,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
-import { tenants, flows, transportConfigs } from "@claros/db/schema";
+import { tenants, flows, transportConfigs } from "@mailforge/db/schema";
 import { buildFlowStepSection } from "../src/context-flow.js";
 
 // ---------------------------------------------------------------------------
@@ -43,8 +43,8 @@ if (!TEST_DB_URL) {
     `[context-flow.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 

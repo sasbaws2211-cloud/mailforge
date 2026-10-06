@@ -29,7 +29,7 @@ import { buildApp, resolvedDashboardDist } from "../src/app.js";
 // Setup: minimal dist directory with index.html and an asset file.
 // ---------------------------------------------------------------------------
 
-const distDir = mkdtempSync(join(tmpdir(), "claros-spa-test-"));
+const distDir = mkdtempSync(join(tmpdir(), "mailforge-spa-test-"));
 writeFileSync(join(distDir, "index.html"), "<html><body>SPA</body></html>");
 mkdirSync(join(distDir, "assets"));
 writeFileSync(join(distDir, "assets", "main.abc123.js"), "console.log('spa');");
@@ -172,7 +172,7 @@ describe("SPA serving skipped gracefully when dist directory is missing", () => 
 // ---------------------------------------------------------------------------
 // C1: Auto resolution (no dashboardDist, no env var)
 //
-// The test does NOT pass dashboardDist and does NOT set CLAROS_DASHBOARD_DIST.
+// The test does NOT pass dashboardDist and does NOT set MAILFORGE_DASHBOARD_DIST.
 // It verifies two things:
 //
 //   1. Path arithmetic: the auto branch must produce exactly
@@ -211,12 +211,12 @@ describe("Auto resolution (no dashboardDist, no env var) - C1", () => {
   const { distPath: autoPath, mechanism } = resolvedDashboardDist({});
 
   beforeAll(async () => {
-    // Guard: if CLAROS_DASHBOARD_DIST is set the env branch fires, not auto.
+    // Guard: if MAILFORGE_DASHBOARD_DIST is set the env branch fires, not auto.
     // This would make the integration part of the test vacuous.
     if (mechanism !== "auto") {
       throw new Error(
         `Expected auto mechanism but got "${mechanism}". ` +
-        "Is CLAROS_DASHBOARD_DIST set in the test environment? Unset it to exercise the auto branch.",
+        "Is MAILFORGE_DASHBOARD_DIST set in the test environment? Unset it to exercise the auto branch.",
       );
     }
 

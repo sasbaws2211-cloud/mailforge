@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * claros - Operator CLI for the Claros lifecycle email engine.
+ * mailforge - Operator CLI for the Mailforge lifecycle email engine.
  *
  * One CLI for every operator task: login links, credential setup, and
  * guided first-run configuration.
  *
  * Usage (local checkout, after pnpm build):
- *   node apps/server/bin/claros.mjs <command> [options]
+ *   node apps/server/bin/mailforge.mjs <command> [options]
  *
  * Usage (Docker Compose, app container running):
- *   docker compose exec app claros <command> [options]
+ *   docker compose exec app mailforge <command> [options]
  *
  * Commands:
  *   doctor [--url <url>] [--session <token>]   Read-only deployment diagnostic
@@ -31,7 +31,7 @@
  * Prerequisites:
  *   Run `pnpm build` once first. This script imports from built dist/ directories:
  *     packages/adapters/dist/  (crypto)
- *     drizzle/dist/            (@claros/db schema)
+ *     drizzle/dist/            (@mailforge/db schema)
  *
  * [impl] Shared write path:
  *   transport set / llm set: use encrypt() + parseEncryptionKey() from
@@ -73,7 +73,7 @@ const filteredArgs = args.filter((a) => a !== "--prod");
 const [topCommand, ...restArgs] = filteredArgs;
 
 // ---------------------------------------------------------------------------
-// claros install - early exit, runs before .env exists
+// mailforge install - early exit, runs before .env exists
 // ---------------------------------------------------------------------------
 
 if (topCommand === "install") {
@@ -181,10 +181,10 @@ function resolveDbUrl() {
 //
 // process.stdin.isTTY is true on a real terminal, undefined/false on a pipe.
 //
-// CLAROS_SETTINGS_INTERACTIVE=1 forces interactive mode for tests that pipe
+// MAILFORGE_SETTINGS_INTERACTIVE=1 forces interactive mode for tests that pipe
 // scripted input but need to exercise the prompts path.
 
-const isInteractive = !!process.stdin.isTTY || process.env.CLAROS_SETTINGS_INTERACTIVE === "1";
+const isInteractive = !!process.stdin.isTTY || process.env.MAILFORGE_SETTINGS_INTERACTIVE === "1";
 
 // ---------------------------------------------------------------------------
 // Line queue for interactive reading
@@ -236,7 +236,7 @@ function readLineInteractive(prompt) {
 /**
  * Read a secret without echoing.
  * On a real TTY: uses raw mode to suppress echo.
- * On a pipe (CLAROS_SETTINGS_INTERACTIVE=1): reads a normal line.
+ * On a pipe (MAILFORGE_SETTINGS_INTERACTIVE=1): reads a normal line.
  *
  * Secret fields: api_key (transport and LLM), webhook_secret (transport).
  * None appear in stdout, stderr, or the pre-write summary; only presence
@@ -468,7 +468,7 @@ async function cmdLoginLink(db, email) {
 
   console.log("");
   console.log("========================================");
-  console.log("  CLAROS LOGIN LINK");
+  console.log("  MAILFORGE LOGIN LINK");
   console.log("========================================");
   console.log(`  Email:   ${normalized}`);
   console.log(`  URL:     ${loginUrl}`);
@@ -874,7 +874,7 @@ async function postalAddressShow(db, tenantSlug) {
   if (!pa) {
     console.log(`\nNo postal address configured for "${tenantSlug}".`);
     console.log("  The drain will skip all messages until this is set.");
-    console.log(`  Set it: claros postal-address set ${tenantSlug}\n`);
+    console.log(`  Set it: mailforge postal-address set ${tenantSlug}\n`);
     return;
   }
   console.log(`\nPostal address for "${tenant.name}" (${tenantSlug}):`);
@@ -887,14 +887,14 @@ async function postalAddressShow(db, tenantSlug) {
 // Minimum CLI surface for user management. A self-hoster who seeds the wrong
 // SEED_ADMIN_EMAIL has no way back into the product without these commands.
 //
-// claros user list <tenant_slug>
+// mailforge user list <tenant_slug>
 //   List all active users for the tenant (email, role, last login).
 //
-// claros user create <tenant_slug>
+// mailforge user create <tenant_slug>
 //   Create a new user (owner or member). Interactive prompts for email and role.
-//   Non-interactive: echo '{"email":"x@y.com","role":"owner"}' | claros user create slug
+//   Non-interactive: echo '{"email":"x@y.com","role":"owner"}' | mailforge user create slug
 //
-// claros user promote <tenant_slug> <email>
+// mailforge user promote <tenant_slug> <email>
 //   Promote an existing user to owner.
 // ---------------------------------------------------------------------------
 
@@ -983,7 +983,7 @@ async function userCreate(db, tenantSlug, dbInfo) {
       .set({ role, deactivatedAt: null })
       .where(eq(users.id, existing[0].id));
     console.log(`\nUser "${normalized}" reactivated with role "${role}".`);
-    console.log(`  Generate a login link: claros login-link ${normalized}\n`);
+    console.log(`  Generate a login link: mailforge login-link ${normalized}\n`);
     return;
   }
 
@@ -996,7 +996,7 @@ async function userCreate(db, tenantSlug, dbInfo) {
   console.log(`  id:    ${inserted.id}`);
   console.log(`  email: ${inserted.email}`);
   console.log(`  role:  ${inserted.role}`);
-  console.log(`\n  Generate a login link: claros login-link ${normalized}\n`);
+  console.log(`\n  Generate a login link: mailforge login-link ${normalized}\n`);
 }
 
 async function userPromote(db, tenantSlug, email, dbInfo) {
@@ -1076,7 +1076,7 @@ async function cmdSetup(db, tenantSlug, dbInfo) {
     .limit(1);
 
   console.log("");
-  console.log("=== Claros Setup Wizard ===");
+  console.log("=== Mailforge Setup Wizard ===");
   console.log(`Tenant: ${tenant.name} (${tenantSlug})`);
   console.log(`Target: ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`);
   console.log("");
@@ -1117,7 +1117,7 @@ async function cmdSetup(db, tenantSlug, dbInfo) {
       await db.update(tenants).set({ settings: merged }).where(eq(tenants.id, tenant.id));
       console.log(`  Saved: ${trimmed}\n`);
     } else {
-      console.log("  Skipped. Run: claros postal-address set " + tenantSlug);
+      console.log("  Skipped. Run: mailforge postal-address set " + tenantSlug);
       console.log("");
       stillMissing.push("postal-address set " + tenantSlug + "  (blocks all email sending)");
     }
@@ -1224,7 +1224,7 @@ async function cmdSetup(db, tenantSlug, dbInfo) {
         }
       }
     } else {
-      console.log("  Skipped. Run: claros llm set " + tenantSlug);
+      console.log("  Skipped. Run: mailforge llm set " + tenantSlug);
       console.log("");
       stillMissing.push("llm set " + tenantSlug + "  (required for flow compilation)");
     }
@@ -1238,7 +1238,7 @@ async function cmdSetup(db, tenantSlug, dbInfo) {
   console.log("");
   console.log("Why: required to send email. Without this, approved messages queue up");
   console.log("     but nothing is delivered. You will also need to verify your sender");
-  console.log("     domain with your provider (outside Claros).");
+  console.log("     domain with your provider (outside Mailforge).");
   console.log("");
 
   if (existingTransport.length > 0) {
@@ -1322,7 +1322,7 @@ async function cmdSetup(db, tenantSlug, dbInfo) {
         }
       }
     } else {
-      console.log("  Skipped. Run: claros transport set " + tenantSlug);
+      console.log("  Skipped. Run: mailforge transport set " + tenantSlug);
       console.log("");
       stillMissing.push("transport set " + tenantSlug + "  (required to send email)");
     }
@@ -1361,14 +1361,14 @@ async function cmdSetup(db, tenantSlug, dbInfo) {
     }
     console.log("Get your login link:");
     console.log("");
-    console.log("  claros login-link <your-email>");
-    console.log("  docker compose exec app claros login-link <email>");
+    console.log("  mailforge login-link <your-email>");
+    console.log("  docker compose exec app mailforge login-link <email>");
     console.log("");
   } else {
     console.log("Steps still needed:");
-    for (const m of stillMissing) console.log(`  claros ${m}`);
+    for (const m of stillMissing) console.log(`  mailforge ${m}`);
     console.log("");
-    console.log("Re-run `claros setup` at any time to complete the remaining steps.");
+    console.log("Re-run `mailforge setup` at any time to complete the remaining steps.");
     console.log("");
   }
 }
@@ -1393,8 +1393,8 @@ async function cmdSetup(db, tenantSlug, dbInfo) {
 //
 // Authentication for /v1/diagnostics:
 //   The endpoint is behind the /v1 session-cookie preHandler. Doctor passes the
-//   session token supplied via --session <token> or CLAROS_DOCTOR_SESSION env var
-//   as a claros_session cookie. Without a token the Environment section is skipped.
+//   session token supplied via --session <token> or MAILFORGE_DOCTOR_SESSION env var
+//   as a mailforge_session cookie. Without a token the Environment section is skipped.
 //
 // All failures are non-fatal. The command always finishes and prints what it could.
 //
@@ -1412,7 +1412,7 @@ async function fetchJson(url, sessionToken) {
     const m = url.startsWith("https") ? await import("node:https") : await import("node:http");
     return await new Promise((resolve) => {
       const headers = {};
-      if (sessionToken) headers["Cookie"] = `claros_session=${sessionToken}`;
+      if (sessionToken) headers["Cookie"] = `mailforge_session=${sessionToken}`;
       const req = m.get(url, { timeout: 5000, headers }, (res) => {
         const chunks = [];
         res.on("data", (c) => chunks.push(c));
@@ -1453,7 +1453,7 @@ function fpOfRaw(val) {
  * from silently querying the wrong server.
  */
 function validateProdVersionUrl(url) {
-  if (!url) return "BASE_URL is not set; pass --url or set CLAROS_DOCTOR_URL";
+  if (!url) return "BASE_URL is not set; pass --url or set MAILFORGE_DOCTOR_URL";
   let parsed;
   try { parsed = new URL(url); } catch { return `Not a valid URL: ${url}`; }
   const host = parsed.hostname;
@@ -1462,8 +1462,8 @@ function validateProdVersionUrl(url) {
     host === "::1" ||
     host === "[::1]" ||
     /^127\./.test(host);
-  if (isLoopback) return `URL points at localhost (${url}). With --prod, doctor refuses localhost targets to avoid querying the wrong server. Set CLAROS_DOCTOR_URL to the production URL.`;
-  if (parsed.protocol !== "https:") return `URL is not https (${url}). With --prod, doctor refuses non-https targets. Set CLAROS_DOCTOR_URL to the https production URL.`;
+  if (isLoopback) return `URL points at localhost (${url}). With --prod, doctor refuses localhost targets to avoid querying the wrong server. Set MAILFORGE_DOCTOR_URL to the production URL.`;
+  if (parsed.protocol !== "https:") return `URL is not https (${url}). With --prod, doctor refuses non-https targets. Set MAILFORGE_DOCTOR_URL to the https production URL.`;
   return null;
 }
 
@@ -1473,7 +1473,7 @@ async function cmdDoctor(db, dbInfo, sessionToken) {
   const section = (title) => { out(); out(`  ${title}`); out(`  ${"─".repeat(title.length)}`); };
 
   out("╔══════════════════════════════════════════════════════════╗");
-  out("║            claros doctor - deployment diagnostic          ║");
+  out("║            mailforge doctor - deployment diagnostic          ║");
   out("╚══════════════════════════════════════════════════════════╝");
 
   // -------------------------------------------------------------------------
@@ -1500,7 +1500,7 @@ async function cmdDoctor(db, dbInfo, sessionToken) {
   // Determine the /version URL to query.
   // --prod requires https and non-localhost; refused otherwise.
   // Without --prod defaults to http://localhost:3000.
-  const rawDoctorUrl = (process.env.CLAROS_DOCTOR_URL
+  const rawDoctorUrl = (process.env.MAILFORGE_DOCTOR_URL
     ?? (isProd ? (process.env.BASE_URL ?? "").replace(/\/$/, "") : "http://localhost:3000")) || "";
 
   let versionUrl = rawDoctorUrl;
@@ -1696,7 +1696,7 @@ async function cmdDoctor(db, dbInfo, sessionToken) {
   let diagnosticsSkipReason = null;
 
   if (!sessionToken) {
-    diagnosticsSkipReason = "no session token (pass --session <token> or set CLAROS_DOCTOR_SESSION)";
+    diagnosticsSkipReason = "no session token (pass --session <token> or set MAILFORGE_DOCTOR_SESSION)";
   } else if (!versionUrl) {
     diagnosticsSkipReason = "version URL was refused or unset";
   } else {
@@ -1722,7 +1722,7 @@ async function cmdDoctor(db, dbInfo, sessionToken) {
     // Edition is in /version response; we stored it but need to surface it here.
     // We stored deployedCommit but not edition - fetch diagnostics has it if available.
     if (containerEdition !== null) {
-      out(`    CLAROS_EDITION (container): ${containerEdition}`);
+      out(`    MAILFORGE_EDITION (container): ${containerEdition}`);
     }
   }
   // Local BASE_URL
@@ -1741,12 +1741,12 @@ async function cmdDoctor(db, dbInfo, sessionToken) {
 }
 
 // ---------------------------------------------------------------------------
-// claros install
+// mailforge install
 //
 // Machine-level setup that runs before anything else. Creates .env with
 // generated secrets, tests the database connection, and applies migrations.
 // Designed to run as a one-off container (docker compose run --rm install)
-// or directly on the host (node claros.mjs install).
+// or directly on the host (node mailforge.mjs install).
 //
 // Safe to run twice: existing .env is read and only missing keys are filled.
 // ---------------------------------------------------------------------------
@@ -1761,7 +1761,7 @@ async function cmdInstall(args) {
 
   console.log("");
   console.log("╔══════════════════════════════════════════════════════════════╗");
-  console.log("║                     Claros Install                          ║");
+  console.log("║                     Mailforge Install                          ║");
   console.log("╚══════════════════════════════════════════════════════════════╝");
   console.log("");
 
@@ -1831,7 +1831,7 @@ async function cmdInstall(args) {
     : null;
 
   let dbUrl = externalDbUrl || getEnvValue(envContent, "DATABASE_URL");
-  const bundledUrl = "postgres://claros:claros@postgres:5432/claros";
+  const bundledUrl = "postgres://mailforge:mailforge@postgres:5432/mailforge";
   const isContainer = existsSync("/.dockerenv") || process.env.container === "docker";
 
   // dbNote is printed after the .env write alongside generated key names.
@@ -1847,9 +1847,9 @@ async function cmdInstall(args) {
     if (isContainer) {
       dbUrl = bundledUrl;
       // Write the host-facing URL to .env (localhost:5433 is the host port mapping)
-      envContent = setEnvValue(envContent, "DATABASE_URL", "postgres://claros:claros@localhost:5433/claros");
+      envContent = setEnvValue(envContent, "DATABASE_URL", "postgres://mailforge:mailforge@localhost:5433/mailforge");
     } else {
-      dbUrl = "postgres://claros:claros@localhost:5433/claros";
+      dbUrl = "postgres://mailforge:mailforge@localhost:5433/mailforge";
       envContent = setEnvValue(envContent, "DATABASE_URL", dbUrl);
     }
     generated.push("DATABASE_URL (bundled Postgres)");
@@ -1885,7 +1885,7 @@ async function cmdInstall(args) {
   //
   // Cases:
   //   /hostfs UID != 0  - Linux with non-root host user, or running with
-  //                       CLAROS_UID/CLAROS_GID set. chown to those values.
+  //                       MAILFORGE_UID/MAILFORGE_GID set. chown to those values.
   //   /hostfs UID == 0  - Two sub-cases:
   //     macOS Docker Desktop: VirtioFS already maps the file to the host user
   //       on the host side. No chown needed; the file is accessible.
@@ -1922,7 +1922,7 @@ async function cmdInstall(args) {
     if (isContainer && onLinux) {
       console.log("  Note: running as root inside a Linux container. .env is mode 0600.");
       console.log("  If the file ends up owned by root on the host and you cannot edit it:");
-      console.log("    CLAROS_UID=$(id -u) CLAROS_GID=$(id -g) docker compose run --rm install");
+      console.log("    MAILFORGE_UID=$(id -u) MAILFORGE_GID=$(id -g) docker compose run --rm install");
     }
   }
 
@@ -1994,7 +1994,7 @@ async function cmdInstall(args) {
   //
   // This only runs when the install command is executed inside a container
   // (/.dockerenv present) with a --host-root argument, i.e. the install
-  // service in docker-compose.yml. It is skipped when running claros install
+  // service in docker-compose.yml. It is skipped when running mailforge install
   // directly on the host (where pnpm install is already done).
   if (isContainer && hostRoot !== repoRoot) {
     console.log("  Installing node_modules for compose mounts...");
@@ -2047,7 +2047,7 @@ async function cmdInstall(args) {
 function printHelp(subcommand) {
   if (subcommand === "doctor") {
     console.log(`
-claros doctor [--url <base_url>] [--session <token>]
+mailforge doctor [--url <base_url>] [--session <token>]
 
 Read-only deployment diagnostic. NEVER writes to the database.
 
@@ -2060,7 +2060,7 @@ Prints a single report covering:
   Environment for ENCRYPTION_KEY and UNSUBSCRIBE_SIGNING_KEY: the LOCAL
               fingerprint (this machine's env) compared against the CONTAINER
               fingerprint (from GET /v1/diagnostics). MATCH or MISMATCH.
-              BASE_URL (local) and CLAROS_EDITION (container).
+              BASE_URL (local) and MAILFORGE_EDITION (container).
 
 Security: no secret, key, credential, or password is printed.
 Fingerprints and byte lengths only.
@@ -2069,37 +2069,37 @@ Failures are non-fatal. The command always finishes and prints what it could.
 
 How doctor authenticates to /v1/diagnostics:
   /v1/diagnostics is behind the /v1 session-cookie preHandler. Doctor passes
-  the token from --session (or CLAROS_DOCTOR_SESSION env var) as the
-  claros_session cookie. Without a token the Environment comparison is skipped.
-  To get a token: log in via the browser and copy the claros_session cookie
-  value from your browser dev tools, or use claros login-link and visit the
+  the token from --session (or MAILFORGE_DOCTOR_SESSION env var) as the
+  mailforge_session cookie. Without a token the Environment comparison is skipped.
+  To get a token: log in via the browser and copy the mailforge_session cookie
+  value from your browser dev tools, or use mailforge login-link and visit the
   URL to create a session.
 
 Options:
   --prod              Target PRODUCTION_DATABASE_URL.
                       Refuses localhost and non-https /version URLs.
   --url <base>        Override the URL base for /version and /v1/diagnostics.
-                      Set CLAROS_DOCTOR_URL in the environment to persist.
+                      Set MAILFORGE_DOCTOR_URL in the environment to persist.
   --session <token>   Session token for GET /v1/diagnostics authentication.
-                      Set CLAROS_DOCTOR_SESSION in the environment to persist.
+                      Set MAILFORGE_DOCTOR_SESSION in the environment to persist.
 
 Examples:
   # Local database, no environment comparison:
-  node apps/server/bin/claros.mjs doctor
+  node apps/server/bin/mailforge.mjs doctor
 
   # Local database with environment comparison (session from browser):
-  node apps/server/bin/claros.mjs doctor --session <claros_session_cookie_value>
+  node apps/server/bin/mailforge.mjs doctor --session <mailforge_session_cookie_value>
 
   # Production database with environment comparison:
-  CLAROS_DOCTOR_URL=https://api.claros.org \\
-    node apps/server/bin/claros.mjs doctor --prod --session <token>
+  MAILFORGE_DOCTOR_URL=https://api.mailforge.org \\
+    node apps/server/bin/mailforge.mjs doctor --prod --session <token>
 `);
     return;
   }
 
   if (subcommand === "login-link") {
     console.log(`
-claros login-link <email>
+mailforge login-link <email>
 
 Generate a one-time login URL for the given email address. No running server
 or email transport is required. The URL is printed to stdout and expires in
@@ -2109,15 +2109,15 @@ The user with that email must already exist in the database (created on first
 boot via SEED_ADMIN_EMAIL, or via the invite endpoint).
 
 Example:
-  claros login-link admin@example.com
-  docker compose exec app claros login-link admin@example.com
+  mailforge login-link admin@example.com
+  docker compose exec app mailforge login-link admin@example.com
 `);
     return;
   }
 
   if (subcommand === "setup") {
     console.log(`
-claros setup [tenant_slug]
+mailforge setup [tenant_slug]
 
 Guided first-run configuration wizard. Walks through:
   1. Postal address (required by CAN-SPAM; blocks all sending if absent)
@@ -2133,17 +2133,17 @@ remaining command at the end so the operator knows exactly what to run next.
 Default tenant slug: "default"
 
 Example:
-  claros setup
-  claros setup my-tenant
-  docker compose exec app claros setup
+  mailforge setup
+  mailforge setup my-tenant
+  docker compose exec app mailforge setup
 `);
     return;
   }
 
   if (subcommand === "transport") {
     console.log(`
-claros transport set <tenant_slug>
-claros transport show <tenant_slug>
+mailforge transport set <tenant_slug>
+mailforge transport show <tenant_slug>
 
 Manage the email transport configuration for a tenant.
 
@@ -2152,7 +2152,7 @@ Manage the email transport configuration for a tenant.
 
 Non-interactive (piped JSON):
   echo '{"provider":"resend","from_email":"hi@co.com","api_key":"re_..."}' \\
-    | claros transport set my-tenant
+    | mailforge transport set my-tenant
 
 Fields for "transport set":
   provider        Required. One of: resend, ses, smtp
@@ -2167,8 +2167,8 @@ Fields for "transport set":
 
   if (subcommand === "llm") {
     console.log(`
-claros llm set <tenant_slug>
-claros llm show <tenant_slug>
+mailforge llm set <tenant_slug>
+mailforge llm show <tenant_slug>
 
 Manage the LLM provider configuration for a tenant.
 
@@ -2177,7 +2177,7 @@ in the database. "llm show" displays the provider name only.
 
 Non-interactive (piped JSON):
   echo '{"provider":"openai","api_key":"sk-...","base_url":"https://api.openai.com/v1","model":"gpt-4o"}' \\
-    | claros llm set my-tenant
+    | mailforge llm set my-tenant
 
 Fields for "llm set":
   provider         Required. One of: openai, anthropic, ollama, custom
@@ -2194,8 +2194,8 @@ Fields for "llm set":
 
   if (subcommand === "postal-address") {
     console.log(`
-claros postal-address set <tenant_slug>
-claros postal-address show <tenant_slug>
+mailforge postal-address set <tenant_slug>
+mailforge postal-address show <tenant_slug>
 
 Manage the CAN-SPAM required physical postal address for a tenant.
 
@@ -2204,19 +2204,19 @@ sending until it is set.
 
 Non-interactive:
   echo '{"postal_address":"123 Main St, City, ST 12345"}' \\
-    | claros postal-address set my-tenant
+    | mailforge postal-address set my-tenant
 `);
     return;
   }
 
   // Default help
   console.log(`
-claros - Operator CLI for the Claros lifecycle email engine
+mailforge - Operator CLI for the Mailforge lifecycle email engine
 
 Usage:
-  claros <command> [options]
-  node apps/server/bin/claros.mjs <command> [options]
-  docker compose exec app claros <command> [options]
+  mailforge <command> [options]
+  node apps/server/bin/mailforge.mjs <command> [options]
+  docker compose exec app mailforge <command> [options]
 
 Commands:
   install                      Prepare .env, generate secrets, test DB, run migrations
@@ -2262,7 +2262,7 @@ const db = drizzle(pool);
 
 if (topCommand !== "login-link" && topCommand !== "doctor") {
   console.log("");
-  console.log("=== Claros CLI ===");
+  console.log("=== Mailforge CLI ===");
   console.log(`Target:  ${dbInfo.hostPort}/${dbInfo.dbName} [${dbInfo.type}]`);
   if (isProd) console.log("Mode:    PRODUCTION (--prod)");
 }
@@ -2273,21 +2273,21 @@ try {
       // --url <base_url> overrides the /version target for this run.
       const urlFlagIdx = restArgs.indexOf("--url");
       if (urlFlagIdx >= 0 && restArgs[urlFlagIdx + 1]) {
-        process.env.CLAROS_DOCTOR_URL = restArgs[urlFlagIdx + 1];
+        process.env.MAILFORGE_DOCTOR_URL = restArgs[urlFlagIdx + 1];
       }
-      // --session <token> supplies the claros_session cookie for GET /v1/diagnostics.
-      // Falls back to CLAROS_DOCTOR_SESSION env var.
+      // --session <token> supplies the mailforge_session cookie for GET /v1/diagnostics.
+      // Falls back to MAILFORGE_DOCTOR_SESSION env var.
       const sessionFlagIdx = restArgs.indexOf("--session");
       const sessionToken = (sessionFlagIdx >= 0 && restArgs[sessionFlagIdx + 1])
         ? restArgs[sessionFlagIdx + 1]
-        : (process.env.CLAROS_DOCTOR_SESSION ?? null);
+        : (process.env.MAILFORGE_DOCTOR_SESSION ?? null);
       await cmdDoctor(db, dbInfo, sessionToken);
       break;
     }
     case "login-link": {
       const email = restArgs[0];
       if (!email) {
-        console.error("\nERROR: claros login-link <email>\n"); process.exit(1);
+        console.error("\nERROR: mailforge login-link <email>\n"); process.exit(1);
       }
       await cmdLoginLink(db, email);
       break;
@@ -2300,7 +2300,7 @@ try {
     case "transport": {
       const [sub, slug] = restArgs;
       if (!sub || !slug) {
-        console.error("\nERROR: claros transport set|show <tenant_slug>\n"); process.exit(1);
+        console.error("\nERROR: mailforge transport set|show <tenant_slug>\n"); process.exit(1);
       }
       if (sub === "set") await transportSet(db, slug, dbInfo);
       else if (sub === "show") await transportShow(db, slug);
@@ -2310,7 +2310,7 @@ try {
     case "llm": {
       const [sub, slug] = restArgs;
       if (!sub || !slug) {
-        console.error("\nERROR: claros llm set|show <tenant_slug>\n"); process.exit(1);
+        console.error("\nERROR: mailforge llm set|show <tenant_slug>\n"); process.exit(1);
       }
       if (sub === "set") await llmSet(db, slug, dbInfo);
       else if (sub === "show") await llmShow(db, slug);
@@ -2320,7 +2320,7 @@ try {
     case "postal-address": {
       const [sub, slug] = restArgs;
       if (!sub || !slug) {
-        console.error("\nERROR: claros postal-address set|show <tenant_slug>\n"); process.exit(1);
+        console.error("\nERROR: mailforge postal-address set|show <tenant_slug>\n"); process.exit(1);
       }
       if (sub === "set") await postalAddressSet(db, slug, dbInfo);
       else if (sub === "show") await postalAddressShow(db, slug);
@@ -2330,19 +2330,19 @@ try {
     case "user": {
       const [sub, slug, extra] = restArgs;
       if (!sub || !slug) {
-        console.error("\nERROR: claros user list|create|promote <tenant_slug> [email]\n"); process.exit(1);
+        console.error("\nERROR: mailforge user list|create|promote <tenant_slug> [email]\n"); process.exit(1);
       }
       if (sub === "list") await userList(db, slug);
       else if (sub === "create") await userCreate(db, slug, dbInfo);
       else if (sub === "promote") {
-        if (!extra) { console.error("\nERROR: claros user promote <tenant_slug> <email>\n"); process.exit(1); }
+        if (!extra) { console.error("\nERROR: mailforge user promote <tenant_slug> <email>\n"); process.exit(1); }
         await userPromote(db, slug, extra, dbInfo);
       }
       else { console.error(`\nUnknown subcommand: user ${sub}\n`); process.exit(1); }
       break;
     }
     default:
-      console.error(`\nUnknown command: "${topCommand}". Run "claros help" for usage.\n`);
+      console.error(`\nUnknown command: "${topCommand}". Run "mailforge help" for usage.\n`);
       process.exit(1);
   }
 } catch (err) {

@@ -47,7 +47,7 @@
  */
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { compiledPlanSchema } from "@claros/core";
+import { compiledPlanSchema } from "@mailforge/core";
 
 // ---------------------------------------------------------------------------
 // Types

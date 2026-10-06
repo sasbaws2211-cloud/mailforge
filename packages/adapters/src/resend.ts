@@ -54,7 +54,7 @@ import type { TransportAdapter, TransportSendParams, TransportSendResult } from 
 // Constants
 // ---------------------------------------------------------------------------
 
-const RESEND_API_URL = "https://api.resend.com/emails";
+const DEFAULT_RESEND_API_BASE = "https://api.resend.com";
 
 /**
  * HTTP status codes that indicate a permanent failure.
@@ -87,6 +87,11 @@ interface ResendErrorBody {
 export interface ResendAdapterConfig {
   /** Resend API key (starts with re_). */
   apiKey: string;
+  /**
+   * API base URL. Only ever set from operator configuration (tests point it at a fake); a customer's own
+   * Resend settings cannot set it, so it cannot be used to make the server call somewhere else.
+   */
+  baseUrl?: string;
 }
 
 /**
@@ -100,9 +105,11 @@ export interface ResendAdapterConfig {
  */
 export class ResendTransportAdapter implements TransportAdapter {
   private readonly apiKey: string;
+  private readonly emailsUrl: string;
 
   constructor(config: ResendAdapterConfig) {
     this.apiKey = config.apiKey;
+    this.emailsUrl = `${(config.baseUrl ?? DEFAULT_RESEND_API_BASE).replace(/\/+$/, "")}/emails`;
   }
 
   async send(params: TransportSendParams): Promise<TransportSendResult> {
@@ -117,11 +124,12 @@ export class ResendTransportAdapter implements TransportAdapter {
       html: params.bodyHtml,
       text: params.bodyText,
       headers: params.headers ?? {},
+      ...(params.replyTo ? { reply_to: params.replyTo } : {}),
     };
 
     let response: Response;
     try {
-      response = await fetch(RESEND_API_URL, {
+      response = await fetch(this.emailsUrl, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${this.apiKey}`,

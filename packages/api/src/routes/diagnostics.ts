@@ -7,9 +7,9 @@
  * No new auth mechanism - uses the existing session cookie.
  *
  * Returns the container's own view of its environment:
- *   commit    - CLAROS_COMMIT_SHA env (set at image build time via --build-arg)
- *   edition   - CLAROS_EDITION env
- *   builtAt   - CLAROS_BUILT_AT env (null if absent)
+ *   commit    - MAILFORGE_COMMIT_SHA env (set at image build time via --build-arg)
+ *   edition   - MAILFORGE_EDITION env
+ *   builtAt   - MAILFORGE_BUILT_AT env (null if absent)
  *   startedAt - ISO-8601 UTC timestamp of when this container process started.
  *               Computed once at module load time from Date.now() and
  *               process.uptime(). Use this to distinguish a slow rollout
@@ -19,14 +19,14 @@
  *                 present (boolean), byteLength (decoded bytes), fingerprint
  *                 (first 8 hex chars of SHA-256 of the decoded bytes)
  *
- * Encoding conventions (must match what claros.mjs localKeyInfo uses):
+ * Encoding conventions (must match what mailforge.mjs localKeyInfo uses):
  *   ENCRYPTION_KEY:         base64-encoded, decoded to 32 bytes
  *   UNSUBSCRIBE_SIGNING_KEY: hex-encoded, decoded to 32 bytes
  *
  * NEVER returns secret values, key material, or connection strings.
  * Fingerprints and decoded byte lengths only.
  *
- * Used by `claros doctor` to compare the container's live environment against
+ * Used by `mailforge doctor` to compare the container's live environment against
  * the operator's local environment after a secret rotation or deploy.
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
@@ -116,9 +116,9 @@ const diagnosticsRoute: FastifyPluginAsync = async (app) => {
       const sigKey = process.env.UNSUBSCRIBE_SIGNING_KEY;
 
       return {
-        commit:  process.env.CLAROS_COMMIT_SHA ?? "unknown",
-        edition: process.env.CLAROS_EDITION    ?? "community",
-        builtAt: process.env.CLAROS_BUILT_AT   ?? null,
+        commit:  process.env.MAILFORGE_COMMIT_SHA ?? "unknown",
+        edition: process.env.MAILFORGE_EDITION    ?? "community",
+        builtAt: process.env.MAILFORGE_BUILT_AT   ?? null,
         startedAt: PROCESS_STARTED_AT,
         keys: {
           // ENCRYPTION_KEY is base64-encoded (44 chars -> 32 bytes)

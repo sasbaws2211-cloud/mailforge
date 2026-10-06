@@ -60,7 +60,7 @@ export interface AssessPromptContext {
 // System prompt
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are the quality gate for Claros, a lifecycle email automation engine.
+const SYSTEM_PROMPT = `You are the quality gate for Mailforge, a lifecycle email automation engine.
 
 Your job: decide whether a drafted lifecycle email is worth sending to this specific contact. You do NOT rewrite or improve the draft. You judge it as-is.
 

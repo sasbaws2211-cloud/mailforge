@@ -71,7 +71,7 @@ import {
   flows,
   lifecycleMessages,
   suppressions,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 import {
   evaluateThrottleGate,
   resolveThrottleConfig,
@@ -80,10 +80,13 @@ import {
   buildShellComplianceHtml,
   buildShellComplianceText,
   type BrandSettings,
+  type PoweredBy,
   type ThrottleGateInput,
   type ThrottleVerdict,
-} from "@claros/core";
+} from "@mailforge/core";
 import type { TransportAdapter, TransportResolver } from "./transport.js";
+import { managedDailyLimit } from "./managed-sending.js";
+import { loadTenantEntitlements, poweredByFor, remainingMonthlyEmails, suspendedTenantIds } from "./plan-gate.js";
 import {
   buildComplianceOutput,
   checkBaseUrl,
@@ -134,6 +137,15 @@ export interface DrainTickResult {
    * unsubscribe link of every delivered email.
    */
   skippedBadBaseUrl: number;
+  /**
+   * Messages held back because the tenant used its plan's monthly email
+   * allowance (counts tenants skipped before claiming plus messages reverted
+   * mid-tick). They stay approved and go out when the month rolls over or the
+   * plan is upgraded. Always 0 when plan enforcement is off.
+   */
+  skippedPlanLimit: number;
+  /** Tenants dropped because a platform admin suspended the workspace. */
+  skippedSuspended: number;
   sent: number;
   suppressed: number;
   deferredFrequency: number;
@@ -289,6 +301,8 @@ export async function processDrainTick(
     skippedNoPostalAddress: 0,
     skippedNoSigningKey: 0,
     skippedBadBaseUrl: 0,
+    skippedPlanLimit: 0,
+    skippedSuspended: 0,
     sent: 0,
     suppressed: 0,
     deferredFrequency: 0,
@@ -323,6 +337,32 @@ export async function processDrainTick(
 
   if (tenantsWithTransport.size === 0) return stats;
 
+  // Step 2a: suspended workspaces send nothing. Dropped before any claim, so the
+  // messages stay approved and go out if the workspace is reinstated.
+  for (const id of await suspendedTenantIds(db, Array.from(tenantsWithTransport.keys()))) {
+    tenantsWithTransport.delete(id);
+    stats.skippedSuspended++;
+  }
+  if (tenantsWithTransport.size === 0) return stats;
+
+  // Step 2b: plan allowance (hosted plans only; a no-op when enforcement is off).
+  // A tenant that has used its monthly allowance is dropped here, before any
+  // claim, so it costs zero writes and cannot crowd out other tenants in the
+  // batch. A tenant with some allowance left keeps a counter that the send loop
+  // below spends, so the cap holds across the whole tick, not just at its start.
+  const monthlyRemaining = new Map<string, number>();
+  for (const tenantId of Array.from(tenantsWithTransport.keys())) {
+    const remaining = await remainingMonthlyEmails(db, tenantId, now);
+    if (remaining === null) continue; // no cap on this plan
+    if (remaining <= 0) {
+      tenantsWithTransport.delete(tenantId);
+      stats.skippedPlanLimit++;
+    } else {
+      monthlyRemaining.set(tenantId, remaining);
+    }
+  }
+  if (tenantsWithTransport.size === 0) return stats;
+
   // Step 3: Fetch and claim messages only for tenants with transport.
   // The batch query atomically sets status = 'sending' (FOR UPDATE SKIP LOCKED).
   const tenantIds = Array.from(tenantsWithTransport.keys());
@@ -340,7 +380,11 @@ export async function processDrainTick(
       WHERE tenant_id = ${tenantId} AND is_active = true
       LIMIT 1
     `);
-    tenantDailyLimits.set(tenantId, transportRows.rows[0]?.daily_limit ?? null);
+    // No transport of their own: a workspace on managed sending's shared address has its own daily cap.
+    tenantDailyLimits.set(
+      tenantId,
+      transportRows.rows.length > 0 ? (transportRows.rows[0]!.daily_limit ?? null) : await managedDailyLimit(db, tenantId),
+    );
   }
 
   // Count sent messages today per tenant (for daily limit enforcement)
@@ -380,6 +424,19 @@ export async function processDrainTick(
       continue;
     }
 
+    // Plan allowance spent mid-tick: put the message back untouched (same
+    // status, no new schedule) so it is picked up again as soon as the tenant
+    // has allowance, whether by a new month or an upgrade.
+    const planLeft = monthlyRemaining.get(candidate.tenantId);
+    if (planLeft !== undefined && planLeft <= 0) {
+      await db
+        .update(lifecycleMessages)
+        .set({ status: "approved", updatedAt: now })
+        .where(and(eq(lifecycleMessages.id, candidate.id), eq(lifecycleMessages.status, "sending")));
+      stats.skippedPlanLimit++;
+      continue;
+    }
+
     const result = await processOneMessage(db, candidate, now, adapter, baseUrl, signingKeyOverride, isProductionOverride);
     switch (result) {
       case "no_email":
@@ -396,6 +453,7 @@ export async function processDrainTick(
         break;
       case "sent":
         stats.sent++;
+        if (planLeft !== undefined) monthlyRemaining.set(candidate.tenantId, planLeft - 1);
         // Update the in-memory daily send counter so the next message in
         // this same tick sees the updated count and the limit is honoured
         // across the full batch, not just at the start of the tick.
@@ -476,7 +534,7 @@ export async function processOneMessage(
   // If postal address is absent, revert the message to 'approved' and surface
   // an operator error. This is NOT a transport failure - the message is not
   // broken, the tenant configuration is incomplete. No retry count consumed.
-  const tenantSettings = await resolveTenantDrainSettings(db, candidate.tenantId);
+  const tenantSettings = await resolveTenantDrainSettings(db, candidate.tenantId, now);
   const postalAddress = tenantSettings?.postalAddress ?? null;
   if (!postalAddress) {
     console.error(
@@ -606,12 +664,14 @@ export async function processOneMessage(
     brand,
     tenantName,
     complianceFooterHtml: shellComplianceHtml,
+    poweredBy: tenantSettings?.poweredBy,
   });
   const deliveredText = wrapInTextShell({
     bodyText: candidate.bodyText ?? "",
     brand,
     tenantName,
     complianceFooterText: shellComplianceText,
+    poweredBy: tenantSettings?.poweredBy,
   });
 
   // Step 9: Write recipient_address BEFORE sending.
@@ -892,13 +952,15 @@ interface TenantDrainSettings {
   postalAddress: string | null;
   tenantName: string;
   brand: BrandSettings;
+  /** Credit line for plans that carry the platform's branding; undefined otherwise. */
+  poweredBy?: PoweredBy;
 }
 
 /**
  * Resolves tenant postal address, name, and brand settings in one query.
  * Used at drain time to assemble the email shell.
  */
-async function resolveTenantDrainSettings(db: Db, tenantId: string): Promise<TenantDrainSettings | null> {
+async function resolveTenantDrainSettings(db: Db, tenantId: string, now: Date = new Date()): Promise<TenantDrainSettings | null> {
   const tenantRow = await db
     .select({ name: tenants.name, settings: tenants.settings })
     .from(tenants)
@@ -915,9 +977,12 @@ async function resolveTenantDrainSettings(db: Db, tenantId: string): Promise<Ten
 
   const brand = (settings?.brand as BrandSettings | undefined) ?? {};
 
+  const poweredBy = poweredByFor(await loadTenantEntitlements(db, tenantId, now));
+
   return {
     postalAddress,
     tenantName: tenantRow[0]!.name,
     brand,
+    ...(poweredBy ? { poweredBy } : {}),
   };
 }

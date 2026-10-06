@@ -23,14 +23,14 @@ import {
   flows,
   flowMemberships,
   suppressions,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 import {
   sortByPriority,
   isReentryAllowed,
   contactEnrollmentLockKey,
   type EnrollableFlow,
   type PriorMembership,
-} from "@claros/core";
+} from "@mailforge/core";
 
 // ---------------------------------------------------------------------------
 // Types

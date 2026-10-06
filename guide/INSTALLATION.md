@@ -1,6 +1,6 @@
 # Installation and Configuration
 
-The complete reference for running Claros. For a guided first run, start with [QUICKSTART.md](./QUICKSTART.md) and come back here for depth.
+The complete reference for running Mailforge. For a guided first run, start with [QUICKSTART.md](./QUICKSTART.md) and come back here for depth.
 
 Contents:
 
@@ -18,14 +18,14 @@ Contents:
 
 ## Ways to run
 
-Claros is a single Docker image plus Postgres. There are three practical ways to run it.
+Mailforge is a single Docker image plus Postgres. There are three practical ways to run it.
 
 ### 1. Docker Compose (recommended)
 
 The compose stack in the repository root runs the app and a Postgres 16 + pgvector database, applies migrations on boot, and builds the dashboard.
 
 ```bash
-git clone https://github.com/claroshq/claros.git && cd claros
+git clone https://github.com/mailforgehq/mailforge.git && cd mailforge
 docker compose run --rm install   # creates .env with generated secrets, chowns to directory owner
 docker compose up
 ```
@@ -34,7 +34,7 @@ The `install` command prepares `.env` with generated secrets, tests the database
 
 - App: `http://localhost:3000` (override with `PORT` in `.env`)
 - Postgres: exposed on host port `5433` (so it never collides with a host Postgres on 5432)
-- The compose file sets `NODE_ENV=development` and `CLAROS_MIGRATE_ON_BOOT=true`
+- The compose file sets `NODE_ENV=development` and `MAILFORGE_MIGRATE_ON_BOOT=true`
 - Data persists in the `pgdata` named volume
 
 The compose stack mounts `./apps`, `./packages`, and `./drizzle` into the container and runs the server in watch mode. It is a development-friendly default. For a production deployment, use the published image (below) with `NODE_ENV=production`.
@@ -45,15 +45,15 @@ A multi-role image is published to GHCR with each release:
 
 ```bash
 docker run -d \
-  -e DATABASE_URL=postgres://user:pass@your-db-host:5432/claros \
+  -e DATABASE_URL=postgres://user:pass@your-db-host:5432/mailforge \
   -e NODE_ENV=production \
-  -e CLAROS_MIGRATE_ON_BOOT=true \
+  -e MAILFORGE_MIGRATE_ON_BOOT=true \
   -e SEED_ADMIN_EMAIL=admin@yourcompany.com \
   -e ENCRYPTION_KEY=<base64-32-bytes> \
   -e UNSUBSCRIBE_SIGNING_KEY=<hex-32-bytes> \
-  -e BASE_URL=https://claros.yourcompany.com \
+  -e BASE_URL=https://mailforge.yourcompany.com \
   -p 3000:3000 \
-  ghcr.io/claroshq/claros:v0.5.2 \
+  ghcr.io/mailforgehq/mailforge:v0.5.2 \
   --role=all
 ```
 
@@ -61,7 +61,7 @@ Requirements for this path:
 
 - Your own Postgres 16+ with the `vector` extension available (the server runs `CREATE EXTENSION IF NOT EXISTS` via migrations)
 - `BASE_URL` set to the public HTTPS URL. In production the send worker refuses to send when `BASE_URL` is loopback or non-HTTPS, because unsubscribe links would be broken
-- In production there is no console login fallback, so either configure a transport first (magic links are emailed) or use `claros login-link` (below) against the database
+- In production there is no console login fallback, so either configure a transport first (magic links are emailed) or use `mailforge login-link` (below) against the database
 
 If the GHCR package is not yet public at the time you read this, use Docker Compose, which builds from source and needs no registry credentials.
 
@@ -116,25 +116,25 @@ All variables are read by the server process unless noted. The only hard require
 
 | Variable | Default | What it does | Get it wrong |
 |---|---|---|---|
-| `CLAROS_MIGRATE_ON_BOOT` | off | When exactly `true`, applies pending migrations at startup. Set in the compose stack | Off + never running `pnpm db:migrate` = schema drift and boot/query failures after upgrades. On is safe for single-instance deploys; for multi-replica deploys run migrations out of band instead |
-| `CLAROS_SERVE_DASHBOARD` | `true` | Serves the built dashboard SPA from the API process | Set `false` only if you serve the SPA elsewhere |
-| `CLAROS_DASHBOARD_DIST` | auto-detected | Overrides the dashboard build directory | Rarely needed |
-| `CLAROS_EDITION` | `community` | Edition marker. `cloud` is for the hosted service and requires private packages | Setting `cloud` on a community checkout stops the boot |
-| `PRODUCTION_DATABASE_URL` | none | Target database for `claros --prod` and migration tooling pointed at production | Only read when `--prod` is passed |
-| `CLAROS_COMMIT_SHA` / `CLAROS_BUILT_AT` | `unknown` / null | Build provenance reported by `/version`; set by the image build | - |
+| `MAILFORGE_MIGRATE_ON_BOOT` | off | When exactly `true`, applies pending migrations at startup. Set in the compose stack | Off + never running `pnpm db:migrate` = schema drift and boot/query failures after upgrades. On is safe for single-instance deploys; for multi-replica deploys run migrations out of band instead |
+| `MAILFORGE_SERVE_DASHBOARD` | `true` | Serves the built dashboard SPA from the API process | Set `false` only if you serve the SPA elsewhere |
+| `MAILFORGE_DASHBOARD_DIST` | auto-detected | Overrides the dashboard build directory | Rarely needed |
+| `MAILFORGE_EDITION` | `community` | Edition marker. `cloud` is for the hosted service and requires private packages | Setting `cloud` on a community checkout stops the boot |
+| `PRODUCTION_DATABASE_URL` | none | Target database for `mailforge --prod` and migration tooling pointed at production | Only read when `--prod` is passed |
+| `MAILFORGE_COMMIT_SHA` / `MAILFORGE_BUILT_AT` | `unknown` / null | Build provenance reported by `/version`; set by the image build | - |
 
 ### Not environment variables
 
 Worth stating explicitly, because people look for them:
 
-- There are no `OPENAI_API_KEY` or SMTP password environment variables. LLM and transport credentials are per-tenant, entered via the dashboard or `claros`, and stored encrypted in the database.
+- There are no `OPENAI_API_KEY` or SMTP password environment variables. LLM and transport credentials are per-tenant, entered via the dashboard or `mailforge`, and stored encrypted in the database.
 - No timing is env-tunable. Worker poll intervals and cron schedules are fixed in code (see [Timing](#timing)).
 
 ---
 
 ## Configuration
 
-Everything below lives in the database per tenant and is managed from the dashboard (Settings) or the `claros` CLI.
+Everything below lives in the database per tenant and is managed from the dashboard (Settings) or the `mailforge` CLI.
 
 ### Email transport
 
@@ -144,18 +144,18 @@ One active transport per tenant. Two providers are supported.
 
 ```bash
 echo '{"provider":"resend","from_email":"you@yourdomain.com","from_name":"You","api_key":"re_...","webhook_secret":"whsec_..."}' \
-  | docker compose exec -T app claros transport set default
+  | docker compose exec -T app mailforge transport set default
 ```
 
 - `from_email` (required) must be on a domain verified in Resend
-- `webhook_secret` (optional but recommended): the Svix signing secret from your Resend webhook configuration. The webhook URL to register in Resend is `https://<your-host>/webhooks/resend/<tenantId>`. Find your tenant ID with `GET /auth/me` (the `user.tenantId` field) while logged in, or with `docker compose exec postgres psql -U claros -c 'SELECT id, slug FROM tenants;'`
+- `webhook_secret` (optional but recommended): the Svix signing secret from your Resend webhook configuration. The webhook URL to register in Resend is `https://<your-host>/webhooks/resend/<tenantId>`. Find your tenant ID with `GET /auth/me` (the `user.tenantId` field) while logged in, or with `docker compose exec postgres psql -U mailforge -c 'SELECT id, slug FROM tenants;'`
 - Without the webhook, email still sends; you simply get no open/click/bounce data
 
 **SMTP** - any standards-based server, including the Amazon SES SMTP endpoint.
 
 ```bash
 echo '{"provider":"smtp","from_email":"you@yourdomain.com","host":"email-smtp.us-east-1.amazonaws.com","port":587,"username":"...","password":"..."}' \
-  | docker compose exec -T app claros transport set default
+  | docker compose exec -T app mailforge transport set default
 ```
 
 - `port` 465 implies implicit TLS; other ports use STARTTLS when offered
@@ -173,7 +173,7 @@ Optional. Required only for prompt-defined flow compilation, AI-drafted content,
 
 ```bash
 echo '{"provider":"openai","api_key":"sk-...","model":"gpt-4o-mini"}' \
-  | docker compose exec -T app claros llm set default
+  | docker compose exec -T app mailforge llm set default
 ```
 
 | Provider | Default base URL | Default model | Notes |
@@ -189,7 +189,7 @@ Costs: compilation is one call per prompt change. AI content is three calls (dec
 
 ### Postal address and tenant settings
 
-- `postal_address` (required to send): footer of every email. `claros postal-address set default` or Settings → Postal.
+- `postal_address` (required to send): footer of every email. `mailforge postal-address set default` or Settings → Postal.
 - Branding (Settings → Branding): brand name, logo URL, logo height (16-64 px), accent color, footer text, reply-to address.
 - `brain_context` (Settings): up to 4,000 characters of free text about your product, injected into compile and draft prompts. This is how the AI learns what your product does.
 
@@ -220,8 +220,8 @@ The system always requires at least one active owner: the last owner cannot be d
 
 ```bash
 echo '{"email":"teammate@example.com","role":"member"}' \
-  | docker compose exec -T app claros user create default
-docker compose exec app claros login-link teammate@example.com
+  | docker compose exec -T app mailforge user create default
+docker compose exec app mailforge login-link teammate@example.com
 ```
 
 There is no self-service signup. A self-hosted instance is effectively one workspace: the schema is multi-tenant, but community has no UI or API for creating additional tenants.
@@ -230,41 +230,41 @@ There is no self-service signup. A self-hosted instance is effectively one works
 
 ## Operator CLI
 
-`claros` is installed inside the app container. It talks directly to the database, so it works even when the server is down, and it never prints stored credentials.
+`mailforge` is installed inside the app container. It talks directly to the database, so it works even when the server is down, and it never prints stored credentials.
 
 ```bash
-docker compose exec app claros <command>          # server running
-docker compose run --rm --entrypoint claros app <command>   # one-shot container
+docker compose exec app mailforge <command>          # server running
+docker compose run --rm --entrypoint mailforge app <command>   # one-shot container
 ```
 
 | Command | Purpose |
 |---|---|
-| `claros install` | Machine-level setup: creates .env (mode 0600, chowned to directory owner), generates secrets, tests DB, runs migrations. Run via `docker compose run --rm install`. Add `--database-url` for external Postgres. Override ownership with `CLAROS_UID=$(id -u) CLAROS_GID=$(id -g)` if auto-detection does not produce the right owner |
-| `claros doctor [--url <url>]` | Read-only diagnostics: version provenance, migration state, transport decryption, key fingerprints. Run after every deploy |
-| `claros login-link <email>` | One-time login URL (10-minute expiry). The account recovery tool |
-| `claros setup [tenant_slug]` | Guided wizard: postal address, LLM, transport. Safe to re-run |
-| `claros transport set <slug>` / `show` | Write / inspect the email transport |
-| `claros llm set <slug>` / `show` | Write / inspect the LLM provider |
-| `claros postal-address set <slug>` / `show` | Set / inspect the postal address |
-| `claros user list <slug>` | List active users |
-| `claros user create <slug>` | Create or reactivate a user (owner or member) |
-| `claros user promote <slug> <email>` | Promote a user to owner |
+| `mailforge install` | Machine-level setup: creates .env (mode 0600, chowned to directory owner), generates secrets, tests DB, runs migrations. Run via `docker compose run --rm install`. Add `--database-url` for external Postgres. Override ownership with `MAILFORGE_UID=$(id -u) MAILFORGE_GID=$(id -g)` if auto-detection does not produce the right owner |
+| `mailforge doctor [--url <url>]` | Read-only diagnostics: version provenance, migration state, transport decryption, key fingerprints. Run after every deploy |
+| `mailforge login-link <email>` | One-time login URL (10-minute expiry). The account recovery tool |
+| `mailforge setup [tenant_slug]` | Guided wizard: postal address, LLM, transport. Safe to re-run |
+| `mailforge transport set <slug>` / `show` | Write / inspect the email transport |
+| `mailforge llm set <slug>` / `show` | Write / inspect the LLM provider |
+| `mailforge postal-address set <slug>` / `show` | Set / inspect the postal address |
+| `mailforge user list <slug>` | List active users |
+| `mailforge user create <slug>` | Create or reactivate a user (owner or member) |
+| `mailforge user promote <slug> <email>` | Promote a user to owner |
 
-All `set` and `create` commands accept JSON on stdin for automation (`echo '{...}' | claros transport set default`), prompt interactively on a TTY, and require typed confirmation when run with `--prod` against `PRODUCTION_DATABASE_URL`.
+All `set` and `create` commands accept JSON on stdin for automation (`echo '{...}' | mailforge transport set default`), prompt interactively on a TTY, and require typed confirmation when run with `--prod` against `PRODUCTION_DATABASE_URL`.
 
 ---
 
 ## Migrations
 
 - Schema is managed by Drizzle; migration files live in `drizzle/migrations`.
-- Compose sets `CLAROS_MIGRATE_ON_BOOT=true`, so the stack migrates itself on every start. Nothing else to do.
+- Compose sets `MAILFORGE_MIGRATE_ON_BOOT=true`, so the stack migrates itself on every start. Nothing else to do.
 - From source: `pnpm db:migrate` applies pending migrations to `DATABASE_URL`.
-- Published image, single instance: set `CLAROS_MIGRATE_ON_BOOT=true`.
+- Published image, single instance: set `MAILFORGE_MIGRATE_ON_BOOT=true`.
 - Published image, multiple replicas: do not let every replica migrate. Run the migration once from a checkout (`pnpm db:migrate`) or a one-off container, then roll the replicas.
 
 Migrations are expand-contract: new code always works against the previous schema, and destructive changes ship in a later release than the code that stopped needing the old shape. Upgrading by one release at a time is always safe.
 
-`claros doctor` reports whether the database is behind on migrations.
+`mailforge doctor` reports whether the database is behind on migrations.
 
 ## Upgrading
 
@@ -275,16 +275,16 @@ git pull
 docker compose up -d --build    # compose remigrates on boot
 ```
 
-Published image: pull the new tag, recreate the container. With `CLAROS_MIGRATE_ON_BOOT=true` the schema updates itself; otherwise run `pnpm db:migrate` first.
+Published image: pull the new tag, recreate the container. With `MAILFORGE_MIGRATE_ON_BOOT=true` the schema updates itself; otherwise run `pnpm db:migrate` first.
 
-There is no downgrade path for the schema. Take a backup before upgrading (below), and read the release notes on the [releases page](https://github.com/claroshq/claros/releases); that page is the changelog.
+There is no downgrade path for the schema. Take a backup before upgrading (below), and read the release notes on the [releases page](https://github.com/mailforgehq/mailforge/releases); that page is the changelog.
 
 ## Backups
 
-Everything Claros owns lives in one Postgres database: contacts, events, flows, compiled plans, messages, suppressed addresses, encrypted credentials, sessions. There is no other state.
+Everything Mailforge owns lives in one Postgres database: contacts, events, flows, compiled plans, messages, suppressed addresses, encrypted credentials, sessions. There is no other state.
 
 ```bash
-docker compose exec postgres pg_dump -U claros claros > claros-backup-$(date +%F).sql
+docker compose exec postgres pg_dump -U mailforge mailforge > mailforge-backup-$(date +%F).sql
 ```
 
 Back up alongside the database:
@@ -300,11 +300,11 @@ One container runs everything (`--role=all`, the default). Under load you can sp
 
 ```bash
 # one or more API containers
-docker run ... ghcr.io/claroshq/claros:v0.5.2 --role=api
+docker run ... ghcr.io/mailforgehq/mailforge:v0.5.2 --role=api
 # one or more worker containers
-docker run ... ghcr.io/claroshq/claros:v0.5.2 --role=worker
+docker run ... ghcr.io/mailforgehq/mailforge:v0.5.2 --role=worker
 # exactly one scheduler
-docker run ... ghcr.io/claroshq/claros:v0.5.2 --role=scheduler
+docker run ... ghcr.io/mailforgehq/mailforge:v0.5.2 --role=scheduler
 ```
 
 Rules: exactly one scheduler (it registers the cron jobs; duplicates double-schedule), any number of API and worker replicas. The bootstrap seed only runs in `all` and `api`.

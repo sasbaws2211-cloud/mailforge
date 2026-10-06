@@ -96,7 +96,7 @@ const SAMPLE_VARIABLES: Record<string, string> = {
   "contact.name": "Ada Lovelace",
   "contact.email": "ada@example.com",
   "contact.company": "Acme Inc.",
-  "tenant.name": "Claros",
+  "tenant.name": "Mailforge",
 };
 
 /**

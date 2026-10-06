@@ -1,11 +1,11 @@
 /**
- * Claros design tokens and Tailwind CSS v4 entry point.
+ * Mailforge design tokens and Tailwind CSS v4 entry point.
  *
  * Two first-class themes. Light values live in :root, dark values in .dark.
  * The .dark class is set on <html> by the inline script in index.html before
  * first paint (no flash), and by src/lib/theme.ts afterwards. The resolved
  * theme follows the OS unless the user has stored an explicit choice in
- * localStorage under "claros-ui-theme".
+ * localStorage under "mailforge-ui-theme".
  *
  * SINGLE SOURCE RULE: every color in the app is a var() defined below.
  * The @theme inline block maps Tailwind utility names to those vars.
@@ -26,7 +26,7 @@
   /* Surfaces. Three-step lift in light: sidebar (--bg-sunken) is
    * recessed, canvas (--bg) is the marketing-white, cards (--bg-raised)
    * are pure white. Canvas is lightened to 0.992 to match the landing page's
-   * airy white (claros-web/src/styles/global.css) while the sidebar stays
+   * airy white (mailforge-web/src/styles/global.css) while the sidebar stays
    * at 0.95 for a crisp split (ratio ~1.13). Cards stay white and rely on
    * the 1px border plus the 0.8% lift off the canvas. */
   --bg:        oklch(0.992 0.002 264);
@@ -51,7 +51,7 @@
   --danger-soft-hover:   oklch(0.9 0.03 27);
 
   /* Selected state (active nav, selected rows): a neutral slate-blue tint,
-   * deliberately quieter than --accent-soft so it never reads as raw cyan.
+   * deliberately quieter than --accent-soft so it never reads as raw orange.
    * Slightly darker than the new --bg-sunken (0.95) so the active nav
    * lifts off the sidebar. */
   --selected: oklch(0.93 0.012 255);
@@ -62,25 +62,25 @@
   --fg-muted:  oklch(0.452 0.016 264);
   --fg-subtle: oklch(0.53 0.015 264);
 
-  /* Brand accent: signal cyan (heritage logo hue). Used for links, focus,
+  /* Brand accent: ember orange. Used for links, focus,
    * active states, chips, and the mark. --accent-deep is the primary-button
-   * fill: deepened cyan that carries --accent-deep-fg text at 4.5+. */
-  --accent:         oklch(0.6 0.13 225);
-  --accent-text:    oklch(0.45 0.12 240);
-  --accent-fg:      oklch(0.2 0.03 240);
-  --accent-soft:    oklch(0.93 0.035 225);
-  --accent-deep:    oklch(0.47 0.13 245);
-  --accent-deep-fg: oklch(0.985 0.005 240);
+   * fill: deepened orange that carries --accent-deep-fg text at 4.5+. */
+  --accent:         oklch(0.66 0.17 50);
+  --accent-text:    oklch(0.5 0.15 45);
+  --accent-fg:      oklch(0.2 0.03 50);
+  --accent-soft:    oklch(0.94 0.035 60);
+  --accent-deep:    oklch(0.52 0.16 42);
+  --accent-deep-fg: oklch(0.985 0.005 60);
 
-  /* Energy accent: coral pop. Positive deltas, rare celebratory moments.
-   * Strictly secondary to cyan; never both in one component. */
-  --pop:      oklch(0.55 0.21 35);
-  --pop-text: oklch(0.48 0.19 35);
-  --pop-fg:   oklch(0.97 0.01 35);
-  --pop-soft: oklch(0.93 0.04 35);
+  /* Energy accent: teal pop. Positive deltas, rare celebratory moments.
+   * Strictly secondary to orange; never both in one component. */
+  --pop:      oklch(0.55 0.12 215);
+  --pop-text: oklch(0.46 0.11 220);
+  --pop-fg:   oklch(0.97 0.01 220);
+  --pop-soft: oklch(0.93 0.035 220);
 
   /* Semantic. Text/dot forms; -soft surfaces are banners and tinted chips.
-   * Success hue sits between green and the brand cyan (185) so semantic
+   * Success hue sits between green and teal (185) so semantic
    * color reads as part of the same family, not a foreign accent. */
   --success:      oklch(0.5 0.11 185);
   --success-soft: oklch(0.93 0.025 185);
@@ -131,17 +131,17 @@
   --fg-muted:  oklch(0.715 0.014 264);
   --fg-subtle: oklch(0.6 0.014 264);
 
-  --accent:         oklch(0.78 0.12 220);
-  --accent-text:    oklch(0.8 0.11 222);
-  --accent-fg:      oklch(0.2 0.04 240);
-  --accent-soft:    oklch(0.33 0.055 230);
-  --accent-deep:    oklch(0.72 0.13 222);
-  --accent-deep-fg: oklch(0.2 0.04 240);
+  --accent:         oklch(0.78 0.14 60);
+  --accent-text:    oklch(0.82 0.12 62);
+  --accent-fg:      oklch(0.2 0.04 50);
+  --accent-soft:    oklch(0.34 0.06 50);
+  --accent-deep:    oklch(0.74 0.15 55);
+  --accent-deep-fg: oklch(0.2 0.04 50);
 
-  --pop:      oklch(0.72 0.17 40);
-  --pop-text: oklch(0.76 0.16 40);
-  --pop-fg:   oklch(0.21 0.04 35);
-  --pop-soft: oklch(0.35 0.07 38);
+  --pop:      oklch(0.76 0.12 215);
+  --pop-text: oklch(0.8 0.11 218);
+  --pop-fg:   oklch(0.2 0.04 230);
+  --pop-soft: oklch(0.34 0.06 225);
 
   --success:      oklch(0.755 0.13 185);
   --success-soft: oklch(0.3 0.045 185);
@@ -161,7 +161,7 @@
  * TAILWIND TOKEN BRIDGE
  *
  * Components reference these utility names only. Primary actions are the
- * deep-cyan pair: bg-primary renders as --accent-deep with
+ * deep-orange pair: bg-primary renders as --accent-deep with
  * text-primary-foreground as --accent-deep-fg (white in light, near-black
  * in dark). The brand accent is bg-accent / text-accent for links, focus,
  * active states, and the mark; the coral pop family is for positive deltas

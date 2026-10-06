@@ -1,16 +1,14 @@
 /**
  * BrandMark component.
  *
- * The Claros mark: a solid droplet pointing right with a circular cutout.
- * The droplet is movement through a system; the cutout is the contact
- * passing through it. Derived from the heritage logo's interlocked drops.
+ * The Mailforge mark: a solid envelope with the flap cut out as a chevron.
+ * The envelope is the message; the chevron is the fold being forged into
+ * shape.
  *
  * Geometry (viewBox 0 0 24 24):
- *   - Droplet: tip at (0, -10.8), body circle radius 7.8 centered at
- *     (0, 1.6), rotated 90 degrees about (12, 12) so the tip points right.
- *   - Cutout: circle radius 3.7 centered at (0, -2.4), subtracted via
- *     fill-rule="evenodd". The small cutout keeps the ring thick so the
- *     mark reads solid and full.
+ *   - Envelope: rounded rectangle from (2, 5) to (22, 19), corner radius 3.
+ *   - Flap: chevron band (4.4, 8.1) -> (12, 13.7) -> (19.6, 8.1), 2.6 thick,
+ *     subtracted via fill-rule="evenodd".
  *
  * Color is inherited via currentColor. Set a text color on the element or a
  * parent (e.g. text-accent) to paint it. Never hardcode a color here.
@@ -42,13 +40,11 @@ export function BrandMark({ size = 18, className }: BrandMarkProps) {
       aria-hidden="true"
       className={className}
     >
-      <g transform="translate(12 12) rotate(90)">
-        <path
-          d="M0 -10.8 C0 -10.8 -7.8 -2.5 -7.8 1.6 a7.8 7.8 0 0 0 15.6 0 C7.8 -2.5 0 -10.8 0 -10.8 Z M0 -2.4 a3.7 3.7 0 1 0 0.001 0 Z"
-          fill="currentColor"
-          fillRule="evenodd"
-        />
-      </g>
+      <path
+        d="M5 5 H19 A3 3 0 0 1 22 8 V16 A3 3 0 0 1 19 19 H5 A3 3 0 0 1 2 16 V8 A3 3 0 0 1 5 5 Z M4.4 8.1 L12 13.7 L19.6 8.1 L19.6 10.7 L12 16.3 L4.4 10.7 Z"
+        fill="currentColor"
+        fillRule="evenodd"
+      />
     </svg>
   );
 }

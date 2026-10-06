@@ -23,7 +23,7 @@
  */
 import { eq, and, inArray, gt, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { contacts, flows, tenants } from "@claros/db/schema";
+import { contacts, flows, tenants } from "@mailforge/db/schema";
 import {
   resolveLifecycleConfig,
   isSegmentTriggerConfig,
@@ -32,7 +32,7 @@ import {
   type EnrollableFlow,
   type LifecycleConfig,
   type SegmentTriggerConfig,
-} from "@claros/core";
+} from "@mailforge/core";
 import { enrollContactInFlows } from "./enroll.js";
 
 // ---------------------------------------------------------------------------

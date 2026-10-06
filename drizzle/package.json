@@ -1,5 +1,5 @@
 {
-  "name": "@claros/db",
+  "name": "@mailforge/db",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,6 +7,14 @@
     "./schema": {
       "import": "./dist/schema/index.js",
       "types": "./dist/schema/index.d.ts"
+    },
+    "./purge": {
+      "import": "./dist/purge/index.js",
+      "types": "./dist/purge/index.d.ts"
+    },
+    "./llm": {
+      "import": "./dist/llm/index.js",
+      "types": "./dist/llm/index.d.ts"
     }
   },
   "scripts": {

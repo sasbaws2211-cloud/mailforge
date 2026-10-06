@@ -9,7 +9,7 @@
  *
  * Mirror side: PUBLIC (packages/brain-oss is mirrored).
  */
-import { draftOutputSchema, type DraftOutput } from "@claros/core";
+import { draftOutputSchema, type DraftOutput } from "@mailforge/core";
 import type { LlmProvider } from "./providers/types.js";
 import { LlmProviderError } from "./providers/openai-compatible.js";
 import { buildDraftMessages, type DraftPromptContext } from "./prompts/draft.js";

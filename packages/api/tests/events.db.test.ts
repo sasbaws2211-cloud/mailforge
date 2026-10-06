@@ -15,7 +15,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import { buildApp } from "../src/index.js";
-import { tenants, users, sessions, contacts, events } from "@claros/db/schema";
+import { tenants, users, sessions, contacts, events } from "@mailforge/db/schema";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) {
@@ -72,7 +72,7 @@ beforeAll(async () => {
       .insert(sessions)
       .values({ tenantId: t!.id, userId: u!.id, expiresAt: new Date(now + 86400_000) })
       .returning({ id: sessions.id });
-    return { tenantId: t!.id, cookie: `claros_session=${s!.id}` };
+    return { tenantId: t!.id, cookie: `mailforge_session=${s!.id}` };
   }
 
   const a = await makeTenant(TEST_SLUG_A, "owner-a@events.test");

@@ -30,7 +30,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
 import { randomBytes, createHash } from "node:crypto";
-import { buildApp } from "@claros/api";
+import { buildApp } from "@mailforge/api";
 import {
   handleTriggerCheck,
   phaseStepAdvancement,
@@ -38,7 +38,7 @@ import {
   processDrainTick,
   fetchDrainBatchSimple,
   buildTenantTransportResolver,
-} from "@claros/worker";
+} from "@mailforge/worker";
 import {
   tenants,
   users,
@@ -48,8 +48,8 @@ import {
   flows,
   flowMemberships,
   lifecycleMessages,
-} from "@claros/db/schema";
-import { encrypt, parseEncryptionKey } from "@claros/adapters";
+} from "@mailforge/db/schema";
+import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -146,7 +146,7 @@ beforeAll(async () => {
   // Cleanup
   for (const tbl of [
     "lifecycle_messages", "flow_memberships", "lifecycle_transitions",
-    "events", "contacts", "api_keys", "flows", "sessions", "users",
+    "events", "contacts", "api_keys", "flows", "llm_usage", "llm_configs", "transport_configs", "sessions", "users",
   ]) {
     await db.execute(sql.raw(
       `DELETE FROM ${tbl} WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = '${SLUG}')`,
@@ -177,7 +177,7 @@ beforeAll(async () => {
   sessionId = s!.id;
 
   // API key (secret)
-  rawApiKey = `cl_live_${randomBytes(32).toString("base64url")}`;
+  rawApiKey = `mf_live_${randomBytes(32).toString("base64url")}`;
   const keyHash = createHash("sha256").update(rawApiKey).digest("hex");
   await db.insert(apiKeys).values({
     tenantId,
@@ -206,7 +206,7 @@ beforeAll(async () => {
   const transportEnvelope = encrypt(transportCreds, encKey);
   await db.execute(sql`
     INSERT INTO transport_configs(tenant_id, provider, config, is_active, from_email, from_name)
-    VALUES (${tenantId}, 'resend', ${transportEnvelope}, true, 'e2e@test.claros.org', 'E2E Test')
+    VALUES (${tenantId}, 'resend', ${transportEnvelope}, true, 'e2e@test.mailforge.org', 'E2E Test')
   `);
 
   // Flow: event trigger, compiled, approval required
@@ -251,7 +251,7 @@ afterAll(async () => {
   // Cleanup
   for (const tbl of [
     "lifecycle_messages", "flow_memberships", "lifecycle_transitions",
-    "events", "contacts", "api_keys", "flows", "llm_configs", "transport_configs",
+    "events", "contacts", "api_keys", "flows", "llm_usage", "llm_configs", "transport_configs",
     "sessions", "users",
   ]) {
     await db.execute(sql.raw(
@@ -284,7 +284,7 @@ describe("end-to-end: event -> email", () => {
       method: "POST",
       url: "/v1/identify",
       headers: { authorization: `Bearer ${rawApiKey}` },
-      payload: { userId: "e2e_user_1", traits: { email: "e2e@test.claros.org", name: "E2E User" } },
+      payload: { userId: "e2e_user_1", traits: { email: "e2e@test.mailforge.org", name: "E2E User" } },
     });
     expect(identifyRes.statusCode).toBe(200);
 
@@ -351,7 +351,7 @@ describe("end-to-end: event -> email", () => {
     const approveRes = await app.inject({
       method: "POST",
       url: `/v1/messages/${messageId}/approve`,
-      headers: { cookie: `claros_session=${sessionId}` },
+      headers: { cookie: `mailforge_session=${sessionId}` },
     });
     expect(approveRes.statusCode).toBe(200);
 

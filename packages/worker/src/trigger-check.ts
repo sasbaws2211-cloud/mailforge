@@ -1,7 +1,7 @@
 /**
  * Event-trigger flow enrollment job handler.
  *
- * Processes claros.trigger-check jobs enqueued by the ingest route after each
+ * Processes mailforge.trigger-check jobs enqueued by the ingest route after each
  * track event. Evaluates which active event-triggered flows match the event
  * name, then runs the enrollment sequence for matching flows.
  *
@@ -13,12 +13,12 @@
  */
 import { eq, and, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { flows } from "@claros/db/schema";
+import { flows } from "@mailforge/db/schema";
 import {
   matchesEventTrigger,
   type EnrollableFlow,
   type TriggerCheckJobData,
-} from "@claros/core";
+} from "@mailforge/core";
 import { enrollContactInFlows } from "./enroll.js";
 
 // ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ export interface TriggerCheckResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Handle a single claros.trigger-check job.
+ * Handle a single mailforge.trigger-check job.
  *
  * Steps:
  *   1. Load active, compiled event-trigger flows for the tenant

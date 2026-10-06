@@ -1,5 +1,5 @@
 {
-  "name": "@claros/worker",
+  "name": "@mailforge/worker",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,10 +15,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@claros/adapters": "workspace:*",
-    "@claros/brain-oss": "workspace:*",
-    "@claros/core": "workspace:*",
-    "@claros/db": "workspace:*",
+    "@mailforge/adapters": "workspace:*",
+    "@mailforge/brain-oss": "workspace:*",
+    "@mailforge/core": "workspace:*",
+    "@mailforge/db": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "marked": "^18.0.7",
     "pg-boss": "^12.26.2"

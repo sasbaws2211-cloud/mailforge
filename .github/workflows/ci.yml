@@ -14,20 +14,20 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_USER: claros
-          POSTGRES_PASSWORD: claros
-          POSTGRES_DB: claros
+          POSTGRES_USER: mailforge
+          POSTGRES_PASSWORD: mailforge
+          POSTGRES_DB: mailforge
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U claros"
+          --health-cmd "pg_isready -U mailforge"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
 
     env:
-      DATABASE_URL: postgres://claros:claros@localhost:5432/claros
-      SEED_TEST_DATABASE_URL: postgres://claros:claros@localhost:5432/claros_seed_test
+      DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge
+      SEED_TEST_DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge_seed_test
 
     steps:
       - uses: actions/checkout@v4
@@ -46,8 +46,8 @@ jobs:
 
       - name: Create seed test database
         run: |
-          PGPASSWORD=claros createdb -h localhost -U claros claros_seed_test
-          DATABASE_URL=postgres://claros:claros@localhost:5432/claros_seed_test \
+          PGPASSWORD=mailforge createdb -h localhost -U mailforge mailforge_seed_test
+          DATABASE_URL=postgres://mailforge:mailforge@localhost:5432/mailforge_seed_test \
             pnpm db:migrate
 
       - run: pnpm build

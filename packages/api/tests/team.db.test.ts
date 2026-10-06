@@ -18,7 +18,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, and } from "drizzle-orm";
 import { buildApp } from "../src/index.js";
-import { users, sessions, tenants, invites } from "@claros/db/schema";
+import { users, sessions, tenants, invites } from "@mailforge/db/schema";
 import type { FastifyInstance } from "fastify";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
@@ -27,7 +27,7 @@ if (!TEST_DB_URL) {
     `[team.test] DATABASE_URL is not set.\n\n` +
     `This test requires a Postgres connection.\n` +
     `Set the variable in .env (see .env.example) or export it:\n\n` +
-    `  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`,
+    `  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`,
   );
 }
 
@@ -96,7 +96,7 @@ describe("Team management end-to-end", () => {
     const res = await app.inject({
       method: "GET",
       url: "/v1/team",
-      cookies: { claros_session: ownerSessionId },
+      cookies: { mailforge_session: ownerSessionId },
     });
 
     expect(res.statusCode).toBe(200);
@@ -110,7 +110,7 @@ describe("Team management end-to-end", () => {
     const res = await app.inject({
       method: "POST",
       url: "/v1/team/invites",
-      cookies: { claros_session: ownerSessionId },
+      cookies: { mailforge_session: ownerSessionId },
       payload: { email: memberEmail, role: "member" },
     });
 
@@ -149,7 +149,7 @@ describe("Team management end-to-end", () => {
 
     // Should set session cookie
     const cookies = postRes.cookies as Array<{ name: string; value: string }>;
-    const sessionCookie = cookies.find((c) => c.name === "claros_session");
+    const sessionCookie = cookies.find((c) => c.name === "mailforge_session");
     expect(sessionCookie).toBeDefined();
     memberSessionCookie = sessionCookie!.value;
   });
@@ -171,7 +171,7 @@ describe("Team management end-to-end", () => {
     const res = await app.inject({
       method: "GET",
       url: "/auth/me",
-      cookies: { claros_session: memberSessionCookie },
+      cookies: { mailforge_session: memberSessionCookie },
     });
 
     expect(res.statusCode).toBe(200);
@@ -186,7 +186,7 @@ describe("Team management end-to-end", () => {
     const res = await app.inject({
       method: "PUT",
       url: "/v1/settings/transport",
-      cookies: { claros_session: memberSessionCookie },
+      cookies: { mailforge_session: memberSessionCookie },
       payload: {
         provider: "resend",
         from_email: "test@example.com",
@@ -203,7 +203,7 @@ describe("Team management end-to-end", () => {
     const res = await app.inject({
       method: "GET",
       url: "/v1/team",
-      cookies: { claros_session: memberSessionCookie },
+      cookies: { mailforge_session: memberSessionCookie },
     });
 
     expect(res.statusCode).toBe(200);
@@ -215,7 +215,7 @@ describe("Team management end-to-end", () => {
     const res = await app.inject({
       method: "POST",
       url: "/v1/team/invites",
-      cookies: { claros_session: memberSessionCookie },
+      cookies: { mailforge_session: memberSessionCookie },
       payload: { email: "another@test.local" },
     });
 
@@ -226,7 +226,7 @@ describe("Team management end-to-end", () => {
     const res = await app.inject({
       method: "DELETE",
       url: `/v1/team/${memberUserId}`,
-      cookies: { claros_session: ownerSessionId },
+      cookies: { mailforge_session: ownerSessionId },
     });
 
     expect(res.statusCode).toBe(200);
@@ -238,7 +238,7 @@ describe("Team management end-to-end", () => {
     const res = await app.inject({
       method: "GET",
       url: "/v1/team",
-      cookies: { claros_session: memberSessionCookie },
+      cookies: { mailforge_session: memberSessionCookie },
     });
 
     expect(res.statusCode).toBe(401);
@@ -249,7 +249,7 @@ describe("Team management end-to-end", () => {
     const res = await app.inject({
       method: "DELETE",
       url: `/v1/team/${ownerUserId}`,
-      cookies: { claros_session: ownerSessionId },
+      cookies: { mailforge_session: ownerSessionId },
     });
 
     expect(res.statusCode).toBe(400);
@@ -353,7 +353,7 @@ describe("Last-owner guard", () => {
     const res = await app.inject({
       method: "PATCH",
       url: `/v1/team/${secondOwnerUserId}/role`,
-      cookies: { claros_session: guardOwnerSessionId },
+      cookies: { mailforge_session: guardOwnerSessionId },
       payload: { role: "member" },
     });
     expect(res.statusCode).toBe(200);
@@ -368,7 +368,7 @@ describe("Last-owner guard", () => {
     const demoteRes = await app.inject({
       method: "PATCH",
       url: `/v1/team/${secondOwnerUserId}/role`,
-      cookies: { claros_session: guardOwnerSessionId },
+      cookies: { mailforge_session: guardOwnerSessionId },
       payload: { role: "member" },
     });
     expect(demoteRes.statusCode).toBe(200);
@@ -377,7 +377,7 @@ describe("Last-owner guard", () => {
     const guardRes = await app.inject({
       method: "PATCH",
       url: `/v1/team/${guardOwnerUserId}/role`,
-      cookies: { claros_session: guardOwnerSessionId },
+      cookies: { mailforge_session: guardOwnerSessionId },
       payload: { role: "member" },
     });
     expect(guardRes.statusCode).toBe(400);
@@ -392,7 +392,7 @@ describe("Last-owner guard", () => {
     const demoteRes = await app.inject({
       method: "PATCH",
       url: `/v1/team/${guardOwnerUserId}/role`,
-      cookies: { claros_session: secondOwnerSessionId },
+      cookies: { mailforge_session: secondOwnerSessionId },
       payload: { role: "member" },
     });
     expect(demoteRes.statusCode).toBe(200);
@@ -404,7 +404,7 @@ describe("Last-owner guard", () => {
     const removeRes = await app.inject({
       method: "DELETE",
       url: `/v1/team/${guardOwnerUserId}`,
-      cookies: { claros_session: secondOwnerSessionId },
+      cookies: { mailforge_session: secondOwnerSessionId },
     });
     expect(removeRes.statusCode).toBe(200);
 
@@ -418,7 +418,7 @@ describe("Last-owner guard", () => {
     const demoteRes2 = await app.inject({
       method: "PATCH",
       url: `/v1/team/${guardOwnerUserId}/role`,
-      cookies: { claros_session: secondOwnerSessionId },
+      cookies: { mailforge_session: secondOwnerSessionId },
       payload: { role: "member" },
     });
     expect(demoteRes2.statusCode).toBe(200);
@@ -443,7 +443,7 @@ describe("Last-owner guard", () => {
     const demoteRes3 = await app.inject({
       method: "PATCH",
       url: `/v1/team/${guardOwnerUserId}/role`,
-      cookies: { claros_session: secondOwnerSessionId },
+      cookies: { mailforge_session: secondOwnerSessionId },
       payload: { role: "member" },
     });
     expect(demoteRes3.statusCode).toBe(200);

@@ -2,16 +2,15 @@
 /**
  * Generate the GitHub social preview image (1280x640, 2x = 2560x1280).
  *
- * Composites the Claros brand over a cropped section of the lifecycle grid
+ * Composites the Mailforge brand over a cropped section of the lifecycle grid
  * screenshot. The result is a dark card that shows the product is real.
  *
  * Usage:
  *   node scripts/generate-social-preview.mjs
  *
- * Outputs: oss/social-preview.png
+ * Outputs: social-preview.png (repo root)
  *
  * Mirror side: PRIVATE (scripts/ is not mirrored).
- * The output file oss/social-preview.png IS mirrored (it lives in oss/).
  */
 import { chromium } from "playwright";
 import { mkdirSync, readFileSync } from "node:fs";
@@ -20,18 +19,18 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..", "..");
-const OUTPUT = join(ROOT, "oss", "social-preview.png");
+const OUTPUT = join(ROOT, "social-preview.png");
 
 // The lifecycle screenshot to use as background
 const LIFECYCLE_IMG = join(ROOT, "apps", "dashboard", "scripts", ".screenshots-out", "lifecycle.png");
 
-let lifecycleBase64;
+// Optional: without the screenshot the card is just the dark brand panel.
+let lifecycleBase64 = "";
 try {
   const buf = readFileSync(LIFECYCLE_IMG);
   lifecycleBase64 = `data:image/png;base64,${buf.toString("base64")}`;
 } catch {
-  console.error("Error: lifecycle screenshot not found. Run capture-readme-screenshots.mjs first.");
-  process.exit(1);
+  console.warn("Note: lifecycle screenshot not found; rendering without background image.");
 }
 
 const html = `<!DOCTYPE html>
@@ -54,7 +53,7 @@ const html = `<!DOCTYPE html>
     left: 0;
     width: 100%;
     height: 100%;
-    background-image: url('${lifecycleBase64}');
+    background-image: ${lifecycleBase64 ? `url('${lifecycleBase64}')` : 'none'};
     background-size: cover;
     background-position: center top;
     opacity: 0.18;
@@ -84,7 +83,7 @@ const html = `<!DOCTYPE html>
     margin-bottom: 32px;
   }
   .mark {
-    color: #4ac9ec;
+    color: #f6a94e;
     display: flex;
   }
   .wordmark {
@@ -111,9 +110,9 @@ const html = `<!DOCTYPE html>
     margin-top: 36px;
   }
   .badge {
-    background: rgba(74, 201, 236, 0.12);
-    border: 1px solid rgba(74, 201, 236, 0.3);
-    color: #4ac9ec;
+    background: rgba(246, 169, 78, 0.12);
+    border: 1px solid rgba(246, 169, 78, 0.3);
+    color: #f6a94e;
     font-size: 14px;
     font-weight: 500;
     padding: 6px 14px;
@@ -145,12 +144,10 @@ const html = `<!DOCTYPE html>
     <div class="lockup">
       <span class="mark">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
-          <g transform="translate(12 12) rotate(90)">
-            <path d="M0 -10.8 C0 -10.8 -7.8 -2.5 -7.8 1.6 a7.8 7.8 0 0 0 15.6 0 C7.8 -2.5 0 -10.8 0 -10.8 Z M0 -2.4 a3.7 3.7 0 1 0 0.001 0 Z" fill="currentColor" fill-rule="evenodd"/>
-          </g>
+          <path d="M5 5 H19 A3 3 0 0 1 22 8 V16 A3 3 0 0 1 19 19 H5 A3 3 0 0 1 2 16 V8 A3 3 0 0 1 5 5 Z M4.4 8.1 L12 13.7 L19.6 8.1 L19.6 10.7 L12 16.3 L4.4 10.7 Z" fill="currentColor" fill-rule="evenodd"/>
         </svg>
       </span>
-      <span class="wordmark">claros</span>
+      <span class="wordmark">mailforge</span>
     </div>
     <p class="tagline">
       The <strong>open-source lifecycle email engine.</strong><br>

@@ -48,7 +48,7 @@
  * Mirror side: PUBLIC (packages/worker is mirrored).
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import type { DecidePromptContext, DraftPromptContext } from "@claros/brain-oss";
+import type { DecidePromptContext, DraftPromptContext } from "@mailforge/brain-oss";
 import { buildContactSections } from "./context-contact.js";
 import { buildEventSections } from "./context-events.js";
 import { buildFlowStepSection } from "./context-flow.js";

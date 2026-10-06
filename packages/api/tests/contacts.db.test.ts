@@ -58,7 +58,7 @@ import {
   lifecycleTransitions,
   lifecycleMessages,
   suppressions,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) {
@@ -129,7 +129,7 @@ beforeAll(async () => {
     .insert(sessions)
     .values({ tenantId: tenantAId, userId: uA!.id, expiresAt: new Date(Date.now() + 86400_000) })
     .returning({ id: sessions.id });
-  cookieA = `claros_session=${sA!.id}`;
+  cookieA = `mailforge_session=${sA!.id}`;
 
   // Tenant B
   const [tB] = await db
@@ -145,7 +145,7 @@ beforeAll(async () => {
     .insert(sessions)
     .values({ tenantId: tenantBId, userId: uB!.id, expiresAt: new Date(Date.now() + 86400_000) })
     .returning({ id: sessions.id });
-  cookieB = `claros_session=${sB!.id}`;
+  cookieB = `mailforge_session=${sB!.id}`;
 
   // Flow in tenant A (for memberships and messages)
   const [fA] = await db

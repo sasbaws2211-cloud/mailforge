@@ -27,7 +27,7 @@ import {
   contacts,
   events,
   lifecycleTransitions,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) {
@@ -36,8 +36,8 @@ if (!TEST_DB_URL) {
     `[lifecycle.test] DATABASE_URL is not set.\n\n` +
     `This test requires a Postgres connection.\n` +
     (inCI
-      ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-      : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+      ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+      : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 
@@ -103,7 +103,7 @@ beforeAll(async () => {
   testTenantId = tenant!.id;
 
   // Create test API key
-  rawApiKey = `cl_live_${randomBytes(32).toString("base64url")}`;
+  rawApiKey = `mf_live_${randomBytes(32).toString("base64url")}`;
   const keyHash = hashApiKey(rawApiKey);
   const prefix = rawApiKey.slice(0, 8);
   await db

@@ -1,8 +1,8 @@
 /**
- * @claros/adapters - I/O adapters (database, transport, external services).
- * Depends on @claros/core.
+ * @mailforge/adapters - I/O adapters (database, transport, external services).
+ * Depends on @mailforge/core.
  */
-export const CLAROS_ADAPTERS_VERSION = "0.0.0";
+export const MAILFORGE_ADAPTERS_VERSION = "0.0.0";
 
 export {
   encrypt,
@@ -33,6 +33,28 @@ export {
   SmtpTransportAdapter,
   type SmtpAdapterConfig,
 } from "./smtp.js";
+
+export {
+  DEFAULT_ALLOWED_SMTP_PORTS,
+  SMTP_HOST_NOT_ALLOWED,
+  isBlockedIp,
+  normalizeHost,
+  resolveSmtpTarget,
+  smtpHostPolicyFromEnv,
+  type SmtpHostPolicy,
+  type SmtpTargetResult,
+} from "./smtp-guard.js";
+
+export {
+  createResendDomainsClient,
+  type DnsRecord,
+  type DomainErrorKind,
+  type DomainsResult,
+  type ResendDomain,
+  type ResendDomainsClient,
+} from "./resend-domains.js";
+
+export { ManagedResendAdapter, type ManagedResendConfig } from "./managed-resend.js";
 
 export {
   resolveTransportAdapter,

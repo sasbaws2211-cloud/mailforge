@@ -24,14 +24,14 @@ import {
   flows,
   flowMemberships,
   lifecycleMessages,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 import {
   parseDelay,
   delayToMs,
   compiledPlanSchema,
   type CompiledStep,
   type AdvanceMembershipJobData,
-} from "@claros/core";
+} from "@mailforge/core";
 import {
   evaluateStepCondition,
   evaluatePlanExitCondition,
@@ -66,7 +66,7 @@ export interface AdvanceMembershipResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Handle a single claros.advance-membership job.
+ * Handle a single mailforge.advance-membership job.
  *
  * Processes the current step of the specified membership. If the step's delay
  * has elapsed (for step 1 with delay "0h" this is always true at enrollment

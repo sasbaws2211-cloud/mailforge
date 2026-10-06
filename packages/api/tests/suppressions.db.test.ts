@@ -34,7 +34,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql, eq, and } from "drizzle-orm";
 import { buildApp } from "../src/index.js";
-import { tenants, users, sessions, suppressions, apiKeys } from "@claros/db/schema";
+import { tenants, users, sessions, suppressions, apiKeys } from "@mailforge/db/schema";
 import { randomBytes, createHash } from "node:crypto";
 
 // ---------------------------------------------------------------------------
@@ -48,8 +48,8 @@ if (!TEST_DB_URL) {
     `[suppressions.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 
@@ -91,7 +91,7 @@ beforeAll(async () => {
   tenantAId = tA!.id;
   const [uA] = await db.insert(users).values({ tenantId: tenantAId, email: "owner-a@sup.test", role: "owner" }).returning({ id: users.id });
   const [sA] = await db.insert(sessions).values({ tenantId: tenantAId, userId: uA!.id, expiresAt: new Date(Date.now() + 86400_000) }).returning({ id: sessions.id });
-  cookieA = `claros_session=${sA!.id}`;
+  cookieA = `mailforge_session=${sA!.id}`;
 
   // API key for wrong-scope test
   rawApiKey = randomBytes(24).toString("base64url");
@@ -565,7 +565,7 @@ describe("GET /v1/suppressions", () => {
     await app.inject({
       method: "POST",
       url: "/v1/suppressions/import",
-      headers: { cookie: `claros_session=${cookieBId}`, "content-type": "text/plain" },
+      headers: { cookie: `mailforge_session=${cookieBId}`, "content-type": "text/plain" },
       body: "b-only@example.com",
     });
 

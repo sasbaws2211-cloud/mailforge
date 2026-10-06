@@ -19,3 +19,7 @@ export { llmConfigs } from "./llm-configs.js";
 export { scanCheckpoints } from "./scan-checkpoints.js";
 export { messageEvents } from "./message-events.js";
 export { retentionGridSnapshots } from "./retention-grid-snapshots.js";
+export { subscriptions, billingCheckouts, billingEvents, billingProviderPlans } from "./billing.js";
+export { adminAuditLog, deletedWorkspaces, adminLoginTokens, adminSessions, adminPasskeys, adminPasskeyChallenges } from "./admin.js";
+export { platformLlmConfigs, llmUsage, platformAlertState, platformSettings } from "./ai.js";
+export { managedSending, managedDomainCleanup } from "./managed-sending.js";

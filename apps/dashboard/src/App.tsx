@@ -40,11 +40,20 @@ import TransportSettings from "./pages/settings/TransportSettings.js";
 import PaceSettings from "./pages/settings/PaceSettings.js";
 import BrandingSettings from "./pages/settings/BrandingSettings.js";
 import PostalSettings from "./pages/settings/PostalSettings.js";
+import PlanSettings from "./pages/settings/PlanSettings.js";
 import NotFoundPage from "./pages/NotFoundPage.js";
 import IntegratePage from "./pages/IntegratePage.js";
 import SentLogPage from "./pages/SentLogPage.js";
 import SentLogDetailPage from "./pages/SentLogDetailPage.js";
 import SuppressionsPage from "./pages/SuppressionsPage.js";
+import SuspendedPage from "./pages/SuspendedPage.js";
+import PendingDeletionPage from "./pages/PendingDeletionPage.js";
+import DataSettings from "./pages/settings/DataSettings.js";
+import AdminPage from "./pages/admin/AdminPage.js";
+import AdminTenantPage from "./pages/admin/AdminTenantPage.js";
+import AdminAuditPage from "./pages/admin/AdminAuditPage.js";
+import AdminAiPage from "./pages/admin/AdminAiPage.js";
+import AdminLayout from "./pages/admin/AdminLayout.js";
 
 /**
  * Default landing route. Always redirects to /home, which handles the
@@ -72,10 +81,40 @@ export default function App() {
           me ? <Navigate to="/" replace /> : <LoginPage />
         }
       />
+      {/* Platform admin console: a page of its own, outside the workspace shell and its gates.
+          Anyone who is not a platform admin sees a plain not-found page. */}
+      <Route
+        path="/admin"
+        element={
+          !me ? (
+            <Navigate to="/login" replace />
+          ) : me.platformAdmin ? (
+            <AdminLayout me={me} />
+          ) : (
+            <div className="h-screen bg-background">
+              <NotFoundPage />
+            </div>
+          )
+        }
+      >
+        <Route index element={<AdminPage />} />
+        <Route path="ai" element={<AdminAiPage />} />
+        <Route path="audit" element={<AdminAuditPage />} />
+        <Route path="tenants/:id" element={<AdminTenantPage />} />
+        <Route path="*" element={<NotFoundPage />} />
+      </Route>
       <Route
         path="/"
         element={
-          me ? <ShellPage me={me} /> : <Navigate to="/login" replace />
+          !me ? (
+            <Navigate to="/login" replace />
+          ) : me.suspended && !me.platformAdmin ? (
+            <SuspendedPage />
+          ) : me.pendingDeletion && !me.platformAdmin ? (
+            <PendingDeletionPage scheduledAt={me.pendingDeletion} isOwner={me.user.role === "owner"} />
+          ) : (
+            <ShellPage me={me} />
+          )
         }
       >
         {/* Default child: always routes to /home, the unified landing. */}
@@ -100,6 +139,8 @@ export default function App() {
           <Route index element={<Navigate to="/settings/profile" replace />} />
           <Route path="profile" element={<ProfileSettings />} />
           <Route path="team" element={<TeamSettings />} />
+          <Route path="plan" element={<PlanSettings />} />
+          <Route path="data" element={<DataSettings />} />
           <Route path="llm" element={<LlmSettings />} />
           <Route path="transport" element={<TransportSettings />} />
           <Route path="pace" element={<PaceSettings />} />

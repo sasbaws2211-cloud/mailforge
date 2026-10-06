@@ -25,12 +25,12 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
 import { randomBytes, createHash } from "node:crypto";
-import { buildApp } from "@claros/api";
+import { buildApp } from "@mailforge/api";
 import {
   handleTriggerCheck,
   phaseStepAdvancement,
   processContentTick,
-} from "@claros/worker";
+} from "@mailforge/worker";
 import {
   tenants,
   users,
@@ -41,8 +41,8 @@ import {
   flowMemberships,
   lifecycleMessages,
   templates,
-} from "@claros/db/schema";
-import { encrypt, parseEncryptionKey } from "@claros/adapters";
+} from "@mailforge/db/schema";
+import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -93,6 +93,7 @@ beforeAll(async () => {
       `DELETE FROM ${tbl} WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = '${SLUG}')`,
     ));
   }
+  await db.execute(sql`DELETE FROM llm_usage WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
   await db.execute(sql`DELETE FROM llm_configs WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
   await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = ${SLUG})`);
   await db.execute(sql`DELETE FROM tenants WHERE slug = ${SLUG}`);
@@ -120,7 +121,7 @@ beforeAll(async () => {
   sessionId = s!.id;
 
   // API key
-  rawApiKey = `cl_live_${randomBytes(32).toString("base64url")}`;
+  rawApiKey = `mf_live_${randomBytes(32).toString("base64url")}`;
   const keyHash = createHash("sha256").update(rawApiKey).digest("hex");
   await db.insert(apiKeys).values({
     tenantId,
@@ -144,6 +145,7 @@ afterAll(async () => {
         `DELETE FROM ${tbl} WHERE tenant_id = '${tenantId}'`,
       ));
     }
+    await db.execute(sql`DELETE FROM llm_usage WHERE tenant_id = ${tenantId}`);
     await db.execute(sql`DELETE FROM llm_configs WHERE tenant_id = ${tenantId}`);
     await db.execute(sql`DELETE FROM transport_configs WHERE tenant_id = ${tenantId}`);
     await db.execute(sql`DELETE FROM tenants WHERE id = ${tenantId}`);
@@ -182,7 +184,7 @@ describe("end-to-end: fixed_content flow - no LLM required", () => {
       baseUrl: "http://localhost:3000",
     });
 
-    const cookie = `claros_session=${sessionId}`;
+    const cookie = `mailforge_session=${sessionId}`;
 
     // === STEP 1: Create the fixed_content flow ===
     const createRes = await app.inject({
@@ -429,7 +431,7 @@ describe("end-to-end: fixed_content flow - no LLM required", () => {
   it("AI draft endpoint returns 422 with no LLM configured", async () => {
     if (!dbAvailable) return;
     const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
-    const cookie = `claros_session=${sessionId}`;
+    const cookie = `mailforge_session=${sessionId}`;
 
     // Get the flow we created in the previous test
     const listRes = await app.inject({
@@ -492,7 +494,7 @@ describe("end-to-end: fixed_content flow - no LLM required", () => {
     });
 
     const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
-    const cookie = `claros_session=${sessionId}`;
+    const cookie = `mailforge_session=${sessionId}`;
 
     const listRes = await app.inject({
       method: "GET",

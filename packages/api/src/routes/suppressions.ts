@@ -60,7 +60,7 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { eq, and, sql } from "drizzle-orm";
-import { suppressions } from "@claros/db/schema";
+import { suppressions } from "@mailforge/db/schema";
 import type { Db } from "../plugins/db.js";
 
 // ---------------------------------------------------------------------------

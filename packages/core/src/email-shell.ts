@@ -60,7 +60,7 @@ export interface BrandSettings {
   logo_url?: string;
   /** Logo height in px. Default 32. Max 64. */
   logo_height?: number;
-  /** Hex color for the accent bar and link color. Default "#2563eb" (blue-600). */
+  /** Hex color for the accent bar and link color. Default "#b8541a" (Mailforge ember orange). */
   accent_color?: string;
   /** Custom footer text (replaces default "You are receiving this..."). */
   footer_text?: string;
@@ -81,6 +81,23 @@ export interface EmailShellInput {
   tenantName: string;
   /** Pre-built compliance footer HTML (unsubscribe link + postal address). */
   complianceFooterHtml: string;
+  /**
+   * A small "Sent with <name>" link at the very bottom. Set for plans that
+   * carry the platform's branding (Free); omit for paid plans. Ignored unless
+   * the URL is http(s).
+   */
+  poweredBy?: PoweredBy;
+}
+
+/** The platform credit line some plans show under the footer. */
+export interface PoweredBy {
+  name: string;
+  url: string;
+}
+
+function poweredByHtml(p: PoweredBy | undefined): string {
+  if (!p || !/^https?:\/\//i.test(p.url)) return "";
+  return `<p style="margin:12px 0 0 0;font-size:11px;"><a href="${esc(p.url)}" style="color:#9ca3af;text-decoration:none;">Sent with ${esc(p.name)}</a></p>`;
 }
 
 /**
@@ -95,6 +112,8 @@ export interface TextShellInput {
   tenantName: string;
   /** Pre-built compliance footer (plain text). */
   complianceFooterText: string;
+  /** Credit line for plans that carry the platform's branding. See EmailShellInput. */
+  poweredBy?: PoweredBy;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,14 +127,110 @@ function clampLogoHeight(h: number | undefined): number {
   return Math.round(h);
 }
 
+/**
+ * Default accent when a tenant has not set one. Deep ember orange: white text
+ * on it passes 4.5:1, and it matches the dashboard and unsubscribe pages.
+ */
+export const DEFAULT_ACCENT = "#b8541a";
+
+/**
+ * The inline style the markdown renderer puts on every link it emits. The
+ * renderer runs when a message is generated, before the tenant brand is
+ * applied, so it always uses the default accent. wrapInShell recognizes this
+ * exact style and recolors it with the tenant accent at send time, which also
+ * picks up accent changes made after a message was generated.
+ */
+export function brandLinkStyle(color: string = DEFAULT_ACCENT): string {
+  return `color:${color};text-decoration:underline;`;
+}
+
+/** Link colors that earlier builds stored in generated messages. */
+const LEGACY_LINK_COLORS = ["#2563eb"];
+
+/** WCAG relative luminance of an sRGB color (channels 0-255). */
+function relLuminance(r: number, g: number, b: number): number {
+  const lin = (c: number): number => {
+    const v = c / 255;
+    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+/** Background of the card in dark mode; keep in sync with the dark block below. */
+const DARK_CARD_BG = [0x16, 0x21, 0x3e] as const;
+
+/** WCAG contrast ratio of an sRGB color against white. */
+function contrastOnWhite(r: number, g: number, b: number): number {
+  return 1.05 / (relLuminance(r, g, b) + 0.05);
+}
+
+/** WCAG contrast ratio of an sRGB color against the dark-mode card background. */
+function contrastOnDark(r: number, g: number, b: number): number {
+  return (relLuminance(r, g, b) + 0.05) / (relLuminance(...DARK_CARD_BG) + 0.05);
+}
+
+/** Channels of a validated #RGB, #RRGGBB or #RRGGBBAA color (alpha ignored). */
+function rgbOf(accent: string): [number, number, number] {
+  let hex = accent.slice(1);
+  if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+  hex = hex.slice(0, 6);
+  return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+}
+
+function toHex(r: number, g: number, b: number): string {
+  return "#" + [r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Link color derived from a tenant accent. The accent bar can be any color,
+ * but links are body text on a white card, so an accent too light to read
+ * (below 4.5:1 on white) is darkened until it is. Accents that already pass
+ * are returned unchanged. Input is a validated #RGB, #RRGGBB or #RRGGBBAA.
+ */
+function readableLinkColor(accent: string): string {
+  let [r, g, b] = rgbOf(accent);
+  for (let i = 0; i < 20 && contrastOnWhite(r, g, b) < 4.5; i++) {
+    r = Math.round(r * 0.9);
+    g = Math.round(g * 0.9);
+    b = Math.round(b * 0.9);
+  }
+  return toHex(r, g, b);
+}
+
+/**
+ * Link color for dark-mode clients: the same accent, lightened toward white
+ * until it reads on the dark card (4.5:1). Accents that already pass are
+ * returned unchanged, so a bright brand color keeps its exact value.
+ */
+function readableLinkColorOnDark(accent: string): string {
+  let [r, g, b] = rgbOf(accent);
+  for (let i = 0; i < 20 && contrastOnDark(r, g, b) < 4.5; i++) {
+    r = Math.round(r + (255 - r) * 0.12);
+    g = Math.round(g + (255 - g) * 0.12);
+    b = Math.round(b + (255 - b) * 0.12);
+  }
+  return toHex(r, g, b);
+}
+
+/** Recolor renderer-produced links (current and legacy default) to the tenant link color. */
+function applyBrandToLinks(html: string, linkColor: string): string {
+  let out = html;
+  const to = `style="${brandLinkStyle(linkColor)}"`;
+  for (const from of [DEFAULT_ACCENT, ...LEGACY_LINK_COLORS]) {
+    if (from.toLowerCase() === linkColor.toLowerCase()) continue;
+    out = out.split(`style="${brandLinkStyle(from)}"`).join(to);
+  }
+  return out;
+}
+
 /** Validate hex color, return safe default if invalid. */
 function safeAccentColor(color: string | undefined): string {
-  if (!color) return "#2563eb";
+  if (!color) return DEFAULT_ACCENT;
   // Accept #RGB, #RRGGBB, #RRGGBBAA
   if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color)) {
     return color;
   }
-  return "#2563eb";
+  return DEFAULT_ACCENT;
 }
 
 /** Escape HTML entities in text that will be placed in attribute or content positions. */
@@ -144,6 +259,8 @@ function esc(s: string): string {
  */
 export function wrapInShell(input: EmailShellInput): string {
   const accent = safeAccentColor(input.brand.accent_color);
+  const bodyHtml = applyBrandToLinks(input.bodyHtml, readableLinkColor(accent));
+  const darkLinkColor = readableLinkColorOnDark(accent);
   const brandName = esc(input.brand.brand_name || input.tenantName);
   const logoUrl = input.brand.logo_url || "";
   const logoHeight = clampLogoHeight(input.brand.logo_height);
@@ -185,6 +302,7 @@ body { margin: 0; padding: 0; width: 100% !important; height: 100% !important; }
   .email-body { background-color: #1a1a2e !important; }
   .email-container { background-color: #16213e !important; }
   .email-content { color: #e0e0e0 !important; }
+  .email-content a { color: ${darkLinkColor} !important; }
   .email-header-text { color: #e0e0e0 !important; }
   .email-footer { color: #a0a0a0 !important; }
   .email-footer a { color: #a0a0a0 !important; }
@@ -210,7 +328,7 @@ ${headerContent}
 <!-- Body content -->
 <tr>
 <td class="email-container email-content" style="background-color:#ffffff;padding:24px 40px 40px 40px;font-size:15px;line-height:1.65;color:#1a1a1a;">
-${input.bodyHtml}
+${bodyHtml}
 </td>
 </tr>
 <!-- Footer -->
@@ -218,6 +336,7 @@ ${input.bodyHtml}
 <td class="email-container email-footer" style="background-color:#f9fafb;padding:20px 40px 24px 40px;border-top:1px solid #e5e7eb;font-size:12px;line-height:1.6;color:#6b7280;">
 <p style="margin:0 0 6px 0;">${footerText}</p>
 ${input.complianceFooterHtml}
+${poweredByHtml(input.poweredBy)}
 </td>
 </tr>
 </table>
@@ -249,6 +368,10 @@ export function wrapInTextShell(input: TextShellInput): string {
   parts.push("---");
   parts.push(footerText);
   parts.push(input.complianceFooterText);
+  if (input.poweredBy && /^https?:\/\//i.test(input.poweredBy.url)) {
+    parts.push("");
+    parts.push(`Sent with ${input.poweredBy.name}: ${input.poweredBy.url}`);
+  }
 
   return parts.join("\n");
 }

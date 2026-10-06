@@ -53,8 +53,10 @@ import {
   assess,
   type DecidePromptContext,
   type DraftPromptContext,
-} from "@claros/brain-oss";
+} from "@mailforge/brain-oss";
+import { brandLinkStyle } from "@mailforge/core";
 import { resolveTenantProvider } from "./provider-resolver.js";
+import { tenantsOutOfAiAllowance } from "./ai-gate.js";
 import { assembleContext } from "./context-assembler.js";
 import { applyBudgetForBothPaths, draftContextToDecideContext, checkAssessBudget } from "./context-budget.js";
 import { renderTemplate, type TemplateContext } from "./template-renderer.js";
@@ -211,6 +213,16 @@ export async function processContentTick(
     resolvedTenantIds = tenantRows.rows.map((r) => r.tenant_id);
   }
 
+  // Step 1b: Workspaces on Mailforge AI whose monthly token allowance is spent
+  // are left alone: their messages stay queued, untouched, and resume when the
+  // month rolls over, the plan is upgraded or the customer adds their own key.
+  // (Does nothing unless plan enforcement is on.)
+  const heldBack = await tenantsOutOfAiAllowance(db, resolvedTenantIds, now);
+  if (heldBack.size > 0) {
+    resolvedTenantIds = resolvedTenantIds.filter((id) => !heldBack.has(id));
+    console.info(`[content] AI allowance spent, content generation held for ${heldBack.size} workspace(s)`);
+  }
+
   // Step 2: Claim batch atomically.
   const candidates = await claimContentBatch(db, now, batchLimit, resolvedTenantIds);
   stats.claimed = candidates.length;
@@ -336,8 +348,18 @@ export async function processOneContentMessage(
     // configuration fault (no llm_configs row, bad ENCRYPTION_KEY, or an
     // undecryptable envelope): no amount of retrying generates content, so
     // the message fails terminally with the reason instead of looping.
-    const providerResult = await resolveTenantProvider(db, candidate.tenantId);
+    const providerResult = await resolveTenantProvider(db, candidate.tenantId, "content", now);
     if (!providerResult.ok) {
+      if (providerResult.code === "allowance" || providerResult.code === "budget") {
+        // The allowance ran out mid-batch. Not a fault: put the message back
+        // exactly as it was so it is picked up again when AI is available.
+        await db.execute(sql`
+          UPDATE lifecycle_messages
+          SET status = 'pending_generation', updated_at = ${now}
+          WHERE id = ${candidate.id} AND status = 'generating'
+        `);
+        return "error";
+      }
       return failPermanently(db, candidate, "generating", providerResult.reason, now);
     }
     const { provider } = providerResult;
@@ -368,7 +390,7 @@ export async function processOneContentMessage(
     } catch {
       // Budget estimation unavailable (buildDraftMessages/buildDecideMessages
       // not loaded). Use the un-truncated contexts as-is. This path is hit
-      // only in test environments where @claros/brain-oss is mocked.
+      // only in test environments where @mailforge/brain-oss is mocked.
     }
 
     // 4. Call decide()
@@ -835,7 +857,7 @@ function buildSafeRenderer(): Renderer {
     const safeHref = isSafeUrl(href ?? "") ? href : "#";
     const body = renderer.parser.parseInline(tokens);
     const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
-    return `<a href="${escapeHtml(safeHref)}"${titleAttr} style="color:#2563eb;text-decoration:underline;">${body}</a>`;
+    return `<a href="${escapeHtml(safeHref)}"${titleAttr} style="${brandLinkStyle()}">${body}</a>`;
   };
 
   // Tables: strip entirely (unreliable in email clients, and the model

@@ -92,7 +92,7 @@ const tenantWithPostal = {
 
 const ingestKeysEmpty = { keys: [] };
 const ingestKeysPresent = {
-  keys: [{ id: "k1", kind: "publishable", prefix: "cl_pub_", label: "Production", allowed_origins: [], last_used_at: new Date().toISOString(), created_at: new Date().toISOString(), revoked_at: null }],
+  keys: [{ id: "k1", kind: "publishable", prefix: "mf_pub_", label: "Production", allowed_origins: [], last_used_at: new Date().toISOString(), created_at: new Date().toISOString(), revoked_at: null }],
 };
 
 const ingestStatusNoEvents = { last_event: null, events_last_24h: 0 };
@@ -377,7 +377,7 @@ for (const scheme of ["light", "dark"]) {
 
   // Clear any localStorage dismissal so we land in operational mode
   await page.goto(`${BASE}/home`, { waitUntil: "domcontentloaded" });
-  await page.evaluate(() => localStorage.removeItem("claros-home-setup-dismissed"));
+  await page.evaluate(() => localStorage.removeItem("mailforge-home-setup-dismissed"));
 
   stubAll(context, {
     diagnostics: diagnosticsAllPresent,

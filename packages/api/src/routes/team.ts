@@ -24,10 +24,12 @@
 import { randomBytes, createHash } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { eq, and, sql, ne, isNull } from "drizzle-orm";
-import { users, sessions, invites, tenants, transportConfigs } from "@claros/db/schema";
-import { resolveTransportAdapter } from "@claros/adapters";
+import { users, sessions, invites, tenants, transportConfigs } from "@mailforge/db/schema";
+import { resolveTransportAdapter } from "@mailforge/adapters";
+import { PlanLimitError } from "@mailforge/core";
 import { buildInviteEmail, type TransactionalEmailInput } from "../transactional-email.js";
 import type { Db } from "../plugins/db.js";
+import { assertCanAddSeat } from "../plan/usage.js";
 
 /** Invite token TTL: 7 days. */
 const INVITE_TTL_DAYS = 7;
@@ -99,6 +101,18 @@ const teamRoutes: FastifyPluginAsync = async (app) => {
       if (existing.length > 0) {
         reply.status(409);
         return { error: "That email is already a team member." };
+      }
+
+      // Seats: active members plus pending invitations count against the plan.
+      // Current members keep access whatever happens; only new invitations stop.
+      try {
+        await assertCanAddSeat(db, tenantId);
+      } catch (err) {
+        if (err instanceof PlanLimitError) {
+          reply.status(402);
+          return err.toJSON();
+        }
+        throw err;
       }
 
       // Generate token

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { buildApp } from "@claros/api";
+import { buildApp } from "@mailforge/api";
 
-describe("@claros/server", () => {
+describe("@mailforge/server", () => {
   it("valid roles are defined", () => {
     const validRoles = ["all", "api", "worker", "scheduler"];
     expect(validRoles).toContain("all");

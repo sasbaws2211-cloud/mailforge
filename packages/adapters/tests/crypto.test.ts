@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { randomBytes } from "node:crypto";
 import { encrypt, decrypt, parseEncryptionKey, type EncryptedEnvelope } from "../src/crypto.js";
 
-describe("@claros/adapters crypto", () => {
+describe("@mailforge/adapters crypto", () => {
   const validKey = randomBytes(32);
   const validKeyBase64 = validKey.toString("base64");
 

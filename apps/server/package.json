@@ -1,10 +1,10 @@
 {
-  "name": "@claros/server",
+  "name": "@mailforge/server",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "bin": {
-    "claros": "bin/claros.mjs"
+    "mailforge": "bin/mailforge.mjs"
   },
   "scripts": {
     "build": "tsc --build",
@@ -14,13 +14,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@claros/adapters": "workspace:*",
-    "@claros/api": "workspace:*",
-    "@claros/brain-oss": "workspace:*",
-    "@claros/core": "workspace:*",
-    "@claros/db": "workspace:*",
-    "@claros/scheduler": "workspace:*",
-    "@claros/worker": "workspace:*",
+    "@mailforge/adapters": "workspace:*",
+    "@mailforge/api": "workspace:*",
+    "@mailforge/brain-oss": "workspace:*",
+    "@mailforge/core": "workspace:*",
+    "@mailforge/db": "workspace:*",
+    "@mailforge/scheduler": "workspace:*",
+    "@mailforge/worker": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "fastify": "^4.28.0",
     "pg": "^8.22.0",

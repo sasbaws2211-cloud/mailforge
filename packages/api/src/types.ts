@@ -35,10 +35,25 @@ export interface TenantContext {
   userId: string;
   /** The authenticated user's role. */
   userRole: UserRole;
+  /** The authenticated user's email (used for the platform-admin check). */
+  userEmail: string;
+  /** True when a platform admin has suspended this workspace. */
+  suspended: boolean;
+  /** True when the workspace is scheduled for deletion (still inside the grace period). */
+  pendingDeletion: boolean;
+}
+
+/** A platform admin making a request to the admin console API. */
+export interface PlatformAdminActor {
+  email: string;
+  /** Their user id when they came in through a workspace login; null from the standalone console. */
+  id: string | null;
 }
 
 declare module "fastify" {
   interface FastifyRequest {
+    /** Set by the admin routes once the caller is known to be a platform admin. */
+    platformAdmin: PlatformAdminActor | null;
     /**
      * Resolved tenant for this request.
      * Null on public/unauthenticated routes (e.g. /health, /unsubscribe).

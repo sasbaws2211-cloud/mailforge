@@ -49,11 +49,12 @@
  */
 import { eq, and } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { kbEntries } from "@claros/db/schema";
-import type { KbEmbedJobData } from "@claros/core";
+import { kbEntries } from "@mailforge/db/schema";
+import type { KbEmbedJobData } from "@mailforge/core";
 import {
   resolveEmbeddingProvider,
   callEmbedding,
+  recordEmbeddingUsage,
   EmbeddingPermanentError,
   DEFAULT_EMBEDDING_MODEL,
 } from "./embedding-client.js";
@@ -145,7 +146,9 @@ export async function handleKbEmbedJob(
   let embedding: number[];
   try {
     embedding = await callEmbedding(baseUrl, apiKey, embeddingModel, content);
+    await recordEmbeddingUsage(db, tenant_id, providerResult, content, true);
   } catch (err) {
+    await recordEmbeddingUsage(db, tenant_id, providerResult, content, false);
     if (err instanceof EmbeddingPermanentError) {
       await markPermanentFailure(db, kb_entry_id, tenant_id, err.message);
       console.error(`[kb-embed] permanent failure for entry ${kb_entry_id}: ${err.message}`);

@@ -20,7 +20,7 @@
  */
 import { inArray, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { retentionGridSnapshots, tenants } from "@claros/db/schema";
+import { retentionGridSnapshots, tenants } from "@mailforge/db/schema";
 import {
   resolveLifecycleConfig,
   recencyThresholdDays,
@@ -28,7 +28,7 @@ import {
   RETENTION_RECENCY_BUCKETS,
   RETENTION_TENURE_THRESHOLDS_DAYS,
   type LifecycleConfig,
-} from "@claros/core";
+} from "@mailforge/core";
 
 // ---------------------------------------------------------------------------
 // Types

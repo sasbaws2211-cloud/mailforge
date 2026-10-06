@@ -1,5 +1,5 @@
 {
-  "name": "@claros/brain-oss",
+  "name": "@mailforge/brain-oss",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@claros/core": "workspace:*"
+    "@mailforge/core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

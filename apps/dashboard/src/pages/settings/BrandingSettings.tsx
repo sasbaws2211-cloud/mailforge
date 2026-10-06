@@ -108,7 +108,7 @@ export default function BrandingSettings() {
               <Input
                 value={accentColor}
                 onChange={(e) => { setAccentColor(e.target.value); setSaved(false); }}
-                placeholder="#2563eb"
+                placeholder="#b8541a"
                 disabled={patch.isPending}
                 className="flex-1"
               />

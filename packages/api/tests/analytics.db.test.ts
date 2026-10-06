@@ -44,7 +44,7 @@ import {
   lifecycleTransitions,
   lifecycleMessages,
   retentionGridSnapshots,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) {
@@ -109,7 +109,7 @@ beforeAll(async () => {
       .insert(sessions)
       .values({ tenantId: t!.id, userId: u!.id, expiresAt: new Date(now + 86400_000) })
       .returning({ id: sessions.id });
-    return { tenantId: t!.id, cookie: `claros_session=${s!.id}` };
+    return { tenantId: t!.id, cookie: `mailforge_session=${s!.id}` };
   }
 
   const a = await makeTenant(TEST_SLUG_A, "owner-a@analytics.test");
@@ -491,7 +491,7 @@ describe("GET /v1/analytics/sending", () => {
     const res = await app.inject({
       method: "GET",
       url: "/v1/analytics/sending?days=30",
-      headers: { cookie: `claros_session=${s!.id}` },
+      headers: { cookie: `mailforge_session=${s!.id}` },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();

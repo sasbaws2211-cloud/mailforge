@@ -33,9 +33,9 @@ import {
   flowMemberships,
   lifecycleMessages,
   suppressions,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 import { processDrainTick } from "../src/drain.js";
-import { verifyUnsubscribeToken } from "@claros/adapters";
+import { verifyUnsubscribeToken } from "@mailforge/adapters";
 import type { TransportAdapter, TransportSendResult, TransportSendParams } from "../src/transport.js";
 import { makeDrainRunner } from "./drain-test-utils.js";
 
@@ -102,8 +102,8 @@ if (!TEST_DB_URL) {
     `[drain.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 

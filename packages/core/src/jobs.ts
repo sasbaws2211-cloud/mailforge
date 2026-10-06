@@ -22,7 +22,7 @@ export const QUEUE = {
    * Handler: packages/worker (task 12).
    * Schedule: packages/scheduler, cron "every-15 * * * *".
    */
-  SCAN: "claros.scan",
+  SCAN: "mailforge.scan",
 
   /**
    * Compile a flow's natural-language prompt into a deterministic execution plan.
@@ -31,7 +31,7 @@ export const QUEUE = {
    * Trigger: POST /v1/flows/:id/compile enqueues on demand.
    * Singleton: singletonKey = flow_id (one compile per flow at a time).
    */
-  COMPILE: "claros.compile",
+  COMPILE: "mailforge.compile",
 
   /**
    * Evaluate event-triggered flows for a single contact after an event is ingested.
@@ -40,7 +40,7 @@ export const QUEUE = {
    * Trigger: ingest route enqueues after inserting an event.
    * Latency: seconds (not waiting for the 15-min scan interval).
    */
-  TRIGGER_CHECK: "claros.trigger-check",
+  TRIGGER_CHECK: "mailforge.trigger-check",
 
   /**
    * Drain: pick up approved messages and hand them to transport (every 15 min).
@@ -51,7 +51,7 @@ export const QUEUE = {
    * Dependency: the reap worker (task 15) recovers messages stuck at 'sending'
    * after transport errors.
    */
-  DRAIN: "claros.drain",
+  DRAIN: "mailforge.drain",
 
   /**
    * Reap: recover messages stuck in 'sending', 'generating', or 'awaiting_content' (every hour).
@@ -67,7 +67,7 @@ export const QUEUE = {
    *     (Covers failures in draft(), value gate, budget check, or process crash after decide().)
    *   - retry_count >= MAX_RETRY_COUNT (3): set to 'failed' (terminal).
    */
-  REAP: "claros.reap",
+  REAP: "mailforge.reap",
 
   /**
    * Counter rollover: rotate engagement depth buckets (every scan tick, 15 min).
@@ -77,7 +77,7 @@ export const QUEUE = {
    * Handler: packages/worker (task 14.5).
    * Schedule: packages/scheduler, cron every 15 min (piggybacks on scan interval).
    */
-  COUNTER_ROLLOVER: "claros.counter-rollover",
+  COUNTER_ROLLOVER: "mailforge.counter-rollover",
 
   /**
    * Partition maintenance: ensure future monthly partitions exist for the events table.
@@ -86,7 +86,7 @@ export const QUEUE = {
    * Handler: packages/worker (task 14.5).
    * Schedule: packages/scheduler, cron every 15 min (frequent + idempotent).
    */
-  PARTITION_MAINTENANCE: "claros.partition-maintenance",
+  PARTITION_MAINTENANCE: "mailforge.partition-maintenance",
 
   /**
    * Content generation: claim pending_generation messages, run Brain decide+draft.
@@ -97,7 +97,7 @@ export const QUEUE = {
    * Uses FOR UPDATE SKIP LOCKED + CAS to claim messages atomically, same pattern
    * as drain. Reap (task 15) recovers messages stuck at 'generating' after timeout.
    */
-  CONTENT_GENERATION: "claros.content-generation",
+  CONTENT_GENERATION: "mailforge.content-generation",
 
   /**
    * KB embedding: generate a pgvector embedding for a single kb_entries row.
@@ -116,7 +116,7 @@ export const QUEUE = {
    * Re-embedding is triggered only when content changes. Tag-only or other
    * field-only updates must not enqueue this job.
    */
-  KB_EMBED: "claros.kb-embed",
+  KB_EMBED: "mailforge.kb-embed",
 
   /**
    * Targeted step advancement: process a single membership's current step.
@@ -132,7 +132,7 @@ export const QUEUE = {
    * If the same membership is enqueued twice, the second job finds the step already
    * advanced and short-circuits (CAS on current_step prevents double-advance).
    */
-  ADVANCE_MEMBERSHIP: "claros.advance-membership",
+  ADVANCE_MEMBERSHIP: "mailforge.advance-membership",
 
   /**
    * Targeted content generation: process a single pending_generation message.
@@ -147,7 +147,7 @@ export const QUEUE = {
    * If the message is already claimed by the cron tick, the targeted job finds
    * status != 'pending_generation' and returns immediately.
    */
-  PROCESS_MESSAGE: "claros.process-message",
+  PROCESS_MESSAGE: "mailforge.process-message",
 
   /**
    * Targeted drain: send a single approved message.
@@ -163,7 +163,7 @@ export const QUEUE = {
    * If the message is already claimed by the cron drain, the targeted job finds
    * status != 'approved' and returns immediately.
    */
-  DRAIN_MESSAGE: "claros.drain-message",
+  DRAIN_MESSAGE: "mailforge.drain-message",
 
   /**
    * Grid snapshot: record the day's retention-grid cell populations.
@@ -174,7 +174,7 @@ export const QUEUE = {
    *
    * Idempotent: re-running on the same day overwrites that day's rows.
    */
-  GRID_SNAPSHOT: "claros.grid-snapshot",
+  GRID_SNAPSHOT: "mailforge.grid-snapshot",
 } as const;
 
 export type QueueName = (typeof QUEUE)[keyof typeof QUEUE];

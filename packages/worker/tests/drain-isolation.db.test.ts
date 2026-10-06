@@ -26,7 +26,7 @@ import {
   flowMemberships,
   lifecycleMessages,
   transportConfigs,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 import { makeDrainRunner } from "./drain-test-utils.js";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
@@ -35,8 +35,8 @@ if (!TEST_DB_URL) {
   throw new Error(
     `[drain-isolation.test] DATABASE_URL is not set.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Export it: export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Export it: export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 

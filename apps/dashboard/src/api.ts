@@ -26,6 +26,12 @@ export interface MeResponse {
     role: string;
     tenantId: string;
   };
+  /** True for operators listed in MAILFORGE_PLATFORM_ADMINS: shows the Admin console. */
+  platformAdmin?: boolean;
+  /** True when a platform admin has suspended this workspace. */
+  suspended?: boolean;
+  /** When set, the workspace is scheduled for deletion and will be erased at this ISO time. */
+  pendingDeletion?: string | null;
 }
 
 export interface LoginResponse {
@@ -44,14 +50,14 @@ export interface LoginResponse {
  * /auth/me is the normal unauthenticated state, not session expiry;
  * fetchMe() handles it directly.
  */
-async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(input, { credentials: "include", ...init });
   if (res.status === 401) {
     // Tell the login page WHY the user is landing there. sessionStorage
     // survives the navigation and dies with the tab; LoginPage clears it on
     // read so a later manual visit to /login shows no stale notice.
     try {
-      sessionStorage.setItem("claros-session-expired", "1");
+      sessionStorage.setItem("mailforge-session-expired", "1");
     } catch {
       // storage unavailable; the redirect still works, the notice is lost
     }
@@ -609,6 +615,19 @@ export interface LlmConfig {
   created_at: string;
 }
 
+/** Where a workspace's AI comes from: its own key, Mailforge AI (the operator's), or nothing yet. */
+export type AiSource = "byok" | "platform" | "none";
+
+export interface LlmAiInfo {
+  source: AiSource;
+  /** What customers call the operator's AI. */
+  name: string;
+  /** The operator has paused Mailforge AI for everyone on it. Own-key workspaces never see this as true. */
+  unavailable: boolean;
+  /** Mailforge AI tokens this month against the plan (limit null = no cap). A workspace on its own key is never capped. */
+  allowance: { plan: string; limit: number | null; used: number; spent: boolean; resets_at: string };
+}
+
 export interface BrandSettingsData {
   brand_name: string | null;
   logo_url: string | null;
@@ -687,7 +706,7 @@ export async function putTransport(
 }
 
 /** GET /v1/settings/llm - active config, never credentials. */
-export async function fetchLlm(): Promise<{ llm: LlmConfig | null }> {
+export async function fetchLlm(): Promise<{ llm: LlmConfig | null; ai: LlmAiInfo }> {
   const res = await apiFetch("/v1/settings/llm");
   if (!res.ok) {
     throw new Error(`/v1/settings/llm returned ${res.status}`);
@@ -704,6 +723,16 @@ export async function putLlm(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw parseFlowError(res.status, body);
+  }
+  return body;
+}
+
+/** DELETE /v1/settings/llm - remove the workspace's own key; it then uses Mailforge AI if the operator has set it up. */
+export async function deleteLlm(): Promise<{ ok: true; removed: number; ai: LlmAiInfo }> {
+  const res = await apiFetch("/v1/settings/llm", { method: "DELETE" });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     throw parseFlowError(res.status, body);
@@ -1612,3 +1641,152 @@ export async function removeMember(id: string): Promise<{ ok: boolean }> {
   }
   return res.json() as Promise<{ ok: boolean }>;
 }
+
+// ---------------------------------------------------------------------------
+// Plan and usage
+// ---------------------------------------------------------------------------
+
+export type PlanMeterState = "unlimited" | "ok" | "near" | "at_limit" | "over";
+
+export interface PlanMeter {
+  used: number;
+  /** null = no limit on this plan (or limits are not enforced). */
+  limit: number | null;
+  state: PlanMeterState;
+}
+
+export interface PlanCatalogEntry {
+  id: string;
+  name: string;
+  tagline: string;
+  price_monthly_usd: number;
+  price_annual_usd: number;
+  limits: { contacts: number | null; emails_per_month: number | null; seats: number | null; ai_tokens_per_month: number | null };
+  features: string[];
+  recommended: boolean;
+  current: boolean;
+}
+
+export type BillingInterval = "monthly" | "yearly";
+
+export interface BillingSubscription {
+  plan: string;
+  interval: BillingInterval;
+  amount_usd: number;
+  /** active: renewing. cancelling: cancelled, works until current_period_end. ended: over. */
+  status: "active" | "cancelling" | "ended";
+  current_period_end: string;
+  cancel_at_period_end: boolean;
+}
+
+export type PaymentStatus = "none" | "current" | "overdue" | "lapsed";
+
+export interface PlanInfo {
+  /** False on self-hosted installs: nothing is limited and the UI should say nothing. */
+  enforced: boolean;
+  /** Whether the customer can pay online here, and their subscription if they have one. */
+  billing: { enabled: boolean; currency: string; subscription: BillingSubscription | null };
+  /** current | overdue (inside the grace period) | lapsed (now on Free) | none (no billing date). */
+  payment: { status: PaymentStatus; paid_through: string | null; grace_ends_at: string | null };
+  plan: { id: string; name: string; tagline: string };
+  stored_plan: string;
+  shows_powered_by: boolean;
+  support_email: string | null;
+  trial: { active: boolean; expired: boolean; ends_at: string | null; days_left: number };
+  meters: {
+    contacts: PlanMeter;
+    emails: PlanMeter & { resets_at: string };
+    seats: PlanMeter & { members: number; pending_invites: number };
+    /** Mailforge AI tokens. Only counts calls served by the operator's provider. */
+    ai: PlanMeter & { source: AiSource; resets_at: string };
+  };
+  plans: PlanCatalogEntry[];
+}
+
+/** GET /v1/plan - the workspace plan, trial status and usage against limits. */
+export async function fetchPlan(): Promise<PlanInfo> {
+  const res = await apiFetch("/v1/plan");
+  if (!res.ok) {
+    throw new Error(`/v1/plan returned ${res.status}`);
+  }
+  return res.json() as Promise<PlanInfo>;
+}
+
+/** POST /v1/billing/checkout - start a payment. Returns the hosted checkout URL to send the customer to. */
+export async function startBillingCheckout(plan: string, interval: BillingInterval): Promise<{ url: string }> {
+  const res = await apiFetch("/v1/billing/checkout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ plan, interval }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Could not start checkout (${res.status})`);
+  }
+  return res.json() as Promise<{ url: string }>;
+}
+
+/** POST /v1/billing/cancel - stop future charges; the plan keeps working until the period ends. */
+export async function cancelBillingSubscription(): Promise<{ subscription: BillingSubscription }> {
+  const res = await apiFetch("/v1/billing/cancel", { method: "POST" });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Could not cancel (${res.status})`);
+  }
+  return res.json() as Promise<{ subscription: BillingSubscription }>;
+}
+
+// ---------------------------------------------------------------------------
+// Managed sending (Mailforge sends your email for you)
+// ---------------------------------------------------------------------------
+
+export interface SendingDnsRecord {
+  record: string;
+  name: string;
+  type: string;
+  value: string;
+  ttl: string;
+  status: string;
+  priority?: number;
+}
+
+export interface SendingView {
+  /** Is Mailforge Sending offered on this service at all? */
+  available: boolean;
+  /** What mail goes out through: the workspace's own provider wins, then Mailforge Sending. */
+  uses: "own_transport" | "managed" | "nothing";
+  shared: { offered: boolean; daily_limit: number | null };
+  managed: null | {
+    enabled: boolean;
+    domain: string | null;
+    domain_status: string;
+    dns_records: SendingDnsRecord[];
+    domain_verified_at: string | null;
+    from_local: string;
+    from_name: string | null;
+    reply_to: string | null;
+    /** Who mail goes out as right now; the shared address itself is never shown (from_email null). */
+    sender: null | { mode: "domain" | "shared"; from_email: string | null; from_name: string; reply_to: string | null };
+    paused: null | { at: string; reason: string | null; automatic: boolean };
+    needs_domain: boolean;
+  };
+}
+
+async function sendingRequest(path: string, init?: RequestInit): Promise<SendingView> {
+  const res = await apiFetch(`/v1/sending${path}`, init);
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error((body as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+  }
+  return body as SendingView;
+}
+
+const sendingJson = (method: string, body: unknown): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+export const fetchSending = () => sendingRequest("");
+export const enableSending = () => sendingRequest("/enable", { method: "POST" });
+export const deleteSending = () => sendingRequest("", { method: "DELETE" });
+export const patchSending = (b: { from_local?: string; from_name?: string | null; reply_to?: string | null }) => sendingRequest("", sendingJson("PATCH", b));
+export const putSendingDomain = (b: { domain: string; from_local?: string }) => sendingRequest("/domain", sendingJson("PUT", b));
+export const verifySendingDomain = () => sendingRequest("/domain/verify", { method: "POST" });
+export const deleteSendingDomain = () => sendingRequest("/domain", { method: "DELETE" });

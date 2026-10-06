@@ -162,6 +162,76 @@
       "when": 1785930970284,
       "tag": "0022_messy_peter_quill",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1791083943129,
+      "tag": "0023_secret_peter_quill",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791091332604,
+      "tag": "0024_foamy_deathstrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791094523217,
+      "tag": "0025_smart_killer_shrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1791098072555,
+      "tag": "0026_open_harpoon",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1791105234182,
+      "tag": "0027_fast_mindworm",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1791107305119,
+      "tag": "0028_lean_exodus",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1791111310978,
+      "tag": "0029_dry_pretty_boy",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1791113984035,
+      "tag": "0030_milky_kingpin",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1791120676038,
+      "tag": "0031_flaky_ozymandias",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1791152387003,
+      "tag": "0032_whole_the_call",
+      "breakpoints": true
     }
   ]
 }

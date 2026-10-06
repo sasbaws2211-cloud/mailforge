@@ -1,5 +1,5 @@
 /**
- * Tests for @claros/worker: createBoss factory and startWorker registration pattern.
+ * Tests for @mailforge/worker: createBoss factory and startWorker registration pattern.
  *
  * Covers the queues defined in tasks 5 and 11 (SCAN, COMPILE). Pattern tests confirm:
  * - createBoss returns a usable instance without throwing
@@ -9,8 +9,8 @@
  * - fromDrizzle is re-exported for transactional job enqueue in API routes
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { QUEUE } from "@claros/core";
-import { CLAROS_WORKER_VERSION, startWorker, createBoss, fromDrizzle } from "../src/index.js";
+import { QUEUE } from "@mailforge/core";
+import { MAILFORGE_WORKER_VERSION, startWorker, createBoss, fromDrizzle } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // pg-boss mock
@@ -157,9 +157,9 @@ vi.mock("../src/embed-kb.js", () => ({
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("@claros/worker - version", () => {
+describe("@mailforge/worker - version", () => {
   it("exports version", () => {
-    expect(CLAROS_WORKER_VERSION).toBe("0.0.0");
+    expect(MAILFORGE_WORKER_VERSION).toBe("0.0.0");
   });
 });
 
@@ -245,7 +245,7 @@ describe("failure path", () => {
 });
 
 describe("fromDrizzle re-export", () => {
-  it("fromDrizzle is a function exported from @claros/worker", () => {
+  it("fromDrizzle is a function exported from @mailforge/worker", () => {
     expect(typeof fromDrizzle).toBe("function");
   });
 });

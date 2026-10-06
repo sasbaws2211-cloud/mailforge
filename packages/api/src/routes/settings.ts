@@ -8,7 +8,7 @@
  *   PUT  /v1/settings/transport
  *     Write or replace the active transport configuration for the calling tenant.
  *     Encrypts the credential and webhook secret with the envelope from
- *     @claros/adapters before storing. Deactivates any previous active row
+ *     @mailforge/adapters before storing. Deactivates any previous active row
  *     for this tenant in the same operation (upsert via deactivate + insert).
  *     Body: { provider, from_email, from_name?, api_key, webhook_secret?, daily_limit? }
  *
@@ -70,9 +70,9 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { eq, and, sql } from "drizzle-orm";
-import { encrypt, decrypt, parseEncryptionKey, resolveTransportAdapter, SmtpTransportAdapter } from "@claros/adapters";
-import { transportConfigs, llmConfigs, tenants } from "@claros/db/schema";
-import { wrapInShell, wrapInTextShell, buildShellComplianceHtml, buildShellComplianceText, resolveThrottleConfig, type BrandSettings } from "@claros/core";
+import { encrypt, decrypt, parseEncryptionKey, resolveSmtpTarget, resolveTransportAdapter, smtpHostPolicyFromEnv, SmtpTransportAdapter } from "@mailforge/adapters";
+import { transportConfigs, llmConfigs, tenants } from "@mailforge/db/schema";
+import { wrapInShell, wrapInTextShell, buildShellComplianceHtml, buildShellComplianceText, resolveThrottleConfig, type BrandSettings } from "@mailforge/core";
 import {
   KNOWN_LLM_PROVIDERS,
   isKnownLlmProvider,
@@ -80,6 +80,29 @@ import {
   verifyLlmCredentials,
 } from "../llm-providers.js";
 import type { Db } from "../plugins/db.js";
+import { loadAiStatus, type AiStatus } from "../ai/resolver.js";
+import { resolveManagedAdapter } from "../sending/context.js";
+import { PLATFORM_AI_NAME, startOfNextMonthUtc } from "@mailforge/core";
+
+/** The part of an LLM settings answer that says where the workspace's AI comes from. */
+function aiSummary(status: AiStatus, now: Date) {
+  const { limit, used, planName } = status.allowance;
+  return {
+    // byok = the workspace's own key; platform = Mailforge AI; none = nothing set up
+    source: status.source,
+    name: PLATFORM_AI_NAME,
+    // The operator has paused Mailforge AI for everyone on it. Says nothing about why; own-key workspaces never see this.
+    unavailable: status.unavailable,
+    // Tokens spent on Mailforge AI this month against the plan allowance (null limit = no cap).
+    allowance: {
+      plan: planName,
+      limit,
+      used,
+      spent: status.spent,
+      resets_at: startOfNextMonthUtc(now).toISOString(),
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -204,6 +227,17 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
+      // On a hosted service the mail server is typed in by a customer, so it must not be able to
+      // point this server at its own network. Refused before anything is connected to or stored.
+      const smtpPolicy = smtpHostPolicyFromEnv();
+      if (provider === "smtp") {
+        const target = await resolveSmtpTarget(host!, port!, smtpPolicy);
+        if (!target.ok) {
+          reply.status(400);
+          return { error: target.error, code: "smtp_host_not_allowed" };
+        }
+      }
+
       // Require ENCRYPTION_KEY
       const encryptionKeyEnv = process.env.ENCRYPTION_KEY;
       if (!encryptionKeyEnv) {
@@ -255,6 +289,7 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
           username: username || undefined,
           password: password || undefined,
           rejectUnauthorized: reject_unauthorized ?? true,
+          hostPolicy: smtpPolicy,
         });
         try {
           const verification = await testAdapter.verify();
@@ -607,8 +642,11 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
       )
       .limit(1);
 
+    const now = new Date();
+    const ai = aiSummary(await loadAiStatus(db, tenantId, now), now);
+
     if (rows.length === 0) {
-      return { llm: null };
+      return { llm: null, ai };
     }
 
     const row = rows[0]!;
@@ -648,7 +686,31 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
         is_active: row.isActive,
         created_at: row.createdAt,
       },
+      ai,
     };
+  });
+
+  // -------------------------------------------------------------------------
+  // DELETE /v1/settings/llm
+  // -------------------------------------------------------------------------
+
+  /**
+   * DELETE /v1/settings/llm
+   * Remove the workspace's own AI key. The workspace then uses Mailforge AI
+   * (when the operator has set it up), within its plan's monthly allowance.
+   * Idempotent: removing a key that is not there still answers 200.
+   * Owner only, like saving one.
+   */
+  app.delete("/llm", { config: { minRole: "owner" as const } }, async (request) => {
+    const db: Db = request.server.db;
+    const tenantId = request.tenant!.id;
+    const removed = await db
+      .update(llmConfigs)
+      .set({ isActive: false })
+      .where(and(eq(llmConfigs.tenantId, tenantId), eq(llmConfigs.isActive, true)))
+      .returning({ id: llmConfigs.id });
+    const now = new Date();
+    return { ok: true, removed: removed.length, ai: aiSummary(await loadAiStatus(db, tenantId, now), now) };
   });
 
   // -------------------------------------------------------------------------
@@ -828,7 +890,7 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
         if (brand.accent_color !== undefined && brand.accent_color !== null) {
           if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(brand.accent_color)) {
             reply.status(400);
-            return { error: "brand.accent_color must be a valid hex color (e.g. #2563eb)." };
+            return { error: "brand.accent_color must be a valid hex color (e.g. #b8541a)." };
           }
         }
         if (brand.reply_to !== undefined && brand.reply_to !== null) {
@@ -1147,22 +1209,33 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
         LIMIT 1
       `);
 
+      // No transport of their own: managed sending (the operator's Resend) if the workspace uses it.
+      let adapter;
+      let fromEmail: string;
+      let fromName: string | undefined;
       if (configRows.rows.length === 0) {
-        reply.status(400);
-        return { error: "Email transport is not configured. Set it up in Settings before sending a test email." };
+        const managed = await resolveManagedAdapter(db, tenantId);
+        if (!managed) {
+          reply.status(400);
+          return { error: "Email sending is not set up. Turn on Mailforge Sending or connect your own email provider in Settings before sending a test email." };
+        }
+        adapter = managed;
+        // The managed adapter fixes the sender itself; these are ignored.
+        fromEmail = "managed@localhost";
+        fromName = undefined;
+      } else {
+        const configRow = configRows.rows[0]!;
+        const resolveResult = resolveTransportAdapter(configRow.provider, configRow.config);
+
+        if (!resolveResult.ok) {
+          reply.status(500);
+          return { error: "Failed to initialize email transport. Check your transport configuration." };
+        }
+
+        adapter = resolveResult.transport.adapter;
+        fromEmail = configRow.from_email;
+        fromName = configRow.from_name ?? undefined;
       }
-
-      const configRow = configRows.rows[0]!;
-      const resolveResult = resolveTransportAdapter(configRow.provider, configRow.config);
-
-      if (!resolveResult.ok) {
-        reply.status(500);
-        return { error: "Failed to initialize email transport. Check your transport configuration." };
-      }
-
-      const adapter = resolveResult.transport.adapter;
-      const fromEmail = configRow.from_email;
-      const fromName = configRow.from_name ?? undefined;
 
       // Build test email content
       const subject = `Test email from ${tenantName}`;
@@ -1200,7 +1273,7 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const testMessageId = `test-${Date.now()}`;
-      const { generateUnsubscribeToken } = await import("@claros/adapters");
+      const { generateUnsubscribeToken } = await import("@mailforge/adapters");
       const token = generateUnsubscribeToken(tenantId, testMessageId, signingKey);
       const baseUrlForLinks = process.env.BASE_URL ?? `http://localhost:${process.env.PORT ?? 3000}`;
       const oneClickUrl = `${baseUrlForLinks}/unsubscribe/one-click?token=${token}`;

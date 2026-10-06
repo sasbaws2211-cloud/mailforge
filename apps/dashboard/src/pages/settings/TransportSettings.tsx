@@ -15,6 +15,7 @@ import { Select } from "../../components/ui/select.js";
 import { Skeleton } from "../../components/ui/skeleton.js";
 import { Section, FormError, Notice, SummaryList, SummaryItem, errorMessage, formatDate } from "./shared.js";
 import { Badge } from "../../components/ui/badge.js";
+import ManagedSendingSettings from "./ManagedSendingSettings.js";
 
 const TRANSPORT_PROVIDERS: ReadonlyArray<{ value: string; label: string; note?: string }> = [
   { value: "resend", label: "Resend" },
@@ -22,7 +23,9 @@ const TRANSPORT_PROVIDERS: ReadonlyArray<{ value: string; label: string; note?: 
 ];
 
 export default function TransportSettings() {
-  const { transport, isLoading } = useSetupState();
+  const { transport, sending, isLoading } = useSetupState();
+  // When the service offers Mailforge Sending, connecting your own provider is the optional path.
+  const managedOffered = sending?.available === true;
   const put = usePutTransport();
   const [open, setOpen] = useState(false);
   const [provider, setProvider] = useState("resend");
@@ -82,16 +85,19 @@ export default function TransportSettings() {
     }
   }
 
-  const formVisible = open || transport === null;
+  const formVisible = open || (transport === null && !managedOffered);
 
   const isResendValid = provider === "resend" && apiKey && fromEmail;
   const isSmtpValid = provider === "smtp" && smtpHost && smtpPort && fromEmail;
   const canSubmit = isResendValid || isSmtpValid;
 
   return (
+    <div className="space-y-6">
+    <ManagedSendingSettings />
     <Section
-      title="Email transport"
-      configured={transport !== null}
+      title={managedOffered ? "Your own email provider" : "Email transport"}
+      description={managedOffered ? "Optional. Connect your own Resend account or SMTP server instead of using Mailforge Sending. If you do, it is used and Mailforge Sending waits." : undefined}
+      configured={transport !== null ? true : managedOffered ? null : false}
       actions={
         !formVisible && transport ? (
           <Button variant="outline" size="sm" onClick={() => { setOpen(true); setSaved(false); }}>
@@ -100,6 +106,11 @@ export default function TransportSettings() {
         ) : undefined
       }
     >
+      {!formVisible && transport === null && managedOffered && (
+        <Button variant="outline" size="sm" onClick={() => { setOpen(true); setSaved(false); }}>
+          Connect your own provider
+        </Button>
+      )}
       {!formVisible && transport && (
         <>
           <SummaryList>
@@ -131,7 +142,7 @@ export default function TransportSettings() {
       {saved && !formVisible && (
         <p className="mt-3 text-[13px] text-success" role="status">Saved.</p>
       )}
-      {transport === null && (
+      {transport === null && !managedOffered && (
         <Notice className="mb-4">
           Without a transport, approved messages cannot be delivered. The
           product can draft and compile, but nothing sends.
@@ -262,7 +273,7 @@ export default function TransportSettings() {
             <Button type="submit" disabled={put.isPending || !canSubmit}>
               {put.isPending ? "Verifying..." : transport === null ? "Save transport" : "Replace transport"}
             </Button>
-            {transport !== null && (
+            {(transport !== null || managedOffered) && (
               <Button type="button" variant="ghost" disabled={put.isPending} onClick={() => setOpen(false)}>
                 Cancel
               </Button>
@@ -271,5 +282,6 @@ export default function TransportSettings() {
         </form>
       )}
     </Section>
+    </div>
   );
 }

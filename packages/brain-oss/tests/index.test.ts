@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createOssBrain } from "../src/index.js";
 import type { Brain, BrainConfig } from "../src/index.js";
 
-describe("@claros/brain-oss", () => {
+describe("@mailforge/brain-oss", () => {
   it("createOssBrain returns a Brain implementation", () => {
     const cfg: BrainConfig = {};
     const brain: Brain = createOssBrain(cfg);

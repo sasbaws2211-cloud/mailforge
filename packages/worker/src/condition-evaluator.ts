@@ -12,7 +12,7 @@
  *
  * Mirror side: PUBLIC (packages/worker is mirrored).
  */
-import { stepConditionSchema, type StepCondition, type PlanExitCondition } from "@claros/core";
+import { stepConditionSchema, type StepCondition, type PlanExitCondition } from "@mailforge/core";
 
 // ---------------------------------------------------------------------------
 // Result types

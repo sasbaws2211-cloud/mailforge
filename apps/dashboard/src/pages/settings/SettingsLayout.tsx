@@ -18,10 +18,13 @@ import {
   Gauge,
   Palette,
   MapPin,
+  CreditCard,
+  DatabaseZap,
   type LucideIcon,
 } from "lucide-react";
 import { PageHeader } from "../../components/page-header.js";
 import { useSetupState } from "../../settings.js";
+import { planNeedsAttention, usePlan } from "../../plan.js";
 import { cn } from "../../lib/utils.js";
 
 interface NavItem {
@@ -30,6 +33,8 @@ interface NavItem {
   icon: LucideIcon;
   /** True when the section needs attention (not configured). */
   warn?: boolean;
+  /** What a screen reader says for the warning dot. Defaults to "not configured". */
+  warnLabel?: string;
 }
 
 interface NavGroup {
@@ -38,7 +43,10 @@ interface NavGroup {
 }
 
 export default function SettingsLayout() {
-  const { llm, transport, tenant } = useSetupState();
+  const { llm, ai, checks, tenant } = useSetupState();
+  // Plan & usage only exists where plans are enforced (hosted workspaces).
+  const { data: plan } = usePlan();
+  const planWarn = planNeedsAttention(plan);
 
   const groups: NavGroup[] = [
     {
@@ -46,13 +54,15 @@ export default function SettingsLayout() {
       items: [
         { to: "/settings/profile", label: "Profile", icon: User },
         { to: "/settings/team", label: "Team", icon: Users },
+        { to: "/settings/data", label: "Data & deletion", icon: DatabaseZap },
+        ...(plan?.enforced ? [{ to: "/settings/plan", label: "Plan & usage", icon: CreditCard, warn: planWarn, warnLabel: "needs attention" }] : []),
       ],
     },
     {
       label: "Engine",
       items: [
-        { to: "/settings/llm", label: "LLM provider", icon: Sparkles, warn: llm === null },
-        { to: "/settings/transport", label: "Email transport", icon: Mail, warn: transport === null },
+        { to: "/settings/llm", label: "AI provider", icon: Sparkles, warn: llm === null && (ai?.source ?? "none") === "none" },
+        { to: "/settings/transport", label: "Email sending", icon: Mail, warn: !checks.transport },
         { to: "/settings/pace", label: "Sending pace", icon: Gauge },
       ],
     },
@@ -107,7 +117,7 @@ export default function SettingsLayout() {
                       {item.label}
                       {item.warn && (
                         <span
-                          aria-label="not configured"
+                          aria-label={item.warnLabel ?? "not configured"}
                           className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-warning"
                         />
                       )}

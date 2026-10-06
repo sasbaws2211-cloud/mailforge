@@ -16,7 +16,7 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { eq, and } from "drizzle-orm";
-import { templates } from "@claros/db/schema";
+import { templates } from "@mailforge/db/schema";
 import type { Db } from "../plugins/db.js";
 
 /**

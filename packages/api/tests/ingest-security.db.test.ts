@@ -22,7 +22,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import { buildApp, hashApiKey } from "../src/index.js";
-import { tenants, apiKeys } from "@claros/db/schema";
+import { tenants, apiKeys } from "@mailforge/db/schema";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) {
@@ -42,7 +42,7 @@ let pubLimitedKey: string;
 let secretKey: string;
 
 async function insertKey(kind: "publishable" | "secret", allowedOrigins: string[] | null) {
-  const raw = `${kind === "publishable" ? "cl_pub_" : "cl_live_"}${randomBytes(32).toString("base64url")}`;
+  const raw = `${kind === "publishable" ? "mf_pub_" : "mf_live_"}${randomBytes(32).toString("base64url")}`;
   await db.insert(apiKeys).values({
     tenantId,
     keyHash: hashApiKey(raw),

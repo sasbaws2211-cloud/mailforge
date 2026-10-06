@@ -1,7 +1,7 @@
 /**
  * bootstrapSeed concurrency test.
  *
- * Uses a dedicated database (claros_seed_test) that no other test suite touches.
+ * Uses a dedicated database (mailforge_seed_test) that no other test suite touches.
  * This eliminates all shared-state collisions: the DB is always empty at the
  * start of each test and the results are authoritative regardless of what other
  * packages are running in parallel under turbo.
@@ -34,7 +34,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, count, sql } from "drizzle-orm";
-import { tenants, users } from "@claros/db/schema";
+import { tenants, users } from "@mailforge/db/schema";
 
 // ---------------------------------------------------------------------------
 // PgGate: Postgres-level synchronization via advisory locks.
@@ -221,7 +221,7 @@ async function bootstrapSeedBuggy(db: Db, seedEmail: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Test database: isolated from the main claros DB and all other test suites.
+// Test database: isolated from the main mailforge DB and all other test suites.
 // ---------------------------------------------------------------------------
 
 const SEED_TEST_URL = process.env.SEED_TEST_DATABASE_URL;
@@ -231,11 +231,11 @@ if (!SEED_TEST_URL) {
     `[seed.test] SEED_TEST_DATABASE_URL is not set.\n\n` +
     `This test requires a dedicated Postgres database.\n` +
     (inCI
-      ? `Set the variable in the workflow env block:\n\n  SEED_TEST_DATABASE_URL: postgres://claros:claros@localhost:5432/claros_seed_test\n`
-      : `Set the variable in .env (see .env.example) or export it:\n\n  export SEED_TEST_DATABASE_URL='postgres://claros:claros@localhost:5433/claros_seed_test'\n`),
+      ? `Set the variable in the workflow env block:\n\n  SEED_TEST_DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge_seed_test\n`
+      : `Set the variable in .env (see .env.example) or export it:\n\n  export SEED_TEST_DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge_seed_test'\n`),
   );
 }
-const SEED_EMAIL = "seed-concurrency-test@claros-test.invalid";
+const SEED_EMAIL = "seed-concurrency-test@mailforge-test.invalid";
 
 let pool: pg.Pool;
 let db: Db;
@@ -259,13 +259,13 @@ beforeAll(async () => {
         `Cause: ${(err as Error).message}\n\n` +
         `The CI workflow must include a Postgres service and a setup step that:\n` +
         `  1. Applies community migrations to the main database\n` +
-        `  2. Creates claros_seed_test and applies migrations to it\n` +
+        `  2. Creates mailforge_seed_test and applies migrations to it\n` +
         `See .github/workflows/ci.yml for the expected setup.`,
       );
     }
     // Local: warn and skip. A developer without Docker running is expected.
     console.warn("[seed.test] SEED_TEST_DATABASE_URL not reachable - tests will be skipped.");
-    console.warn("[seed.test] To run: create claros_seed_test and apply migrations (see file header).");
+    console.warn("[seed.test] To run: create mailforge_seed_test and apply migrations (see file header).");
   }
 });
 

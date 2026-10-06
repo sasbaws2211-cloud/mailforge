@@ -11,10 +11,12 @@ import {
   putTransport,
   fetchLlm,
   putLlm,
+  deleteLlm,
   fetchTenant,
   patchTenant,
   sendTestEmail,
   fetchTemplates,
+  fetchSending,
   applyTemplate,
   fetchThrottle,
   putThrottle,
@@ -99,6 +101,18 @@ export function useTemplates() {
   return useQuery({ queryKey: TEMPLATES_QUERY_KEY, queryFn: fetchTemplates });
 }
 
+/** Remove the workspace's own AI key; it then falls back to Mailforge AI. */
+export function useDeleteLlm() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => deleteLlm(),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: LLM_QUERY_KEY });
+      void qc.invalidateQueries({ queryKey: ["plan"] });
+    },
+  });
+}
+
 export function useApplyTemplate() {
   const qc = useQueryClient();
   return useMutation({
@@ -117,11 +131,13 @@ export function useApplyTemplate() {
  * Settings itself.
  */
 export function useSetupState() {
-  const [llm, transport, tenant] = useQueries({
+  const [llm, transport, tenant, sending] = useQueries({
     queries: [
       { queryKey: LLM_QUERY_KEY, queryFn: fetchLlm },
       { queryKey: TRANSPORT_QUERY_KEY, queryFn: fetchTransport },
       { queryKey: TENANT_QUERY_KEY, queryFn: fetchTenant },
+      // Same key as useSending(): one request serves both.
+      { queryKey: ["sending"], queryFn: fetchSending },
     ],
   });
 
@@ -129,8 +145,10 @@ export function useSetupState() {
   const isError = llm.isError || transport.isError || tenant.isError;
 
   const checks = {
-    llm: llm.data?.llm !== null && llm.data !== undefined,
-    transport: transport.data?.transport !== null && transport.data !== undefined,
+    // AI is set up when the workspace has its own key OR Mailforge AI is available to it.
+    llm: llm.data !== undefined && (llm.data.llm !== null || (llm.data.ai?.source ?? "none") !== "none"),
+    // Email can go out when the workspace connected a provider of its own OR Mailforge Sending is in use.
+    transport: (transport.data?.transport !== null && transport.data !== undefined) || sending.data?.uses === "managed",
     postalAddress:
       tenant.data !== undefined && (tenant.data.tenant.postal_address ?? "") !== "",
   };
@@ -141,7 +159,9 @@ export function useSetupState() {
     checks,
     complete: checks.llm && checks.transport && checks.postalAddress,
     llm: llm.data?.llm ?? null,
+    ai: llm.data?.ai ?? null,
     transport: transport.data?.transport ?? null,
+    sending: sending.data ?? null,
     tenant: tenant.data?.tenant ?? null,
   };
 }

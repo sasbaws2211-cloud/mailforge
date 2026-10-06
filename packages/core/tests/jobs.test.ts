@@ -1,59 +1,59 @@
 /**
- * Tests for @claros/core queue contract.
+ * Tests for @mailforge/core queue contract.
  *
  * Covers the queue names and payload types defined in tasks 5, 11, 12b, 14, 15, and 22.
  * Additional queues added in Phase 2 get their own tests in the same commit.
  */
 import { describe, it, expect } from "vitest";
-import { QUEUE, CLAROS_CORE_VERSION } from "../src/index.js";
+import { QUEUE, MAILFORGE_CORE_VERSION } from "../src/index.js";
 import type { ScanJobData, CompileJobData, TriggerCheckJobData, DrainJobData, ReapJobData, CounterRolloverJobData, PartitionMaintenanceJobData, ContentGenerationJobData, KbEmbedJobData, QueueName } from "../src/index.js";
 
-describe("@claros/core - version", () => {
+describe("@mailforge/core - version", () => {
   it("exports version", () => {
-    expect(CLAROS_CORE_VERSION).toBe("0.0.0");
+    expect(MAILFORGE_CORE_VERSION).toBe("0.0.0");
   });
 });
 
 describe("QUEUE constants", () => {
-  it("SCAN is claros.scan", () => {
-    expect(QUEUE.SCAN).toBe("claros.scan");
+  it("SCAN is mailforge.scan", () => {
+    expect(QUEUE.SCAN).toBe("mailforge.scan");
   });
 
-  it("COMPILE is claros.compile", () => {
-    expect(QUEUE.COMPILE).toBe("claros.compile");
+  it("COMPILE is mailforge.compile", () => {
+    expect(QUEUE.COMPILE).toBe("mailforge.compile");
   });
 
-  it("TRIGGER_CHECK is claros.trigger-check", () => {
-    expect(QUEUE.TRIGGER_CHECK).toBe("claros.trigger-check");
+  it("TRIGGER_CHECK is mailforge.trigger-check", () => {
+    expect(QUEUE.TRIGGER_CHECK).toBe("mailforge.trigger-check");
   });
 
-  it("DRAIN is claros.drain", () => {
-    expect(QUEUE.DRAIN).toBe("claros.drain");
+  it("DRAIN is mailforge.drain", () => {
+    expect(QUEUE.DRAIN).toBe("mailforge.drain");
   });
 
-  it("REAP is claros.reap", () => {
-    expect(QUEUE.REAP).toBe("claros.reap");
+  it("REAP is mailforge.reap", () => {
+    expect(QUEUE.REAP).toBe("mailforge.reap");
   });
 
-  it("COUNTER_ROLLOVER is claros.counter-rollover", () => {
-    expect(QUEUE.COUNTER_ROLLOVER).toBe("claros.counter-rollover");
+  it("COUNTER_ROLLOVER is mailforge.counter-rollover", () => {
+    expect(QUEUE.COUNTER_ROLLOVER).toBe("mailforge.counter-rollover");
   });
 
-  it("PARTITION_MAINTENANCE is claros.partition-maintenance", () => {
-    expect(QUEUE.PARTITION_MAINTENANCE).toBe("claros.partition-maintenance");
+  it("PARTITION_MAINTENANCE is mailforge.partition-maintenance", () => {
+    expect(QUEUE.PARTITION_MAINTENANCE).toBe("mailforge.partition-maintenance");
   });
 
-  it("CONTENT_GENERATION is claros.content-generation", () => {
-    expect(QUEUE.CONTENT_GENERATION).toBe("claros.content-generation");
+  it("CONTENT_GENERATION is mailforge.content-generation", () => {
+    expect(QUEUE.CONTENT_GENERATION).toBe("mailforge.content-generation");
   });
 
-  it("KB_EMBED is claros.kb-embed", () => {
-    expect(QUEUE.KB_EMBED).toBe("claros.kb-embed");
+  it("KB_EMBED is mailforge.kb-embed", () => {
+    expect(QUEUE.KB_EMBED).toBe("mailforge.kb-embed");
   });
 
-  it("all queue names use the claros. prefix", () => {
+  it("all queue names use the mailforge. prefix", () => {
     for (const [key, value] of Object.entries(QUEUE)) {
-      expect(value, `QUEUE.${key}`).toMatch(/^claros\./);
+      expect(value, `QUEUE.${key}`).toMatch(/^mailforge\./);
     }
   });
 

@@ -1,16 +1,16 @@
 /**
- * @claros/worker - Background job processing.
+ * @mailforge/worker - Background job processing.
  *
  * Exports:
  *   - createBoss(connectionString, opts?): creates a configured PgBoss instance.
  *     Called by apps/server before startWorker / startScheduler.
  *   - startWorker(boss, db): registers work() handlers. Add one handler per queue
- *     in the same commit as the queue name in @claros/core.
+ *     in the same commit as the queue name in @mailforge/core.
  *   - fromDrizzle: pg-boss Drizzle transaction adapter, re-exported so API
  *     routes can enqueue jobs atomically inside Drizzle transactions without
  *     a direct pg-boss import.
  *
- * Queue names and payload types live in @claros/core. Import them from there.
+ * Queue names and payload types live in @mailforge/core. Import them from there.
  * Nothing re-exports the queue contract through this package.
  *
  * Connection model:
@@ -23,7 +23,7 @@
 import { PgBoss, fromDrizzle } from "pg-boss";
 import type { Job } from "pg-boss";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { QUEUE, resolveThrottleConfig, type ScanJobData, type CompileJobData, type TriggerCheckJobData, type DrainJobData, type ReapJobData, type CounterRolloverJobData, type PartitionMaintenanceJobData, type ContentGenerationJobData, type KbEmbedJobData, type AdvanceMembershipJobData, type ProcessMessageJobData, type DrainMessageJobData, type GridSnapshotJobData } from "@claros/core";
+import { QUEUE, resolveThrottleConfig, type ScanJobData, type CompileJobData, type TriggerCheckJobData, type DrainJobData, type ReapJobData, type CounterRolloverJobData, type PartitionMaintenanceJobData, type ContentGenerationJobData, type KbEmbedJobData, type AdvanceMembershipJobData, type ProcessMessageJobData, type DrainMessageJobData, type GridSnapshotJobData } from "@mailforge/core";
 import { handleCompileJob } from "./compile.js";
 import { handleKbEmbedJob } from "./embed-kb.js";
 import { phaseTimeTransitions } from "./scan-time-transitions.js";
@@ -43,7 +43,8 @@ import { handleAdvanceMembership } from "./advance-membership.js";
 import { handleProcessMessage } from "./process-message.js";
 import { handleDrainMessage } from "./drain-message.js";
 import { processGridSnapshotTick } from "./snapshot-retention-grid.js";
-import { tenants } from "@claros/db/schema";
+import { tenants } from "@mailforge/db/schema";
+import { purgeDueWorkspaces, type PurgeDb } from "@mailforge/db/purge";
 
 export { fromDrizzle };
 export { nullTransportResolver } from "./transport.js";
@@ -68,7 +69,7 @@ export {
   type BrandSettings,
   type EmailShellInput,
   type TextShellInput,
-} from "@claros/core";
+} from "@mailforge/core";
 export { processReapTick } from "./reap.js";
 export type { ReapTickResult } from "./reap.js";
 export { processCounterRollover } from "./counter-rollover.js";
@@ -112,7 +113,7 @@ export {
   MAX_CONTEXT_TOKENS,
 } from "./context-budget.js";
 export type { TruncationResult, DroppableSection } from "./context-budget.js";
-export const CLAROS_WORKER_VERSION = "0.0.0";
+export const MAILFORGE_WORKER_VERSION = "0.0.0";
 
 type Db = NodePgDatabase<Record<string, never>>;
 
@@ -159,7 +160,7 @@ export function createBoss(
  * ensures the row exists immediately so schedule() can reference it.
  *
  * Pattern: one createQueue() + work() pair per queue constant. Add both in the
- * same commit as the queue name in @claros/core and the handler logic.
+ * same commit as the queue name in @mailforge/core and the handler logic.
  */
 export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
   // Ensure queue rows exist before any boss.schedule() call can reference them.
@@ -322,6 +323,15 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
         );
       }
 
+      // Tenants held back by their plan's monthly email allowance are skipped
+      // before anything is claimed, so the line above never mentions them.
+      if (result.skippedPlanLimit > 0) {
+        console.log(
+          `[drain] ${result.skippedPlanLimit} held for plan limit (monthly email allowance used; ` +
+            `resumes next month or on upgrade)`,
+        );
+      }
+
       void jobs;
     },
   );
@@ -335,6 +345,17 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
       // for > 2h and either retries them or marks them failed after MAX_RETRY_COUNT.
       const now = new Date();
       const result = await processReapTick(db, now);
+
+      // Same hourly tick: erase workspaces whose deletion grace period has ended.
+      try {
+        const purge = await purgeDueWorkspaces(db as unknown as PurgeDb, now);
+        for (const p of purge.purged) {
+          console.log(`[purge] erased workspace ${p.slug} (${p.tenantId}): ${JSON.stringify(p.rowCounts)}`);
+        }
+        for (const f of purge.failed) console.error(`[purge] FAILED for ${f.tenantId}: ${f.error}`);
+      } catch (err) {
+        console.error("[purge] tick failed:", err);
+      }
 
       const total =
         result.sendingRetried +

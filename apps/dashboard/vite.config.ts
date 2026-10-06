@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
 /**
- * Vite configuration for the Claros dashboard SPA.
+ * Vite configuration for the Mailforge dashboard SPA.
  *
  * Dev server proxy: forwards API calls to the Fastify backend so the
  * browser always operates on a single origin (no CORS needed).
@@ -33,6 +33,14 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    // Two pages share one build: the dashboard, and the standalone admin console
+    // (admin.html), which the separate admin deployment serves instead of index.html.
+    rollupOptions: {
+      input: {
+        main: path.resolve(import.meta.dirname, "index.html"),
+        admin: path.resolve(import.meta.dirname, "admin.html"),
+      },
+    },
     // Never inline woff2 files as base64 data URLs.
     // When a font file is inlined, unicode-range has no effect: the bytes land
     // inside the render-blocking stylesheet and are downloaded unconditionally
@@ -45,6 +53,10 @@ export default defineConfig({
   server: {
     proxy: {
       "/auth": {
+        target: apiTarget,
+        changeOrigin: true,
+      },
+      "/admin-auth": {
         target: apiTarget,
         changeOrigin: true,
       },

@@ -1,5 +1,5 @@
 {
-  "name": "@claros/api",
+  "name": "@mailforge/api",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,12 +15,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@claros/adapters": "workspace:*",
-    "@claros/brain-oss": "workspace:*",
-    "@claros/core": "workspace:*",
-    "@claros/db": "workspace:*",
     "@fastify/cookie": "^9.4.0",
     "@fastify/static": "7.0.4",
+    "@mailforge/adapters": "workspace:*",
+    "@mailforge/brain-oss": "workspace:*",
+    "@mailforge/core": "workspace:*",
+    "@mailforge/db": "workspace:*",
+    "@simplewebauthn/server": "^14.0.3",
     "drizzle-orm": "^0.45.2",
     "fastify": "^4.28.0",
     "zod": "^3.23.0"

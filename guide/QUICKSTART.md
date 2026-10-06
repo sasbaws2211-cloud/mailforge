@@ -11,7 +11,7 @@ Three commands. One browser tab. A real email in your inbox.
 ## 1. Clone and install
 
 ```bash
-git clone https://github.com/claroshq/claros.git && cd claros
+git clone https://github.com/mailforgehq/mailforge.git && cd mailforge
 docker compose run --rm install
 ```
 
@@ -27,7 +27,7 @@ It prints the generated secrets. Copy them to your password manager now; they ar
 
 ```bash
 docker compose run --rm install \
-  --database-url 'postgres://user:pass@your-host:5432/claros'
+  --database-url 'postgres://user:pass@your-host:5432/mailforge'
 ```
 
 The command tests the connection, reports a clear error if it fails, and writes the URL to `.env`. For a full walkthrough of external Postgres and multi-instance deployments, see [DEPLOYMENT.md](./DEPLOYMENT.md).
@@ -72,7 +72,7 @@ Your test event created a contact, matched the welcome flow's trigger, generated
 ## What you can skip
 
 - **LLM provider**: not needed for the library flow or any fixed-content flow you write yourself. Add one later (Settings → LLM) for prompt-defined flows and AI-drafted copy.
-- **`claros setup` wizard**: the CLI wizard still exists for headless or scripted installs. The browser path replaces it for interactive use.
+- **`mailforge setup` wizard**: the CLI wizard still exists for headless or scripted installs. The browser path replaces it for interactive use.
 
 ## Where to go next
 

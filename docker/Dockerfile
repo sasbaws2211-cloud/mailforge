@@ -20,7 +20,7 @@ COPY packages/scheduler/package.json packages/scheduler/
 COPY packages/brain-oss/package.json packages/brain-oss/
 COPY apps/server/package.json apps/server/
 COPY apps/dashboard/package.json apps/dashboard/
-# drizzle/ is workspace package @claros/db; package.json required for pnpm install
+# drizzle/ is workspace package @mailforge/db; package.json required for pnpm install
 COPY drizzle/package.json drizzle/
 
 RUN pnpm install --frozen-lockfile
@@ -66,8 +66,8 @@ COPY --from=builder /app/packages/ packages/
 COPY --from=builder /app/apps/ apps/
 COPY --from=builder /app/drizzle/ drizzle/
 
-RUN chmod +x /app/apps/server/bin/claros.mjs \
-    && ln -s /app/apps/server/bin/claros.mjs /usr/local/bin/claros
+RUN chmod +x /app/apps/server/bin/mailforge.mjs \
+    && ln -s /app/apps/server/bin/mailforge.mjs /usr/local/bin/mailforge
 
 COPY .env.example .env.example
 
@@ -94,7 +94,7 @@ EXPOSE 3000
 #     NODE_ENV=development, which would make Vite bundle development React
 #     (roughly 1.7x the JS). The server itself still runs with
 #     NODE_ENV=development so the console login fallback keeps working.
-ENTRYPOINT ["sh", "-c", "rm -rf apps/dashboard/dist && NODE_ENV=production pnpm --filter @claros/dashboard build && exec node --import /app/node_modules/tsx/dist/esm/index.mjs --watch apps/server/src/main.ts \"$@\"", "sh"]
+ENTRYPOINT ["sh", "-c", "rm -rf apps/dashboard/dist && NODE_ENV=production pnpm --filter @mailforge/dashboard build && exec node --import /app/node_modules/tsx/dist/esm/index.mjs --watch apps/server/src/main.ts \"$@\"", "sh"]
 CMD ["--role=all"]
 
 # Stage 3: Runner - production image, prod deps only.
@@ -112,15 +112,15 @@ ENV NODE_ENV=production
 # /version endpoint normalises to "unknown". Never crashes; never blocks startup.
 ARG COMMIT_SHA=""
 ARG BUILT_AT=""
-ENV CLAROS_COMMIT_SHA=${COMMIT_SHA}
-ENV CLAROS_BUILT_AT=${BUILT_AT}
+ENV MAILFORGE_COMMIT_SHA=${COMMIT_SHA}
+ENV MAILFORGE_BUILT_AT=${BUILT_AT}
 
 # Copy built output and production deps
 COPY --from=builder /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
 COPY --from=builder /app/tsconfig.base.json ./
 COPY --from=builder /app/packages/ packages/
 COPY --from=builder /app/apps/ apps/
-# drizzle/ workspace package (@claros/db): needs dist/schema/ for runtime imports
+# drizzle/ workspace package (@mailforge/db): needs dist/schema/ for runtime imports
 # and migrations/ for in-process auto-migrate on startup.
 COPY --from=builder /app/drizzle/package.json drizzle/
 COPY --from=builder /app/drizzle/dist drizzle/dist
@@ -128,9 +128,9 @@ COPY --from=builder /app/drizzle/migrations drizzle/migrations
 
 RUN pnpm install --frozen-lockfile --prod
 
-# Make the claros CLI available as a short command in PATH.
-RUN chmod +x /app/apps/server/bin/claros.mjs \
-    && ln -s /app/apps/server/bin/claros.mjs /usr/local/bin/claros
+# Make the mailforge CLI available as a short command in PATH.
+RUN chmod +x /app/apps/server/bin/mailforge.mjs \
+    && ln -s /app/apps/server/bin/mailforge.mjs /usr/local/bin/mailforge
 
 COPY .env.example .env.example
 

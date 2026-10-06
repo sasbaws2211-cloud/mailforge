@@ -1,7 +1,7 @@
 /**
  * Compiled plan Zod schema - the validated shape of flows.compiled_plan.
  *
- * Derived from CLAROS_HANDOFF_V2.md section 5 (compiled plan example) and
+ * Derived from MAILFORGE_HANDOFF_V2.md section 5 (compiled plan example) and
  * the FlowStep type (task 10). Used by:
  *   - Task 11 (compilation worker): validates LLM output before storing.
  *   - Task 12 (execution engine): reads the plan for deterministic execution.

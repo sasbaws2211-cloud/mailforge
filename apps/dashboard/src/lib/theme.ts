@@ -4,7 +4,7 @@
  * Three modes: "light", "dark", "system" (default). The resolved theme is
  * applied as the .dark class on <html>; the inline script in index.html
  * applies the same logic before first paint. The stored choice lives in
- * localStorage under "claros-ui-theme". In "system" mode a matchMedia
+ * localStorage under "mailforge-ui-theme". In "system" mode a matchMedia
  * listener keeps the resolved theme in sync with the OS.
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
@@ -13,7 +13,7 @@ import { useSyncExternalStore } from "react";
 
 export type ThemeMode = "light" | "dark" | "system";
 
-const STORAGE_KEY = "claros-ui-theme";
+const STORAGE_KEY = "mailforge-ui-theme";
 const media = window.matchMedia("(prefers-color-scheme: dark)");
 
 let mode: ThemeMode = readStoredMode();

@@ -54,7 +54,7 @@ function makeParams(overrides: Partial<TransportSendParams> = {}): TransportSend
   return {
     to: "recipient@example.com",
     from: "noreply@example.com",
-    fromName: "Claros",
+    fromName: "Mailforge",
     subject: "Test subject",
     bodyHtml: "<p>Test body HTML</p>",
     bodyText: "Test body text",
@@ -124,7 +124,7 @@ describe("SmtpTransportAdapter", () => {
       await adapter.send(makeParams({ messageId }));
 
       const call = mockSendMail.mock.calls[0]![0];
-      expect(call.messageId).toBe(`${messageId}@claros`);
+      expect(call.messageId).toBe(`${messageId}@mailforge`);
     });
   });
 

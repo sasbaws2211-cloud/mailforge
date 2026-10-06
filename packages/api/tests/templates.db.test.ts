@@ -26,8 +26,8 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql, eq } from "drizzle-orm";
 import { buildApp } from "../src/index.js";
-import { tenants, users, sessions, flows } from "@claros/db/schema";
-import { resolveLifecycleConfig, resolveThrottleConfig, BUSINESS_MODEL_TEMPLATE_LIST } from "@claros/core";
+import { tenants, users, sessions, flows } from "@mailforge/db/schema";
+import { resolveLifecycleConfig, resolveThrottleConfig, BUSINESS_MODEL_TEMPLATE_LIST } from "@mailforge/core";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) {
@@ -36,8 +36,8 @@ if (!TEST_DB_URL) {
     `[templates.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 
@@ -102,7 +102,7 @@ async function setupTenants() {
   tenantAId = tA!.id;
   const [uA] = await db.insert(users).values({ tenantId: tenantAId, email: "owner-a@tmpl.test", role: "owner" }).returning({ id: users.id });
   const [sA] = await db.insert(sessions).values({ tenantId: tenantAId, userId: uA!.id, expiresAt: new Date(Date.now() + 86400_000) }).returning({ id: sessions.id });
-  cookieA = `claros_session=${sA!.id}`;
+  cookieA = `mailforge_session=${sA!.id}`;
 
   const [tB] = await db.insert(tenants).values({ name: "Template Test B", slug: SLUG_B, plan: "free" }).returning({ id: tenants.id });
   tenantBId = tB!.id;
@@ -248,7 +248,7 @@ describe("POST /v1/templates/:id/apply", () => {
       const [t] = await db.insert(tenants).values({ name: `Template ${template.id}`, slug, plan: "free" }).returning({ id: tenants.id });
       const [u] = await db.insert(users).values({ tenantId: t!.id, email: `owner@${template.id}.test`, role: "owner" }).returning({ id: users.id });
       const [s] = await db.insert(sessions).values({ tenantId: t!.id, userId: u!.id, expiresAt: new Date(Date.now() + 86400_000) }).returning({ id: sessions.id });
-      const cookie = `claros_session=${s!.id}`;
+      const cookie = `mailforge_session=${s!.id}`;
 
       const app = await buildApp({ db, logger: false });
       const res = await app.inject({

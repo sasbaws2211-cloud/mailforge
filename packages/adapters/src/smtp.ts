@@ -61,6 +61,7 @@
 import { createTransport, type Transporter } from "nodemailer";
 import type SMTPTransport from "nodemailer/lib/smtp-transport/index.js";
 import type { TransportAdapter, TransportSendParams, TransportSendResult } from "./transport-types.js";
+import { resolveSmtpTarget, type SmtpHostPolicy } from "./smtp-guard.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -96,6 +97,11 @@ export interface SmtpAdapterConfig {
   password?: string;
   /** Accept self-signed certificates. Default: true (reject). Set false for internal relays. */
   rejectUnauthorized?: boolean;
+  /**
+   * Where the server may connect (see smtp-guard.ts). Leave out for a mail server the operator
+   * chose (the platform mailer); pass it for one a customer typed in.
+   */
+  hostPolicy?: SmtpHostPolicy;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,11 +118,19 @@ export interface SmtpAdapterConfig {
  * by the OS TCP stack / keep-alive at the SMTP level.
  */
 export class SmtpTransportAdapter implements TransportAdapter {
-  private readonly transporter: Transporter<SMTPTransport.SentMessageInfo>;
+  /** Built up front when nothing needs checking; otherwise built per call against a checked address. */
+  private readonly eager: Transporter<SMTPTransport.SentMessageInfo> | null;
+  private readonly config: SmtpAdapterConfig;
 
   constructor(config: SmtpAdapterConfig) {
-    this.transporter = createTransport({
-      host: config.host,
+    this.config = config;
+    this.eager = config.hostPolicy?.restrict ? null : this.build(config.host, undefined);
+  }
+
+  private build(host: string, servername: string | undefined): Transporter<SMTPTransport.SentMessageInfo> {
+    const config = this.config;
+    return createTransport({
+      host,
       port: config.port,
       secure: config.secure,
       auth: config.username
@@ -124,6 +138,8 @@ export class SmtpTransportAdapter implements TransportAdapter {
         : undefined,
       tls: {
         rejectUnauthorized: config.rejectUnauthorized ?? true,
+        // When we connect to an address we checked ourselves, certificates are still verified against the name.
+        ...(servername ? { servername } : {}),
       },
       connectionTimeout: SMTP_TIMEOUT_MS,
       greetingTimeout: SMTP_GREETING_TIMEOUT_MS,
@@ -131,21 +147,39 @@ export class SmtpTransportAdapter implements TransportAdapter {
     });
   }
 
+  /**
+   * A transporter that is allowed to connect, or the reason it is not. With the guard on, the host is
+   * resolved and checked now, and the connection goes to the address that was checked.
+   */
+  private async acquire(): Promise<{ ok: true; transporter: Transporter<SMTPTransport.SentMessageInfo>; release: () => void } | { ok: false; error: string }> {
+    if (this.eager) return { ok: true, transporter: this.eager, release: () => undefined };
+    const target = await resolveSmtpTarget(this.config.host, this.config.port, this.config.hostPolicy!);
+    if (!target.ok) return { ok: false, error: target.error };
+    const transporter = this.build(target.address, target.servername);
+    return { ok: true, transporter, release: () => transporter.close() };
+  }
+
   async send(params: TransportSendParams): Promise<TransportSendResult> {
     const from = params.fromName
       ? `${params.fromName} <${params.from}>`
       : params.from;
 
+    const t = await this.acquire();
+    // A refused destination is a settings problem, not a mail problem: not permanent, so the message
+    // stays queued and goes out once the settings are fixed. Nothing was connected to.
+    if (!t.ok) return { success: false, error: `SMTP destination refused: ${t.error}`, permanent: false };
+
     try {
-      const info = await this.transporter.sendMail({
+      const info = await t.transporter.sendMail({
         from,
         to: params.to,
         subject: params.subject,
         html: params.bodyHtml,
         text: params.bodyText,
         headers: params.headers ?? {},
+        ...(params.replyTo ? { replyTo: params.replyTo } : {}),
         // Use our message ID as the SMTP Message-ID header for traceability.
-        messageId: `${params.messageId}@claros`,
+        messageId: `${params.messageId}@mailforge`,
       });
 
       // Nodemailer resolves on 250 (accepted by the server).
@@ -155,6 +189,8 @@ export class SmtpTransportAdapter implements TransportAdapter {
       };
     } catch (err) {
       return classifySmtpError(err);
+    } finally {
+      t.release();
     }
   }
 
@@ -166,8 +202,10 @@ export class SmtpTransportAdapter implements TransportAdapter {
    * wrong credentials immediately rather than at the first drain tick.
    */
   async verify(): Promise<{ ok: true } | { ok: false; error: string }> {
+    const t = await this.acquire();
+    if (!t.ok) return { ok: false, error: t.error };
     try {
-      await this.transporter.verify();
+      await t.transporter.verify();
       return { ok: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -177,12 +215,14 @@ export class SmtpTransportAdapter implements TransportAdapter {
         .replace(/pass(?:word)?[:=]\s*\S+/gi, "pass=***")
         .replace(/user[:=]\s*\S+/gi, "user=***");
       return { ok: false, error: safeMessage };
+    } finally {
+      t.release();
     }
   }
 
   /** Close the underlying connection (cleanup). */
   close(): void {
-    this.transporter.close();
+    this.eager?.close();
   }
 }
 

@@ -17,7 +17,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
 import { buildApp, SESSION_COOKIE_NAME } from "../src/index.js";
-import { tenants, users, sessions, apiKeys } from "@claros/db/schema";
+import { tenants, users, sessions, apiKeys } from "@mailforge/db/schema";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) {
@@ -119,7 +119,7 @@ describe("POST /v1/ingestion/keys", () => {
     });
     expect(res.statusCode).toBe(201);
     const body = JSON.parse(res.body);
-    expect(body.key).toMatch(/^cl_pub_/);
+    expect(body.key).toMatch(/^mf_pub_/);
     expect(body.kind).toBe("publishable");
     expect(body.prefix).toBe(body.key.slice(0, 8));
     expect(body.label).toBe("Marketing site");
@@ -132,7 +132,7 @@ describe("POST /v1/ingestion/keys", () => {
     await app.close();
   });
 
-  it("creates a secret key with cl_live_ prefix", async () => {
+  it("creates a secret key with mf_live_ prefix", async () => {
     if (!dbAvailable) return;
     const app = await authedApp();
     const res = await app.inject({
@@ -143,7 +143,7 @@ describe("POST /v1/ingestion/keys", () => {
     });
     expect(res.statusCode).toBe(201);
     const body = JSON.parse(res.body);
-    expect(body.key).toMatch(/^cl_live_/);
+    expect(body.key).toMatch(/^mf_live_/);
     expect(body.kind).toBe("secret");
     expect(body.allowed_origins).toEqual([]);
     await app.close();
@@ -205,7 +205,7 @@ describe("GET /v1/ingestion/keys", () => {
     for (const k of body.keys) {
       expect(k.key).toBeUndefined();
       expect(k.key_hash).toBeUndefined();
-      expect(k.prefix).toMatch(/^cl_(pub|live)_/);
+      expect(k.prefix).toMatch(/^mf_(pub|live)_/);
     }
     await app.close();
   });

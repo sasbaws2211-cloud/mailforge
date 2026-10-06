@@ -45,7 +45,7 @@ function BrandPanel() {
           compiled.
         </p>
         <p className="mt-4 max-w-[320px] text-[15px] leading-relaxed text-muted-foreground">
-          Describe the flow in plain language. Claros compiles it into a
+          Describe the flow in plain language. Mailforge compiles it into a
           deterministic plan, drafts the emails, and waits for your approval.
         </p>
       </div>
@@ -67,8 +67,8 @@ export default function LoginPage() {
   // redirect. Read once and clear so later visits do not show it.
   const [sessionExpired] = useState(() => {
     try {
-      const flag = sessionStorage.getItem("claros-session-expired");
-      if (flag) sessionStorage.removeItem("claros-session-expired");
+      const flag = sessionStorage.getItem("mailforge-session-expired");
+      if (flag) sessionStorage.removeItem("mailforge-session-expired");
       return flag === "1";
     } catch {
       return false;

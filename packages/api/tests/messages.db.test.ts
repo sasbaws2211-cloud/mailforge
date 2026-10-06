@@ -27,7 +27,7 @@ import {
   flows,
   flowMemberships,
   lifecycleMessages,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 
 // ---------------------------------------------------------------------------
 // DB setup
@@ -40,8 +40,8 @@ if (!TEST_DB_URL) {
     `[messages.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 
@@ -107,7 +107,7 @@ beforeAll(async () => {
     })
     .returning({ id: sessions.id });
   sessionAId = sA!.id;
-  cookieA = `claros_session=${sessionAId}`;
+  cookieA = `mailforge_session=${sessionAId}`;
 
   // Tenant B
   const [tB] = await db
@@ -130,7 +130,7 @@ beforeAll(async () => {
     })
     .returning({ id: sessions.id });
   sessionBId = sB!.id;
-  cookieB = `claros_session=${sessionBId}`;
+  cookieB = `mailforge_session=${sessionBId}`;
 });
 
 beforeEach(async () => {

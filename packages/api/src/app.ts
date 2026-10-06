@@ -43,8 +43,19 @@ import suppressionRoutes from "./routes/suppressions.js";
 import templatesRoutes from "./routes/templates.js";
 import messagesRoutes from "./routes/messages.js";
 import unsubscribeRoutes from "./routes/unsubscribe.js";
+import marketingRoutes from "./routes/marketing.js";
+import planRoutes from "./routes/plan.js";
+import onboardingRoutes from "./routes/onboarding.js";
+import billingRoutes from "./routes/billing.js";
+import adminRoutes from "./routes/admin.js";
+import accountRoutes from "./routes/account.js";
+import type { PlatformTransport } from "./platform-mailer.js";
+import billingPublicRoutes from "./routes/billing-public.js";
+import { resolveBillingRuntime, type BillingRuntime } from "./billing/config.js";
 import ingestionRoutes from "./routes/ingestion.js";
 import resendWebhookRoute from "./routes/webhooks/resend.js";
+import resendPlatformWebhookRoute from "./routes/webhooks/resend-platform.js";
+import sendingRoutes from "./routes/sending.js";
 import settingsRoutes from "./routes/settings.js";
 import libraryRoutes from "./routes/library.js";
 import emailTemplatesRoutes from "./routes/email-templates.js";
@@ -77,8 +88,8 @@ export interface BuildAppOptions {
    */
   role?: string;
   /**
-   * The Claros edition: "community" | "cloud".
-   * Supplied by apps/server from CLAROS_EDITION env.
+   * The Mailforge edition: "community" | "cloud".
+   * Supplied by apps/server from MAILFORGE_EDITION env.
    * Reported in /health. Defaults to "community".
    */
   edition?: string;
@@ -113,7 +124,7 @@ export interface BuildAppOptions {
    * and add a SPA catch-all fallback for unknown paths.
    *
    * Used in both self-host and Cloud (Slice 2 deliberate reversal: the
-   * container serves the SPA in Cloud via app.claros.org passthrough).
+   * container serves the SPA in Cloud via app.mailforge.org passthrough).
    * Defaults to true for community edition, false for cloud edition (the
    * cloud default becomes relevant only once brain-cloud ships; until then
    * the container always runs community). Defaults to false in BuildAppOptions
@@ -127,9 +138,34 @@ export interface BuildAppOptions {
    * Explicit path to the dashboard dist directory. When absent the app
    * resolves it relative to this file's own location, which works both from
    * compiled output (dist/app.js) and under tsx --watch (src/app.ts).
-   * Can also be set via CLAROS_DASHBOARD_DIST env var.
+   * Can also be set via MAILFORGE_DASHBOARD_DIST env var.
    */
   dashboardDist?: string;
+  /**
+   * When true, serve the public marketing site (landing, pricing, legal) and
+   * self-serve signup, and show the landing page at "/" to visitors who are not
+   * signed in. Off by default so self-hosted installs keep "/" as the dashboard.
+   * Set from MAILFORGE_PUBLIC_SITE by apps/server.
+   */
+  publicSite?: boolean;
+  /**
+   * Billing (Flutterwave). By default read from FLUTTERWAVE_SECRET_KEY and
+   * FLUTTERWAVE_WEBHOOK_HASH; billing is on only when both are set. Tests pass a
+   * client pointing at a fake provider here instead.
+   */
+  billing?: Partial<BillingRuntime>;
+  /**
+   * Whether the platform admin console is part of this app (default true). Set to false
+   * when the console runs as its own deployment (see buildAdminApp): this app then
+   * registers no /v1/admin routes and never tells the dashboard its user is an admin.
+   */
+  adminEmbedded?: boolean;
+  /**
+   * Senders for account notices such as "your workspace is scheduled for deletion".
+   * Normally absent: the workspace's own transport, then the platform sender, are used.
+   * Tests pass a recording adapter here.
+   */
+  noticeTransports?: PlatformTransport[];
   /**
    * One-time claim token for first-account creation. When non-null, the
    * /claim route is registered and accepts this token to create the first
@@ -200,14 +236,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(healthRoute, { role, edition });
 
   // /version: always registered, no auth required, no DB access.
-  // Returns build provenance: commit SHA (from CLAROS_COMMIT_SHA env), edition,
-  // and image build timestamp (from CLAROS_BUILT_AT env). Used by `claros doctor`
+  // Returns build provenance: commit SHA (from MAILFORGE_COMMIT_SHA env), edition,
+  // and image build timestamp (from MAILFORGE_BUILT_AT env). Used by `mailforge doctor`
   // to compare local HEAD against the running container without SSH access.
   await app.register(versionRoute, { edition });
 
   // /auth/*: magic link login, verify, logout, me. No auth required for login/verify.
   if (opts.db) {
-    await app.register(authRoutes, { prefix: "/auth", baseUrl, dashboardUrl });
+    await app.register(authRoutes, { prefix: "/auth", baseUrl, dashboardUrl, adminEmbedded: opts.adminEmbedded !== false });
   }
 
   // /claim: first-account creation. Only active when claimToken is provided
@@ -237,12 +273,28 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     await app.register(inviteRoutes, { prefix: "/invite", dashboardUrl });
   }
 
+  // Public marketing site + self-serve signup: landing at "/", /pricing, /terms,
+  // /privacy, /signup, robots.txt, sitemap.xml. Opt-in (MAILFORGE_PUBLIC_SITE).
+  // Registered before static serving so "/" is answered here, not by the SPA.
+  if (opts.publicSite) {
+    await app.register(marketingRoutes, { siteUrl: baseUrl });
+  }
+
+  // Billing (Flutterwave): the public webhook and the post-payment return page. Only
+  // registered when billing is configured; with it off there is nothing to receive.
+  const billingRuntime = resolveBillingRuntime(opts.billing);
+  if (opts.db && billingRuntime.enabled) {
+    await app.register(billingPublicRoutes, { runtime: billingRuntime, dashboardUrl });
+  }
+
   // /webhooks/resend/:tenantId: Resend provider webhook (bounces, opens, clicks, complaints).
   // Public, unauthenticated by session. Signature-verified via Svix/HMAC using
   // the per-tenant webhook secret stored in transport_configs. The tenant UUID
   // in the path is used to load the correct secret before the body is verified.
   if (opts.db) {
     await app.register(resendWebhookRoute, { prefix: "/webhooks/resend" });
+    // Managed sending: one webhook for the operator's own Resend account (one signing secret).
+    await app.register(resendPlatformWebhookRoute, { prefix: "/webhooks/resend-platform" });
   }
 
   // --- Authenticated scope (dashboard) ----------------------------------------
@@ -264,6 +316,19 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         if (request.tenant === null) {
           reply.status(401);
           reply.send({ error: "Authentication required." });
+          return;
+        }
+        // A suspended workspace is switched off. Platform admins keep access to
+        // /v1/admin so they can still reach the console from a suspended account.
+        if (request.tenant.suspended && !request.url.startsWith("/v1/admin")) {
+          reply.status(403);
+          reply.send({ error: "This workspace has been suspended.", code: "workspace_suspended" });
+          return;
+        }
+        // Scheduled for deletion: only the account pages (export, cancel) and the admin console work.
+        if (request.tenant.pendingDeletion && !request.url.startsWith("/v1/admin") && !request.url.startsWith("/v1/account")) {
+          reply.status(403);
+          reply.send({ error: "This workspace is scheduled for deletion.", code: "workspace_pending_deletion" });
         }
       });
 
@@ -280,6 +345,35 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       // contacts: People list, person detail, merged timeline
       if (opts.db) {
         await v1.register(contactsRoutes, { prefix: "/contacts" });
+      }
+
+      // plan: workspace plan, trial status and usage against limits
+      if (opts.db) {
+        await v1.register(planRoutes, { prefix: "/plan", billing: billingRuntime });
+      }
+
+      // onboarding: where the workspace stands on the way to its first delivered email
+      if (opts.db) {
+        await v1.register(onboardingRoutes, { prefix: "/onboarding" });
+      }
+
+      // billing: start a payment, cancel a subscription (owners only; 503 when billing is off)
+      if (opts.db) {
+        await v1.register(billingRoutes, {
+          prefix: "/billing",
+          runtime: billingRuntime,
+          returnUrl: `${baseUrl}/billing/return`,
+        });
+      }
+
+      // account: export your data, schedule or cancel deletion (owners)
+      if (opts.db) {
+        await v1.register(accountRoutes, { prefix: "/account", billing: billingRuntime, dashboardUrl, noticeTransports: opts.noticeTransports });
+      }
+
+      // admin: platform operator console (404 for everyone not in MAILFORGE_PLATFORM_ADMINS)
+      if (opts.db && opts.adminEmbedded !== false) {
+        await v1.register(adminRoutes, { prefix: "/admin", billing: billingRuntime, dashboardUrl, noticeTransports: opts.noticeTransports });
       }
 
       // analytics: lifecycle distribution/movement + sending performance
@@ -310,6 +404,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       // settings: transport configuration and tenant settings
       if (opts.db) {
         await v1.register(settingsRoutes, { prefix: "/settings" });
+      }
+
+      // sending: managed sending through the operator's Resend account (domain setup, sender details)
+      if (opts.db) {
+        await v1.register(sendingRoutes, { prefix: "/sending" });
       }
 
       // ingestion: API key management + first-event status for the
@@ -348,7 +447,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         await v1.register(profileRoutes, { prefix: "/profile" });
       }
 
-      // /v1/diagnostics: authenticated env fingerprint check for `claros doctor`.
+      // /v1/diagnostics: authenticated env fingerprint check for `mailforge doctor`.
       // Session-cookie auth only (same preHandler as all /v1 routes).
       // Returns commit SHA, edition, and key fingerprints from the running container.
       // Never returns secret values.
@@ -377,7 +476,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   }
 
   // --- Static serving + SPA fallback (LAST) ------------------------------------
-  // Registered when opts.serveDashboard is true. In Cloud, app.claros.org
+  // Registered when opts.serveDashboard is true. In Cloud, app.mailforge.org
   // passthrough routing forwards SPA requests to the container, so the container
   // serves assets just as in self-host mode (Slice 2 deliberate reversal).
   // Must come after all API routes to avoid shadowing them.
@@ -396,7 +495,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
  *
  * Path resolution strategy:
  *   1. opts.dashboardDist if provided
- *   2. CLAROS_DASHBOARD_DIST env var if set
+ *   2. MAILFORGE_DASHBOARD_DIST env var if set
  *   3. Resolved relative to this file: works under tsx --watch (src/)
  *      and from compiled output (dist/) because both are one level below
  *      packages/api/ and apps/dashboard/dist is always at a fixed
@@ -404,12 +503,16 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
  *
  * If the resolved path does not exist on disk, logs a warning and returns
  * without registering anything. This prevents a crash when starting the
- * server before running `pnpm --filter @claros/dashboard build`.
+ * server before running `pnpm --filter @mailforge/dashboard build`.
  */
-async function registerSpaServing(
+export async function registerSpaServing(
   app: FastifyInstance,
-  opts: BuildAppOptions,
+  opts: Pick<BuildAppOptions, "dashboardDist" | "publicSite">,
+  /** The standalone admin console serves admin.html and has its own API prefixes. */
+  extra: { indexFile?: string; apiPrefixes?: readonly string[] } = {},
 ): Promise<void> {
+  const indexFile = extra.indexFile ?? "index.html";
+  const apiPrefixes = extra.apiPrefixes ?? API_PATH_PREFIXES;
   // Resolve the dist directory and record how it was resolved so the
   // warning message is immediately actionable without log archaeology.
   const { distPath, mechanism } = resolvedDashboardDist(opts);
@@ -418,8 +521,8 @@ async function registerSpaServing(
     app.log.warn(
       `[dashboard] serveDashboard=true but dist directory not found. ` +
       `mechanism=${mechanism} tried=${distPath} -- ` +
-      "If mechanism=auto, verify WORKDIR is the monorepo root or set CLAROS_DASHBOARD_DIST explicitly. " +
-      "Run `pnpm --filter @claros/dashboard build` to create the dist directory. " +
+      "If mechanism=auto, verify WORKDIR is the monorepo root or set MAILFORGE_DASHBOARD_DIST explicitly. " +
+      "Run `pnpm --filter @mailforge/dashboard build` to create the dist directory. " +
       "Static serving and SPA fallback are disabled until the path exists.",
     );
     return;
@@ -431,6 +534,9 @@ async function registerSpaServing(
   await app.register(fastifyStatic, {
     root: distPath,
     prefix: "/",
+    // With the public site on, "/" is answered by the marketing route (landing,
+    // or index.html for signed-in users), so static must not claim it.
+    index: extra.indexFile ?? (opts.publicSite ? false : undefined),
     // decorateReply defaults to true; reply.sendFile() is used by the
     // SPA fallback below. Do not set decorateReply: false.
     setHeaders(res, filePath) {
@@ -460,7 +566,7 @@ async function registerSpaServing(
 
     // Paths beginning with an API prefix must not serve index.html.
     // An unknown /v1/whatever should return a normal 404, not the SPA.
-    const isApiPath = API_PATH_PREFIXES.some(
+    const isApiPath = apiPrefixes.some(
       (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
     );
     if (isApiPath) {
@@ -471,7 +577,7 @@ async function registerSpaServing(
     // Serve index.html for all other GET/HEAD paths (SPA client-side routing).
     // Set no-store before sendFile so the header is included in the response.
     reply.header("Cache-Control", "no-store");
-    reply.sendFile("index.html");
+    reply.sendFile(indexFile);
   });
 }
 
@@ -482,9 +588,9 @@ async function registerSpaServing(
  * Returns an object so callers can include the mechanism in log messages
  * without re-deriving it.
  */
-export function resolvedDashboardDist(opts: BuildAppOptions): { distPath: string; mechanism: "opts" | "env" | "auto" } {
+export function resolvedDashboardDist(opts: Pick<BuildAppOptions, "dashboardDist">): { distPath: string; mechanism: "opts" | "env" | "auto" } {
   if (opts.dashboardDist) return { distPath: opts.dashboardDist, mechanism: "opts" };
-  if (process.env.CLAROS_DASHBOARD_DIST) return { distPath: process.env.CLAROS_DASHBOARD_DIST, mechanism: "env" };
+  if (process.env.MAILFORGE_DASHBOARD_DIST) return { distPath: process.env.MAILFORGE_DASHBOARD_DIST, mechanism: "env" };
 
   // Auto: resolve relative to this file. The layout is fixed:
   //   packages/api/src/app.ts  (tsx)   -> dirname = packages/api/src

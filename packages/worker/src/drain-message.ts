@@ -15,8 +15,8 @@
  */
 import { eq, and, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { lifecycleMessages } from "@claros/db/schema";
-import type { DrainMessageJobData } from "@claros/core";
+import { lifecycleMessages } from "@mailforge/db/schema";
+import type { DrainMessageJobData } from "@mailforge/core";
 import { processOneMessage, type DrainCandidate, type MessageOutcome } from "./drain.js";
 import type { TransportResolver } from "./transport.js";
 import { resolveBaseUrl } from "./compliance.js";
@@ -39,7 +39,7 @@ export interface DrainMessageResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Handle a single claros.drain-message job.
+ * Handle a single mailforge.drain-message job.
  *
  * Claims the specified message (CAS: approved -> sending) and processes it
  * through the full drain pipeline (transport resolution, throttle, compliance,

@@ -3,7 +3,7 @@
  * and assessOutputSchema.
  *
  * These schemas validate runtime output from brain.decide(), brain.draft(),
- * and brain.assess(). Defined in @claros/core, re-exported through @claros/brain-oss.
+ * and brain.assess(). Defined in @mailforge/core, re-exported through @mailforge/brain-oss.
  */
 import { describe, it, expect } from "vitest";
 import { decideOutputSchema, draftOutputSchema, assessOutputSchema } from "../src/index.js";

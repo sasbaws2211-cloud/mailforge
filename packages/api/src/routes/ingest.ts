@@ -38,7 +38,7 @@
  *
  * Task 9 additions (lifecycle state machine):
  * - After event insertion, evaluates whether the event triggers a lifecycle
- *   state transition. Transition evaluation uses pure functions from @claros/core.
+ *   state transition. Transition evaluation uses pure functions from @mailforge/core.
  * - Transition is applied via atomic CAS (WHERE lifecycle_state = $expected).
  *   If CAS fails (concurrent write), no transition row is written - idempotent.
  * - lifecycle_transitions audit log is written on successful CAS.
@@ -58,7 +58,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { eq, and, ne, sql, inArray } from "drizzle-orm";
-import { contacts, events, contactConflicts, lifecycleTransitions, tenants } from "@claros/db/schema";
+import { contacts, events, contactConflicts, lifecycleTransitions, tenants } from "@mailforge/db/schema";
 import {
   evaluateEventTransition,
   isActivationRelevantEvent,
@@ -67,16 +67,18 @@ import {
   dedupLockKey,
   QUEUE,
   INGEST_TIMESTAMP_CLAMP_HOURS,
+  PlanLimitError,
   type LifecycleState,
   type LifecycleConfig,
-} from "@claros/core";
+} from "@mailforge/core";
 import type { Db } from "../plugins/db.js";
+import { assertCanCreateContact } from "../plan/usage.js";
 
 // --- Constants ---
 
 /**
  * Maximum hours of clock skew tolerated between client timestamp and server
- * time. Sourced from @claros/core so the worker's partition-pruning slack
+ * time. Sourced from @mailforge/core so the worker's partition-pruning slack
  * and this ingest clamp share a single definition and cannot drift.
  */
 const TIMESTAMP_CLAMP_HOURS = INGEST_TIMESTAMP_CLAMP_HOURS;
@@ -230,6 +232,13 @@ async function ensureContact(
       .where(eq(contacts.id, contact.id));
     return { id: contact.id, lifecycleState: contact.lifecycleState as LifecycleState };
   }
+
+  // A new contact counts against the plan. Existing contacts (handled above)
+  // never reach this check, so a workspace at its limit keeps full service for
+  // the people it already has. Throws PlanLimitError; a no-op when plans are
+  // not enforced. Concurrent creates can overshoot the limit by a few, which
+  // is acceptable for a soft quota.
+  await assertCanCreateContact(db, tenantId);
 
   // Contact does not exist - create with minimal fields.
   // Race condition: another request may create the same contact concurrently.
@@ -585,7 +594,7 @@ type EnqueueFn = (queue: string, data: Record<string, unknown>, opts?: Record<st
  * event insert, lifecycle transition, trigger-check enqueue.
  * Shared by POST /v1/track and POST /v1/batch.
  */
-async function processTrackEvent(
+export async function processTrackEvent(
   db: Db,
   enqueue: EnqueueFn | undefined,
   tenantId: string,
@@ -702,7 +711,7 @@ async function processTrackEvent(
  * insert, conflict recording, lifecycle transition.
  * Shared by POST /v1/identify and POST /v1/batch.
  */
-async function processIdentifyEvent(
+export async function processIdentifyEvent(
   db: Db,
   tenantId: string,
   body: IdentifyBody,
@@ -1002,12 +1011,17 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
 
     const tenantId = request.ingestTenant!.id;
     const db: Db = request.server.db;
-    const { deduplicated } = await processTrackEvent(
-      db,
-      request.server.enqueue,
-      tenantId,
-      parsed.data,
-    );
+    let deduplicated: boolean;
+    try {
+      ({ deduplicated } = await processTrackEvent(db, request.server.enqueue, tenantId, parsed.data));
+    } catch (err) {
+      // Plan limit reached: 402 with a machine-readable body, not a 500.
+      if (err instanceof PlanLimitError) {
+        reply.status(402);
+        return err.toJSON();
+      }
+      throw err;
+    }
     if (parsed.data.messageId) {
       return { success: true, deduplicated };
     }
@@ -1040,7 +1054,16 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
 
     const tenantId = request.ingestTenant!.id;
     const db: Db = request.server.db;
-    const { deduplicated } = await processIdentifyEvent(db, tenantId, parsed.data);
+    let deduplicated: boolean;
+    try {
+      ({ deduplicated } = await processIdentifyEvent(db, tenantId, parsed.data));
+    } catch (err) {
+      if (err instanceof PlanLimitError) {
+        reply.status(402);
+        return err.toJSON();
+      }
+      throw err;
+    }
     if (parsed.data.messageId) {
       return { success: true, deduplicated };
     }
@@ -1053,7 +1076,7 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
    * Segment-compatible batch envelope: { batch: [...] } where each item is a
    * track or identify call with a "type" discriminator. This is the endpoint
    * Segment SDKs post to by default (analytics-node: host + /v1/batch), so
-   * its existence is what makes "point an existing Segment SDK at Claros"
+   * its existence is what makes "point an existing Segment SDK at Mailforge"
    * true rather than aspirational.
    *
    * Semantics:
@@ -1084,7 +1107,7 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
     const enqueue = request.server.enqueue;
 
     let received = 0;
-    const errors: Array<{ index: number; message: string }> = [];
+    const errors: Array<{ index: number; message: string; code?: string }> = [];
 
     for (const [index, rawItem] of parsed.data.batch.entries()) {
       const itemParsed = batchItemSchema.safeParse(rawItem);
@@ -1109,6 +1132,8 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
         errors.push({
           index,
           message: err instanceof Error ? err.message : "processing failed",
+          // Lets a client tell "you hit your plan limit" apart from a bad item.
+          ...(err instanceof PlanLimitError ? { code: err.code } : {}),
         });
       }
     }

@@ -46,8 +46,8 @@ import {
   MAX_CONTEXT_TOKENS,
   type DroppableSection,
 } from "../src/context-budget.js";
-import { buildDraftMessages, buildDecideMessages, buildAssessMessages, type DraftPromptContext } from "@claros/brain-oss";
-import type { AssessPromptContext } from "@claros/brain-oss";
+import { buildDraftMessages, buildDecideMessages, buildAssessMessages, type DraftPromptContext } from "@mailforge/brain-oss";
+import type { AssessPromptContext } from "@mailforge/brain-oss";
 
 // ---------------------------------------------------------------------------
 // Helpers

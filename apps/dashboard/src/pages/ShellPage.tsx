@@ -32,10 +32,12 @@ import {
   Send,
   Menu,
   X,
+  ShieldCheck,
 } from "lucide-react";
 import { useLogout } from "../auth.js";
 import { BrandLockup } from "../components/brand-lockup.js";
 import { ThemeToggle } from "../components/theme-toggle.js";
+import { PlanBanner } from "../components/plan-banner.js";
 import type { MeResponse } from "../api.js";
 
 // ---------------------------------------------------------------------------
@@ -51,7 +53,7 @@ interface NavItem {
 }
 
 /**
- * Derived from docs/CLAROS_HANDOFF_V2.md Phase 5 tasks 35-43:
+ * Derived from docs/MAILFORGE_HANDOFF_V2.md Phase 5 tasks 35-43:
  *   35 - Flows list + detail
  *   37 - Lifecycle Overview
  *   38 - People (CRM)
@@ -114,6 +116,11 @@ export default function ShellPage({ me }: ShellPageProps) {
   }
 
   // Shared sidebar content rendered in both desktop and mobile wrappers.
+  // Platform admins get one extra destination; nobody else sees it.
+  const navItems: NavItem[] = me.platformAdmin
+    ? [...NAV_ITEMS, { label: "Admin", path: "/admin", icon: ShieldCheck, enabled: true }]
+    : NAV_ITEMS;
+
   const sidebarContent = (
     <>
       {/* Brand lockup: mark + Quicksand wordmark. Padding-left matches
@@ -134,7 +141,7 @@ export default function ShellPage({ me }: ShellPageProps) {
 
       {/* Navigation */}
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
-        {NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           const Icon = item.icon;
 
           if (!item.enabled) {
@@ -239,6 +246,7 @@ export default function ShellPage({ me }: ShellPageProps) {
         </header>
 
         <main className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-6 sm:px-6 sm:py-7 lg:px-8 lg:py-8">
+          <PlanBanner />
           <Outlet />
         </main>
       </div>

@@ -9,7 +9,7 @@ import {
   LIBRARY_TEMPLATES,
   LIBRARY_FLOW_WELCOME,
   compiledPlanSchema,
-} from "@claros/core";
+} from "@mailforge/core";
 import { renderTemplate, type TemplateContext } from "../src/template-renderer.js";
 
 describe("library-flows", () => {

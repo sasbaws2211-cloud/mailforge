@@ -1,0 +1,15 @@
+# Local mail catcher for testing sends without a real provider.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mailpit.yml up -d
+#
+# Then in Settings -> Transport choose SMTP: host "mailpit", port 1025,
+# no username/password, TLS off. Every email lands in the web inbox at
+# http://localhost:8025 and never leaves your machine.
+services:
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"
+    environment:
+      MP_MAX_MESSAGES: 500
+    restart: unless-stopped

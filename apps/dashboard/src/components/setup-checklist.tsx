@@ -25,7 +25,7 @@ import { Button } from "../components/ui/button.js";
 import { Select } from "../components/ui/select.js";
 import { cn } from "../lib/utils.js";
 
-const DISMISS_KEY = "claros-setup-dismissed";
+const DISMISS_KEY = "mailforge-setup-dismissed";
 
 function readDismissed(): boolean {
   try {

@@ -49,7 +49,7 @@
  *
  * Mirror side: PUBLIC (packages/worker is mirrored).
  */
-import { generateUnsubscribeToken } from "@claros/adapters";
+import { generateUnsubscribeToken } from "@mailforge/adapters";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -99,7 +99,7 @@ export interface ComplianceOutput {
  * Resolve the base URL for the unsubscribe endpoint.
  *
  * For self-hosted installs the operator sets BASE_URL to their domain,
- * e.g. https://mail.example.com. For Cloud, BASE_URL is https://api.claros.org.
+ * e.g. https://mail.example.com. For Cloud, BASE_URL is https://api.mailforge.org.
  * The default of http://localhost:3000 is only valid in local development
  * and will produce non-functional unsubscribe links in production - but the
  * production error is visible (links don't work) rather than silent (wrong
@@ -160,7 +160,7 @@ export function checkBaseUrl(baseUrl: string, isProduction?: boolean): string | 
   try {
     parsed = new URL(baseUrl);
   } catch {
-    return `BASE_URL "${baseUrl}" is not a valid URL. Set BASE_URL to the HTTPS domain where Claros is hosted.`;
+    return `BASE_URL "${baseUrl}" is not a valid URL. Set BASE_URL to the HTTPS domain where Mailforge is hosted.`;
   }
 
   // Check 2: loopback / localhost.
@@ -168,7 +168,7 @@ export function checkBaseUrl(baseUrl: string, isProduction?: boolean): string | 
     return (
       `BASE_URL resolves to a loopback address ("${parsed.hostname}") in production. ` +
       `Unsubscribe links baked into delivered emails would point at localhost and cannot be corrected. ` +
-      `Set BASE_URL to the HTTPS domain where Claros is hosted.`
+      `Set BASE_URL to the HTTPS domain where Mailforge is hosted.`
     );
   }
 

@@ -1,12 +1,12 @@
 /*
- * Claros browser snippet.
+ * Mailforge browser snippet.
  *
  * Dependency-free event sender. Paste-safe: designed to be dropped into a
  * plain HTML page with no build step.
  *
  * Guarantees:
  * - Load order independent. Calls made before this file executes are queued
- *   by the two-line stub (window.claros function with a .q array) and
+ *   by the two-line stub (window.mailforge function with a .q array) and
  *   replayed here once the real implementation loads.
  * - Survives page unload. Sends use navigator.sendBeacon when available,
  *   falling back to fetch with keepalive.
@@ -17,15 +17,15 @@
  *
  * Usage:
  *   <script>
- *     window.claros = window.claros || function () {
- *       (window.claros.q = window.claros.q || []).push(arguments);
+ *     window.mailforge = window.mailforge || function () {
+ *       (window.mailforge.q = window.mailforge.q || []).push(arguments);
  *     };
  *   </script>
- *   <script async src="https://YOUR_CLAROS_HOST/claros.js"></script>
+ *   <script async src="https://YOUR_MAILFORGE_HOST/mailforge.js"></script>
  *   <script>
- *     claros("init", "cl_pub_...", { endpoint: "https://YOUR_CLAROS_HOST" });
- *     claros("identify", "user_123", { email: "user@example.com" });
- *     claros("track", "signed_up", { plan: "trial" });
+ *     mailforge("init", "mf_pub_...", { endpoint: "https://YOUR_MAILFORGE_HOST" });
+ *     mailforge("identify", "user_123", { email: "user@example.com" });
+ *     mailforge("track", "signed_up", { plan: "trial" });
  *   </script>
  *
  * After identify(userId), track(event, properties) reuses that userId.
@@ -107,15 +107,15 @@
     }
   }
 
-  function claros() {
+  function mailforge() {
     handle(arguments);
   }
 
   // Replay anything queued by the pre-load stub.
-  var prior = window.claros;
+  var prior = window.mailforge;
   var queued = prior && prior.q ? prior.q : [];
-  claros.q = [];
-  window.claros = claros;
+  mailforge.q = [];
+  window.mailforge = mailforge;
   for (var i = 0; i < queued.length; i++) {
     handle(queued[i]);
   }

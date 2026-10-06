@@ -18,12 +18,12 @@
  */
 import { eq, and } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { flows, templates, kbEntries } from "@claros/db/schema";
+import { flows, templates, kbEntries } from "@mailforge/db/schema";
 import {
   compile,
   type CompilePromptContext,
-} from "@claros/brain-oss";
-import type { CompileJobData } from "@claros/core";
+} from "@mailforge/brain-oss";
+import type { CompileJobData } from "@mailforge/core";
 import { resolveTenantProvider } from "./provider-resolver.js";
 
 // ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ export async function handleCompileJob(
   }
 
   // 4. Resolve the tenant's LLM provider (DB lookup + decrypt)
-  const providerResult = await resolveTenantProvider(db, tenant_id);
+  const providerResult = await resolveTenantProvider(db, tenant_id, "compile");
   if (!providerResult.ok) {
     await markFailed(db, flow_id, providerResult.reason);
     return;

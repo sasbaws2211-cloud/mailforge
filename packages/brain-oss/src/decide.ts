@@ -12,7 +12,7 @@
  *
  * Mirror side: PUBLIC (packages/brain-oss is mirrored).
  */
-import { decideOutputSchema, type DecideOutput } from "@claros/core";
+import { decideOutputSchema, type DecideOutput } from "@mailforge/core";
 import type { LlmProvider } from "./providers/types.js";
 import { LlmProviderError } from "./providers/openai-compatible.js";
 import { buildDecideMessages, type DecidePromptContext } from "./prompts/decide.js";

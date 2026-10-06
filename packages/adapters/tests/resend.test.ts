@@ -29,7 +29,7 @@ function makeParams(overrides: Partial<TransportSendParams> = {}): TransportSend
   return {
     to: TEST_RECIPIENT,
     from: "noreply@example.com",
-    fromName: "Claros",
+    fromName: "Mailforge",
     subject: "Test subject",
     bodyHtml: "<p>Test body HTML</p>",
     bodyText: "Test body text",
@@ -124,11 +124,11 @@ describe("ResendTransportAdapter", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       const adapter = new ResendTransportAdapter({ apiKey: TEST_API_KEY });
-      await adapter.send(makeParams({ fromName: "Claros Notifications", from: "no-reply@example.com" }));
+      await adapter.send(makeParams({ fromName: "Mailforge Notifications", from: "no-reply@example.com" }));
 
       const call = fetchMock.mock.calls[0] as [string, RequestInit];
       const body = JSON.parse(call[1].body as string);
-      expect(body.from).toBe("Claros Notifications <no-reply@example.com>");
+      expect(body.from).toBe("Mailforge Notifications <no-reply@example.com>");
     });
 
     it("uses plain from address when fromName is not provided", async () => {

@@ -1,5 +1,5 @@
 /**
- * Contrast audit for the Claros design tokens.
+ * Contrast audit for the Mailforge design tokens.
  *
  * Converts the oklch token values from src/index.css to sRGB, computes WCAG
  * relative luminance, and prints contrast ratios for every text-on-surface

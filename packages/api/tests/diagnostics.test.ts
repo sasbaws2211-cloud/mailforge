@@ -78,7 +78,7 @@ const VALID_SESSION_ROW = {
   userDeactivatedAt: null,
 };
 
-const SESSION_COOKIE = "claros_session=test-session-id-for-diagnostics-unit-test";
+const SESSION_COOKIE = "mailforge_session=test-session-id-for-diagnostics-unit-test";
 
 // ---------------------------------------------------------------------------
 // App fixtures
@@ -99,8 +99,8 @@ afterAll(async () => {
 
 afterEach(() => {
   // Restore env vars mutated during a test.
-  delete process.env.CLAROS_COMMIT_SHA;
-  delete process.env.CLAROS_BUILT_AT;
+  delete process.env.MAILFORGE_COMMIT_SHA;
+  delete process.env.MAILFORGE_BUILT_AT;
   delete process.env.ENCRYPTION_KEY;
   delete process.env.UNSUBSCRIBE_SIGNING_KEY;
 });
@@ -168,7 +168,7 @@ describe("GET /v1/diagnostics - authenticated (mock db resolves real tenant plug
     expect(new Date(body.startedAt).getTime()).toBeLessThanOrEqual(Date.now());
   });
 
-  it("commit defaults to 'unknown' when CLAROS_COMMIT_SHA is absent", async () => {
+  it("commit defaults to 'unknown' when MAILFORGE_COMMIT_SHA is absent", async () => {
     const res = await appAuth.inject({
       method: "GET",
       url: "/v1/diagnostics",
@@ -178,8 +178,8 @@ describe("GET /v1/diagnostics - authenticated (mock db resolves real tenant plug
     expect(body.commit).toBe("unknown");
   });
 
-  it("commit reflects CLAROS_COMMIT_SHA when set", async () => {
-    process.env.CLAROS_COMMIT_SHA = "abc1234def5678";
+  it("commit reflects MAILFORGE_COMMIT_SHA when set", async () => {
+    process.env.MAILFORGE_COMMIT_SHA = "abc1234def5678";
     const res = await appAuth.inject({
       method: "GET",
       url: "/v1/diagnostics",
@@ -189,7 +189,7 @@ describe("GET /v1/diagnostics - authenticated (mock db resolves real tenant plug
     expect(body.commit).toBe("abc1234def5678");
   });
 
-  it("builtAt is null when CLAROS_BUILT_AT is absent", async () => {
+  it("builtAt is null when MAILFORGE_BUILT_AT is absent", async () => {
     const res = await appAuth.inject({
       method: "GET",
       url: "/v1/diagnostics",
@@ -199,8 +199,8 @@ describe("GET /v1/diagnostics - authenticated (mock db resolves real tenant plug
     expect(body.builtAt).toBeNull();
   });
 
-  it("builtAt reflects CLAROS_BUILT_AT when set", async () => {
-    process.env.CLAROS_BUILT_AT = "2026-07-29T10:00:00Z";
+  it("builtAt reflects MAILFORGE_BUILT_AT when set", async () => {
+    process.env.MAILFORGE_BUILT_AT = "2026-07-29T10:00:00Z";
     const res = await appAuth.inject({
       method: "GET",
       url: "/v1/diagnostics",

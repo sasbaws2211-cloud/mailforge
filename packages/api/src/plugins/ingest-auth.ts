@@ -49,7 +49,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { eq, isNull, and } from "drizzle-orm";
-import { apiKeys } from "@claros/db/schema";
+import { apiKeys, tenants } from "@mailforge/db/schema";
 import type { Db } from "./db.js";
 
 export type ApiKeyKind = "publishable" | "secret";
@@ -172,8 +172,11 @@ function makeIngestAuthRegistrar(lastUsedThrottleMs: number) {
           tenantId: apiKeys.tenantId,
           kind: apiKeys.kind,
           allowedOrigins: apiKeys.allowedOrigins,
+          suspendedAt: tenants.suspendedAt,
+          deletionScheduledAt: tenants.deletionScheduledAt,
         })
         .from(apiKeys)
+        .innerJoin(tenants, eq(tenants.id, apiKeys.tenantId))
         .where(and(eq(apiKeys.keyHash, incomingHash), isNull(apiKeys.revokedAt)))
         .limit(1);
 
@@ -183,6 +186,14 @@ function makeIngestAuthRegistrar(lastUsedThrottleMs: number) {
       }
 
       const row = rows[0]!;
+      if (row.suspendedAt !== null) {
+        reply.status(403);
+        return reply.send({ error: "This workspace has been suspended.", code: "workspace_suspended" });
+      }
+      if (row.deletionScheduledAt !== null) {
+        reply.status(403);
+        return reply.send({ error: "This workspace is scheduled for deletion.", code: "workspace_pending_deletion" });
+      }
       const kind: ApiKeyKind = row.kind === "publishable" ? "publishable" : "secret";
 
       // A body-carried key has traveled through a browser-shaped request.

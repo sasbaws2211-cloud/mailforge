@@ -16,14 +16,15 @@
 import { createHash } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { eq, and, isNull } from "drizzle-orm";
-import { invites, users, sessions, tenants } from "@claros/db/schema";
+import { invites, users, sessions, tenants } from "@mailforge/db/schema";
 import type { Db } from "../plugins/db.js";
+import { MARK_SVG } from "../marketing/layout.js";
 
 /** Session TTL: 30 days (same as normal login). */
 const SESSION_TTL_DAYS = 30;
 
 /** Cookie name for session ID (same as auth.ts). */
-const SESSION_COOKIE_NAME = "claros_session";
+const SESSION_COOKIE_NAME = "mailforge_session";
 
 function hashToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
@@ -48,7 +49,7 @@ function renderAcceptPage(email: string, tenantName: string, token: string): str
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex" />
-    <title>Join ${escapeHtml(tenantName)} on Claros</title>
+    <title>Join ${escapeHtml(tenantName)} on Mailforge</title>
     <style>
       body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f7f7f9; color: #26282e; font-family: system-ui, sans-serif; }
       main { width: 100%; max-width: 360px; padding: 24px; text-align: center; }
@@ -60,11 +61,7 @@ function renderAcceptPage(email: string, tenantName: string, token: string): str
   </head>
   <body>
     <main>
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <g transform="translate(12 12) rotate(90)">
-          <path d="M0 -10.8 C0 -10.8 -7.8 -2.5 -7.8 1.6 a7.8 7.8 0 0 0 15.6 0 C7.8 -2.5 0 -10.8 0 -10.8 Z M0 -2.4 a3.7 3.7 0 1 0 0.001 0 Z" fill="#008fba" fill-rule="evenodd" />
-        </g>
-      </svg>
+      <span style="display:inline-flex;color:#b8541a">${MARK_SVG}</span>
       <h1>Join ${escapeHtml(tenantName)}</h1>
       <p>You have been invited to join as <strong>${escapeHtml(email)}</strong>.</p>
       <form method="post" action="/invite/accept">

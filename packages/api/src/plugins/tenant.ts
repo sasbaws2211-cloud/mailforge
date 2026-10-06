@@ -9,7 +9,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { eq, and, isNull } from "drizzle-orm";
-import { sessions, tenants, users } from "@claros/db/schema";
+import { sessions, tenants, users } from "@mailforge/db/schema";
 import type { TenantContext, UserRole } from "../types.js";
 import type { Db } from "./db.js";
 import { SESSION_COOKIE_NAME } from "../routes/auth.js";
@@ -62,6 +62,9 @@ export function registerTenantPlugin(app: FastifyInstance): void {
         tenantSlug: tenants.slug,
         userRole: users.role,
         userDeactivatedAt: users.deactivatedAt,
+        userEmail: users.email,
+        tenantSuspendedAt: tenants.suspendedAt,
+        tenantDeletionScheduledAt: tenants.deletionScheduledAt,
       })
       .from(sessions)
       .innerJoin(tenants, eq(sessions.tenantId, tenants.id))
@@ -91,6 +94,9 @@ export function registerTenantPlugin(app: FastifyInstance): void {
       slug: row.tenantSlug,
       userId: row.sessionUserId,
       userRole: row.userRole as UserRole,
+      userEmail: row.userEmail,
+      suspended: row.tenantSuspendedAt != null,
+      pendingDeletion: row.tenantDeletionScheduledAt != null,
     };
   });
 }

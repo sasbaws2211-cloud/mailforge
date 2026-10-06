@@ -60,6 +60,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   resolveEmbeddingProvider,
   callEmbedding,
+  recordEmbeddingUsage,
   EmbeddingPermanentError,
 } from "./embedding-client.js";
 
@@ -149,7 +150,9 @@ export async function buildKbContextSection(
   let queryVector: number[];
   try {
     queryVector = await callEmbedding(baseUrl, apiKey, embeddingModel, queryText);
+    await recordEmbeddingUsage(db, tenantId, providerResult, queryText, true);
   } catch (err) {
+    await recordEmbeddingUsage(db, tenantId, providerResult, queryText, false);
     // Any embedding failure (transient or permanent) = no KB context this message.
     // This is soft: a failed query does not block the message.
     const msg = err instanceof Error ? err.message : String(err);

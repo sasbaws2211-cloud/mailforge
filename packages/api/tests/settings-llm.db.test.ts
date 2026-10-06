@@ -43,8 +43,8 @@ import {
   users,
   sessions,
   llmConfigs,
-} from "@claros/db/schema";
-import { decrypt, parseEncryptionKey } from "@claros/adapters";
+} from "@mailforge/db/schema";
+import { decrypt, parseEncryptionKey } from "@mailforge/adapters";
 
 // ---------------------------------------------------------------------------
 // DB setup
@@ -57,8 +57,8 @@ if (!TEST_DB_URL) {
     `[settings-llm.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 
@@ -191,7 +191,7 @@ async function setupTenants() {
     .insert(sessions)
     .values({ tenantId: tenantAId, userId: uA!.id, expiresAt: new Date(Date.now() + 86400_000) })
     .returning({ id: sessions.id });
-  cookieA = `claros_session=${sA!.id}`;
+  cookieA = `mailforge_session=${sA!.id}`;
 
   const [tB] = await db
     .insert(tenants)
@@ -206,7 +206,7 @@ async function setupTenants() {
     .insert(sessions)
     .values({ tenantId: tenantBId, userId: uB!.id, expiresAt: new Date(Date.now() + 86400_000) })
     .returning({ id: sessions.id });
-  cookieB = `claros_session=${sB!.id}`;
+  cookieB = `mailforge_session=${sB!.id}`;
 }
 
 async function readActiveEnvelope(tenantId: string): Promise<Record<string, unknown>> {
@@ -545,7 +545,7 @@ describe("PUT /v1/settings/llm", () => {
     });
     expect(putRes.statusCode).toBe(200);
 
-    // Same parseEncryptionKey + decrypt from @claros/adapters that
+    // Same parseEncryptionKey + decrypt from @mailforge/adapters that
     // resolveTenantProvider uses at runtime.
     const creds = await readActiveEnvelope(tenantAId);
     expect(creds.apiKey).toBe(TEST_API_KEY);
@@ -578,7 +578,7 @@ describe("GET /v1/settings/llm", () => {
 
     // Insert directly using the same encrypt path the endpoint uses
     const key = parseEncryptionKey(TEST_ENCRYPTION_KEY_BASE64);
-    const { encrypt: encryptFn } = await import("@claros/adapters");
+    const { encrypt: encryptFn } = await import("@mailforge/adapters");
     const encryptedConfig = encryptFn(
       JSON.stringify({
         apiKey: TEST_API_KEY,
@@ -623,7 +623,7 @@ describe("GET /v1/settings/llm", () => {
     // Pre-change envelope shape is impossible (model was always required),
     // but a hand-edited envelope must not break the settings screen.
     const key = parseEncryptionKey(TEST_ENCRYPTION_KEY_BASE64);
-    const { encrypt: encryptFn } = await import("@claros/adapters");
+    const { encrypt: encryptFn } = await import("@mailforge/adapters");
     const encryptedConfig = encryptFn(
       JSON.stringify({ apiKey: TEST_API_KEY }),
       key,
@@ -653,7 +653,7 @@ describe("GET /v1/settings/llm", () => {
     const app = await buildApp({ db, logger: false });
 
     const key = parseEncryptionKey(TEST_ENCRYPTION_KEY_BASE64);
-    const { encrypt: encryptFn } = await import("@claros/adapters");
+    const { encrypt: encryptFn } = await import("@mailforge/adapters");
     const encryptedConfig = encryptFn(
       JSON.stringify({ apiKey: TEST_API_KEY, baseUrl: stubBaseUrl, model: TEST_MODEL }),
       key,

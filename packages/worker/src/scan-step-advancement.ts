@@ -36,8 +36,8 @@ import {
   flowMemberships,
   lifecycleMessages,
   scanCheckpoints,
-} from "@claros/db/schema";
-import { parseDelay, delayToMs, type CompiledStep, type PlanExitCondition } from "@claros/core";
+} from "@mailforge/db/schema";
+import { parseDelay, delayToMs, type CompiledStep, type PlanExitCondition } from "@mailforge/core";
 import {
   evaluateStepCondition,
   evaluatePlanExitCondition,

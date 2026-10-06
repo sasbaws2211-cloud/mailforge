@@ -1,5 +1,5 @@
 {
-  "name": "@claros/core",
+  "name": "@mailforge/core",
   "version": "0.0.0",
   "private": true,
   "type": "module",

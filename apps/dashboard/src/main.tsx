@@ -1,5 +1,5 @@
 /**
- * Claros dashboard SPA entry point.
+ * Mailforge dashboard SPA entry point.
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */

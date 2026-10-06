@@ -8,7 +8,7 @@
  * Sections:
  *   1. First event indicator - polls /v1/ingestion/status every 3s while no
  *      event has arrived; flips to a received state showing what arrived.
- *   2. Browser snippet - the two-stub + claros.js snippet with the tenant's
+ *   2. Browser snippet - the two-stub + mailforge.js snippet with the tenant's
  *      publishable key already interpolated. Creates a publishable key
  *      inline when none exists.
  *   3. API keys - list, create (publishable / secret), edit origins, revoke.
@@ -31,6 +31,7 @@ import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { PageHeader } from "../components/page-header.js";
+import { SampleEventButton } from "../components/sample-event.js";
 import {
   Table,
   TableHeader,
@@ -155,15 +156,15 @@ function buildSnippet(origin: string, rawKey: string | null): string {
   const k = rawKey ?? "PASTE_YOUR_PUBLISHABLE_KEY";
   return [
     "<script>",
-    "  window.claros = window.claros || function () {",
-    "    (window.claros.q = window.claros.q || []).push(arguments);",
+    "  window.mailforge = window.mailforge || function () {",
+    "    (window.mailforge.q = window.mailforge.q || []).push(arguments);",
     "  };",
     "</script>",
-    `<script async src="${origin}/claros.js"></script>`,
+    `<script async src="${origin}/mailforge.js"></script>`,
     "<script>",
-    `  claros("init", "${k}", { endpoint: "${origin}" });`,
-    '  claros("identify", "user_123", { email: "user@example.com" });',
-    '  claros("track", "signed_up");',
+    `  mailforge("init", "${k}", { endpoint: "${origin}" });`,
+    '  mailforge("identify", "user_123", { email: "user@example.com" });',
+    '  mailforge("track", "signed_up");',
     "</script>",
   ].join("\n");
 }
@@ -645,7 +646,7 @@ export default function IntegratePage() {
       <PageHeader
         eyebrow="Ingestion"
         title="Integrate"
-        subtitle="Get events flowing into Claros: grab a key, paste the snippet, watch the first event arrive."
+        subtitle="Get events flowing into Mailforge: grab a key, paste the snippet, watch the first event arrive."
       />
 
       <div className="space-y-6">
@@ -654,6 +655,17 @@ export default function IntegratePage() {
         {createdKey && (
           <CreatedKeyBanner created={createdKey} onDismiss={() => setCreatedKey(null)} />
         )}
+
+        <section className="rounded-lg border border-border bg-card p-6" aria-label="Sample event">
+          <SectionHeading icon={Send} title="Try it without a key" />
+          <p className="mt-2 text-[14px] text-muted-foreground">
+            Send a real <code className="rounded bg-sunken px-1 text-[13px]">signed_up</code> event for you, using your own
+            address, with no API key. If your Welcome flow is on, the email arrives in your inbox.
+          </p>
+          <div className="mt-3">
+            <SampleEventButton variant="default" label="Send me a sample event" />
+          </div>
+        </section>
 
         {/* Test event panel: appears when a raw secret key is available */}
         {rawSecret ? (

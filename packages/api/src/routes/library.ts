@@ -20,7 +20,7 @@ import {
   LIBRARY_TEMPLATES,
   LIBRARY_FLOW_WELCOME,
   type InstallResult,
-} from "@claros/core";
+} from "@mailforge/core";
 
 // ---------------------------------------------------------------------------
 // Route plugin

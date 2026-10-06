@@ -41,8 +41,8 @@ import {
   BUSINESS_MODEL_TEMPLATE_LIST,
   BUSINESS_MODEL_IDS,
   type BusinessModelId,
-} from "@claros/core";
-import { tenants, flows } from "@claros/db/schema";
+} from "@mailforge/core";
+import { tenants, flows } from "@mailforge/db/schema";
 import type { Db } from "../plugins/db.js";
 
 // ---------------------------------------------------------------------------

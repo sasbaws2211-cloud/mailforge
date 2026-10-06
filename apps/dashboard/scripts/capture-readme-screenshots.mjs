@@ -50,7 +50,7 @@ console.log("Generating login link...");
 let verifyUrl;
 try {
   const output = execSync(
-    `node ${join(ROOT, "apps/server/bin/claros.mjs")} login-link hello@fundup.ai`,
+    `node ${join(ROOT, "apps/server/bin/mailforge.mjs")} login-link hello@fundup.ai`,
     { encoding: "utf8", cwd: ROOT }
   );
   const match = output.match(/URL:\s+(http\S+)/);
@@ -93,7 +93,7 @@ const resp = await tempCtx.request.post(`${API_BASE}/auth/verify`, {
 const location = resp?.headers()["location"] ?? "";
 if (location.includes("error=")) {
   console.error("Authentication failed (link may be expired/consumed).");
-  console.error("Generate a fresh link: node apps/server/bin/claros.mjs login-link hello@fundup.ai");
+  console.error("Generate a fresh link: node apps/server/bin/mailforge.mjs login-link hello@fundup.ai");
   await browser.close();
   process.exit(1);
 }

@@ -12,7 +12,7 @@
  *   when the event happened). Every query ALSO constrains `received_at` so
  *   the Postgres planner can prune partitions. The `received_at` bound is
  *   widened by CADENCE_RECEIVED_AT_SLACK_MS (derived from
- *   INGEST_TIMESTAMP_CLAMP_HOURS in @claros/core, which equals the
+ *   INGEST_TIMESTAMP_CLAMP_HOURS in @mailforge/core, which equals the
  *   TIMESTAMP_CLAMP_HOURS enforced by the ingest route) to cover clients
  *   whose clock runs ahead of server time (timestamp > received_at is
  *   possible; without the slack such events would be excluded by the
@@ -45,7 +45,7 @@
  */
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { INGEST_TIMESTAMP_CLAMP_HOURS } from "@claros/core";
+import { INGEST_TIMESTAMP_CLAMP_HOURS } from "@mailforge/core";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -112,7 +112,7 @@ export interface EventSectionsResult {
  * exclude events whose client timestamp is inside the semantic window but
  * whose received_at is slightly earlier due to clock skew.
  *
- * Derived from INGEST_TIMESTAMP_CLAMP_HOURS in @claros/core - the same
+ * Derived from INGEST_TIMESTAMP_CLAMP_HOURS in @mailforge/core - the same
  * constant that governs the ingest route's timestamp clamping. Both sides
  * share the same source so the values cannot drift independently.
  * See BACKLOG.md for the full note.

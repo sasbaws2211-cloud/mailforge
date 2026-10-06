@@ -52,6 +52,12 @@ import {
   useHomeLifecycle,
 } from "../home.js";
 import type { Flow } from "../api.js";
+import { OnboardingPanel } from "../components/onboarding-panel.js";
+import { OnboardingComplete } from "../components/onboarding-complete.js";
+import { WaitingNotice } from "../components/waiting-notice.js";
+import { GoalCard } from "../components/goal-card.js";
+import { useOnboarding, useDismissOnboarding, justCompleted, type OnboardingInfo } from "../onboarding.js";
+import { usePlan } from "../plan.js";
 
 // ---------------------------------------------------------------------------
 // Setup mode
@@ -405,10 +411,13 @@ function SetupBanner({
   doneCount,
   totalCount,
   onShowSetup,
+  body,
 }: {
   doneCount: number;
   totalCount: number;
   onShowSetup: () => void;
+  /** Replaces the default self-hosted wording (hosted onboarding says its own thing). */
+  body?: string;
 }) {
   const pct = Math.round((doneCount / totalCount) * 100);
   return (
@@ -416,8 +425,7 @@ function SetupBanner({
       <div className="min-w-0 flex-1">
         <p className="text-[15px] font-medium text-foreground">Finish setup</p>
         <p className="mt-0.5 text-[13px] text-muted-foreground">
-          {doneCount} of {totalCount} requirements met. The remaining items
-          unlock everything this install can do.
+          {body ?? `${doneCount} of ${totalCount} requirements met. The remaining items unlock everything this install can do.`}
         </p>
         <div
           role="progressbar"
@@ -525,15 +533,15 @@ function ResourcesSection() {
           icon={BookOpen}
           title="Documentation"
           description="Setup guides, the flow model, ingestion API reference, and self-hosting notes."
-          href="https://claros.org/docs"
-          linkLabel="claros.org/docs"
+          href="https://mailforge.org/docs"
+          linkLabel="mailforge.org/docs"
         />
         <ResourceCard
           icon={MessagesSquare}
           title="Ask the community"
-          description="Questions, flow recipes, and deliverability war stories from other Claros operators."
-          href="https://claros.org/community"
-          linkLabel="claros.org/community"
+          description="Questions, flow recipes, and deliverability war stories from other Mailforge operators."
+          href="https://mailforge.org/community"
+          linkLabel="mailforge.org/community"
         />
         <div className="rounded-lg border border-border bg-card p-5 sm:col-span-2 lg:col-span-1">
           <span className="flex h-9 w-9 items-center justify-center rounded-md bg-accent-soft text-accent-text">
@@ -557,12 +565,23 @@ function OperationalHome({
   setupIncomplete,
   setupDoneCount,
   setupTotalCount,
+  setupBody,
+  completionCard,
+  waiting,
+  goalInfo,
 }: {
   flows: Flow[];
   onShowSetup: () => void;
   setupIncomplete: boolean;
   setupDoneCount: number;
   setupTotalCount: number;
+  setupBody?: string;
+  /** The "you are live" card, shown for a few days after hosted onboarding finishes. */
+  completionCard?: React.ReactNode;
+  /** Approved email that cannot go out yet, and why. */
+  waiting?: Pick<OnboardingInfo, "waiting_emails" | "waiting_reason">;
+  /** Hosted only: the goal chosen at signup, to offer matching flows. */
+  goalInfo?: Pick<OnboardingInfo, "goal" | "goal_suggestion" | "steps">;
 }) {
   const pending = useHomePendingMessages();
   const failed = useHomeFailedMessages();
@@ -719,8 +738,14 @@ function OperationalHome({
           doneCount={setupDoneCount}
           totalCount={setupTotalCount}
           onShowSetup={onShowSetup}
+          body={setupBody}
         />
       )}
+
+      <WaitingNotice info={waiting} />
+      <GoalCard info={goalInfo} />
+
+      {completionCard}
 
       {items.length > 0 ? (
         <div className="space-y-3">{items}</div>
@@ -939,7 +964,7 @@ function SetupHome({
       key: "ingest-key",
       done: checks.ingestKey,
       label: "Ingest API key",
-      reason: "Your app uses this key to send events to Claros. No key means no data.",
+      reason: "Your app uses this key to send events to Mailforge. No key means no data.",
       fixLocation: "integrate",
       linkTo: "/integrate",
       linkLabel: "Create in Integrate",
@@ -1029,6 +1054,45 @@ function SetupHome({
 }
 
 // ---------------------------------------------------------------------------
+// Hosted onboarding mode
+// ---------------------------------------------------------------------------
+
+/**
+ * What a customer of the hosted product sees first. The self-hosted setup screen asks
+ * about environment variables and key files, which belong to whoever runs the server.
+ * A customer needs the five things that stand between them and their first delivered
+ * email, in order, with one button each.
+ */
+function HostedOnboardingHome({
+  info,
+  workspaceName,
+  hasTransport,
+}: {
+  info: OnboardingInfo;
+  workspaceName: string | null;
+  hasTransport: boolean;
+}) {
+  const flowDone = info.steps.find((s) => s.id === "flow")?.done ?? false;
+  return (
+    <div className="mx-auto max-w-6xl">
+      <PageHeader title="Home" />
+      <WaitingNotice info={info} />
+      <OnboardingPanel info={info} workspaceName={workspaceName} />
+      <GoalCard info={info} />
+      {!flowDone && (
+        <div id="welcome-flow" className="scroll-mt-6">
+          <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+            Your first flow
+          </h2>
+          <LibrarySection hasActiveFlow={flowDone} hasTransport={hasTransport} />
+        </div>
+      )}
+      <ResourcesSection />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component - mode switch
 // ---------------------------------------------------------------------------
 
@@ -1036,7 +1100,7 @@ function SetupHome({
  * Dismissed state: stored in localStorage so it persists across refreshes.
  * A user who knows what they are doing should never be blocked by setup.
  */
-const SETUP_DISMISSED_KEY = "claros-home-setup-dismissed";
+const SETUP_DISMISSED_KEY = "mailforge-home-setup-dismissed";
 
 function readSetupDismissed(): boolean {
   try {
@@ -1061,11 +1125,14 @@ export default function HomePage() {
   const ingest = useIngestStatus(false);
   const ingestKeys = useIngestKeys();
   const flows = useFlows();
+  const onboarding = useOnboarding();
+  const reopenOnboarding = useDismissOnboarding();
+  const plan = usePlan();
   const [dismissed, setDismissed] = useState(readSetupDismissed);
   const [forceSetup, setForceSetup] = useState(false);
 
   // Loading state
-  if (setup.isLoading || diagnostics.isLoading || ingest.isLoading || flows.isLoading || ingestKeys.isLoading) {
+  if (setup.isLoading || diagnostics.isLoading || ingest.isLoading || flows.isLoading || ingestKeys.isLoading || onboarding.isLoading) {
     return (
       <div className="mx-auto max-w-6xl">
         <PageHeader title="Home" />
@@ -1100,6 +1167,19 @@ export default function HomePage() {
     hasTransport: transport,
   };
 
+  // Hosted product: customers get the guided onboarding, not the self-hosted setup screen.
+  // If the onboarding request failed, fall through to the old behaviour rather than a blank page.
+  const hostedInfo = onboarding.data?.hosted ? onboarding.data : null;
+  if (hostedInfo && !hostedInfo.complete && !hostedInfo.dismissed) {
+    return (
+      <HostedOnboardingHome
+        info={hostedInfo}
+        workspaceName={setup.tenant?.name ?? null}
+        hasTransport={transport}
+      />
+    );
+  }
+
   // The install is "set up" when it can actually send:
   // encryption + signing + transport + postal + at least one active flow + events arriving
   const canSend = encryptionKey && signingKey && transport && postalAddress && activeFlow && firstEvent;
@@ -1107,7 +1187,9 @@ export default function HomePage() {
   // Show setup mode if:
   // - The install cannot send AND the user has not dismissed setup, OR
   // - The user explicitly asked to see setup (forceSetup)
-  const showSetup = forceSetup || (!canSend && !dismissed);
+  // Never on a hosted workspace: that screen asks about server environment variables,
+  // which are the operator's business, not the customer's.
+  const showSetup = !hostedInfo && (forceSetup || (!canSend && !dismissed));
 
   if (showSetup) {
     return (
@@ -1143,14 +1225,30 @@ export default function HomePage() {
     <OperationalHome
       flows={flows.data?.flows ?? []}
       onShowSetup={() => {
+        if (hostedInfo) {
+          reopenOnboarding.mutate(false);
+          return;
+        }
         setForceSetup(true);
         // Clear dismissal so setup shows naturally until complete
         setDismissed(false);
         writeSetupDismissed(false);
       }}
-      setupIncomplete={!canSend || !llm}
-      setupDoneCount={setupDoneCount}
-      setupTotalCount={setupTotalCount}
+      setupIncomplete={hostedInfo ? !hostedInfo.complete : !canSend || !llm}
+      setupDoneCount={hostedInfo ? hostedInfo.done : setupDoneCount}
+      setupTotalCount={hostedInfo ? hostedInfo.total : setupTotalCount}
+      waiting={onboarding.data}
+      goalInfo={hostedInfo ?? undefined}
+      completionCard={
+        hostedInfo && justCompleted(hostedInfo) ? (
+          <OnboardingComplete onTrial={plan.data?.trial.active === true} />
+        ) : undefined
+      }
+      setupBody={
+        hostedInfo
+          ? `${hostedInfo.done} of ${hostedInfo.total} steps done. Pick up where you left off and send your first email.`
+          : undefined
+      }
     />
   );
 }

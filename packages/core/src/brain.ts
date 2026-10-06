@@ -1,7 +1,7 @@
 /**
  * Brain output Zod schemas - the validated shapes of brain.decide() and brain.draft().
  *
- * Defined in @claros/core so that both brain-oss and the execution engine
+ * Defined in @mailforge/core so that both brain-oss and the execution engine
  * can import them without circular dependencies or duplicate dependency declarations.
  * Follows the same pattern as compiledPlanSchema.
  *

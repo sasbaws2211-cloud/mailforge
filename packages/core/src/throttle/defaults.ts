@@ -1,7 +1,7 @@
 /**
  * Throttle configuration defaults and resolver.
  *
- * Defaults sourced from CLAROS_HANDOFF_V2.md Appendix B. A tenant with no
+ * Defaults sourced from MAILFORGE_HANDOFF_V2.md Appendix B. A tenant with no
  * throttle config (settings.throttle is null/missing/partial) gets these values.
  * Absent config NEVER means unlimited sending - the failure direction is always
  * toward throttling, not toward unbounded delivery.

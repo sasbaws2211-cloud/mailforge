@@ -1,10 +1,10 @@
 /**
- * @claros/core - Pure logic, no I/O.
+ * @mailforge/core - Pure logic, no I/O.
  * Contains domain types, state machines, and business rules.
  *
  * Mirror side: PUBLIC (packages/core is mirrored).
  */
-export const CLAROS_CORE_VERSION = "0.0.0";
+export const MAILFORGE_CORE_VERSION = "0.0.0";
 
 /**
  * Maximum hours of clock skew tolerated between a client-supplied event
@@ -169,11 +169,140 @@ export {
 } from "./library-flows.js";
 
 export {
+  PLAN_IDS,
+  PLANS,
+  TRIAL_PLAN,
+  TRIAL_PLAN_VALUE,
+  TRIAL_DAYS,
+  isPlanId,
+  isPaidPlanId,
+  isBillingInterval,
+  BILLING_INTERVALS,
+  BILLING_GRACE_DAYS,
+  planPriceUsd,
+  addBillingPeriod,
+  paymentStatus,
+  effectivePlan,
+  trialDaysLeft,
+  trialEndDate,
+  type BillingInterval,
+  type PaidPlanId,
+  type PaymentStatus,
+  type PlanId,
+  type PlanDef,
+  type PlanLimits,
+} from "./plans.js";
+
+export {
+  DEFAULT_SHARED_DAILY_LIMIT,
+  RESEND_API_BASE,
+  DOMAIN_STATUSES,
+  SENDER_HEALTH_WINDOW_DAYS,
+  SENDER_HEALTH_MIN_SENT,
+  SENDER_COMPLAINT_RATE_PAUSE,
+  SENDER_MIN_COMPLAINTS,
+  SENDER_HARD_BOUNCE_RATE_PAUSE,
+  SENDER_MIN_HARD_BOUNCES,
+  SENDER_WARN_FRACTION,
+  managedSendingConfigFromEnv,
+  isDomainStatus,
+  validateSendingDomain,
+  validateFromLocalPart,
+  sanitizeDisplayName,
+  isValidReplyAddress,
+  chooseManagedSender,
+  senderHealth,
+  type ManagedSendingConfig,
+  type DomainStatus,
+  type DomainCheck,
+  type ManagedSenderInput,
+  type ManagedSender,
+  type SenderHealth,
+  type SenderHealthState,
+} from "./managed-sending.js";
+
+export {
+  LLM_SOURCES,
+  LLM_FEATURES,
+  PLATFORM_LLM_SLOTS,
+  PLATFORM_AI_NAME,
+  NO_AI_PROVIDER_MESSAGE,
+  isPlatformLlmSlot,
+  estimateTokens,
+  aiAllowanceSpent,
+  aiAllowanceMessage,
+  MAX_PRICE_USD_PER_MTOK,
+  isValidPriceUsdPerMtok,
+  costMicros,
+  microsToUsd,
+  AI_BUDGET_NEAR_FRACTION,
+  MAX_AI_BUDGET_USD,
+  isValidAiBudgetUsd,
+  aiBudgetState,
+  AI_UNAVAILABLE_MESSAGE,
+  type AiBudgetState,
+  AI_ALERT_WINDOW_MINUTES,
+  AI_ALERT_MIN_CALLS,
+  AI_ALERT_FAIL_RATE,
+  AI_ALERT_COOLDOWN_MINUTES,
+  aiHealth,
+  shouldSendAiAlert,
+  type AiHealth,
+  type LlmSource,
+  type LlmFeature,
+  type PlatformLlmSlot,
+} from "./ai.js";
+
+export {
+  plansEnforced,
+  entitlementsFor,
+  limitFor,
+  wouldExceed,
+  usageFraction,
+  startOfMonthUtc,
+  startOfNextMonthUtc,
+  planLimitMessage,
+  assertWithinLimit,
+  poweredByFor,
+  PlanLimitError,
+  type Entitlements,
+  type LimitKind,
+} from "./entitlements.js";
+
+export {
+  ONBOARDING_STEP_IDS,
+  computeOnboarding,
+  showOnboardingPanel,
+  parseOnboardingPatch,
+  nudgeDue,
+  waitingReason,
+  ONBOARDING_GOALS,
+  GOAL_INFO,
+  parseGoal,
+  MAX_NUDGES,
+  NUDGE_AFTER_WELCOME_HOURS,
+  NUDGE_MIN_GAP_HOURS,
+  type OnboardingStepId,
+  type OnboardingFacts,
+  type OnboardingState,
+  type OnboardingStep,
+  type OnboardingProgress,
+  type OnboardingPatch,
+  type WaitingReason,
+  type OnboardingGoal,
+  type GoalInfo,
+  type WaitingInput,
+} from "./onboarding.js";
+
+export {
   wrapInShell,
   wrapInTextShell,
   buildShellComplianceHtml,
   buildShellComplianceText,
+  DEFAULT_ACCENT,
+  brandLinkStyle,
   type BrandSettings,
+  type PoweredBy,
   type EmailShellInput,
   type TextShellInput,
 } from "./email-shell.js";

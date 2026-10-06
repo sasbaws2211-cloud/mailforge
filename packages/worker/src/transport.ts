@@ -1,7 +1,7 @@
 /**
  * Transport adapter interface - the seam between the drain worker and email delivery.
  *
- * Type definitions live in @claros/adapters/transport-types so adapter
+ * Type definitions live in @mailforge/adapters/transport-types so adapter
  * implementations can reside in packages/adapters without a circular import
  * through packages/worker. This file re-exports those types so existing
  * imports from packages/worker remain unchanged.
@@ -14,19 +14,19 @@
  * Mirror side: PUBLIC (packages/worker is mirrored).
  */
 
-// Re-export all transport types from @claros/adapters so callers that import
-// from @claros/worker continue to work unchanged.
+// Re-export all transport types from @mailforge/adapters so callers that import
+// from @mailforge/worker continue to work unchanged.
 export type {
   TransportSendResult,
   TransportSendParams,
   TransportAdapter,
-} from "@claros/adapters";
+} from "@mailforge/adapters";
 
 // ---------------------------------------------------------------------------
 // Resolver type
 // ---------------------------------------------------------------------------
 
-import type { TransportAdapter } from "@claros/adapters";
+import type { TransportAdapter } from "@mailforge/adapters";
 
 /**
  * Resolves a TransportAdapter for a given tenant. Returns null if the tenant

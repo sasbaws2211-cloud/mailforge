@@ -66,8 +66,9 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { eq, and, sql } from "drizzle-orm";
-import { lifecycleMessages, suppressions } from "@claros/db/schema";
-import { verifyUnsubscribeToken } from "@claros/adapters";
+import { lifecycleMessages, suppressions, tenants } from "@mailforge/db/schema";
+import { verifyUnsubscribeToken } from "@mailforge/adapters";
+import { DEFAULT_ACCENT, entitlementsFor, poweredByFor, type BrandSettings, type PoweredBy } from "@mailforge/core";
 import type { Db } from "../plugins/db.js";
 
 // ---------------------------------------------------------------------------
@@ -107,7 +108,7 @@ async function resolveAndSuppress(
   db: Db,
   token: string,
   source: typeof SOURCE_ONE_CLICK | typeof SOURCE_PAGE,
-): Promise<{ ok: true; email: string } | { ok: false; missingKey?: true }> {
+): Promise<{ ok: true; email: string; tenantId: string } | { ok: false; missingKey?: true }> {
   // Step 1: verify the token.
   // verifyUnsubscribeToken throws when UNSUBSCRIBE_SIGNING_KEY is absent - that
   // is a server misconfiguration, not a bad token. Catch and surface as a
@@ -177,7 +178,7 @@ async function resolveAndSuppress(
     ON CONFLICT (tenant_id, lower(email)) DO NOTHING
   `);
 
-  return { ok: true, email: normalizedEmail };
+  return { ok: true, email: normalizedEmail, tenantId };
 }
 
 // ---------------------------------------------------------------------------
@@ -185,85 +186,214 @@ async function resolveAndSuppress(
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal HTML for the unsubscribe confirmation page (GET).
- * Shows a button the human must click; does not auto-submit.
- * Deliberately plain - no brand assets needed, must render in any email client's
- * browser view.
+ * What the public pages show about the sender. Comes from the brand settings
+ * of the tenant that sent the email (the same ones the email shell uses);
+ * every field falls back to the Mailforge defaults so a page always renders,
+ * even if the lookup fails.
  */
-function unsubscribePageHtml(token: string): string {
-  // Escape token for HTML attribute (base64url chars are safe, but be explicit)
-  const safeToken = token.replace(/[^A-Za-z0-9._~-]/g, "");
+interface PageBrand {
+  name: string;
+  accent: string;
+  logoUrl: string | null;
+  logoHeight: number;
+  /** Credit line for plans that carry the platform branding (Free). */
+  poweredBy?: PoweredBy;
+}
+
+const DEFAULT_BRAND: PageBrand = {
+  name: "Mailforge",
+  accent: DEFAULT_ACCENT,
+  logoUrl: null,
+  logoHeight: 28,
+};
+
+/** Escape text for HTML content and double-quoted attribute positions. */
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** Accept #RGB or #RRGGBB only; anything else falls back to the default. */
+function safeHex(color: string | undefined): string {
+  if (color && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) {
+    return color.length === 4
+      ? "#" + color.slice(1).split("").map((c) => c + c).join("")
+      : color;
+  }
+  return DEFAULT_ACCENT;
+}
+
+/** White or near-black text, whichever contrasts better on the given hex. */
+function readableOn(hex: string): string {
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const v = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  }) as [number, number, number];
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  // #1a1a1a has relative luminance ~0.010; pick the text with the higher contrast.
+  const contrastWhite = 1.05 / (lum + 0.05);
+  const contrastDark = (lum + 0.05) / 0.06;
+  return contrastDark > contrastWhite ? "#1a1a1a" : "#ffffff";
+}
+
+/**
+ * Look up the sending tenant brand for the public pages. Read-only. Never
+ * throws: a missing db, unknown tenant, or malformed settings all yield the
+ * defaults.
+ */
+async function loadPageBrand(db: Db | undefined, tenantId: string): Promise<PageBrand> {
+  if (!db) return DEFAULT_BRAND;
+  try {
+    const rows = await db
+      .select({
+        name: tenants.name,
+        settings: tenants.settings,
+        plan: tenants.plan,
+        trialEndsAt: tenants.trialEndsAt,
+        paidThrough: tenants.planPaidThrough,
+      })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId))
+      .limit(1);
+    if (rows.length === 0) return DEFAULT_BRAND;
+    const settings = (rows[0]!.settings as Record<string, unknown> | null) ?? {};
+    const brand = (settings.brand as BrandSettings | undefined) ?? {};
+    const name = (brand.brand_name || rows[0]!.name || "").trim();
+    const logoUrl =
+      typeof brand.logo_url === "string" && /^https?:\/\//i.test(brand.logo_url)
+        ? brand.logo_url
+        : null;
+    const h = brand.logo_height;
+    // Free workspaces carry a small credit; paid plans and self-hosted installs do not.
+    const poweredBy = poweredByFor(
+      entitlementsFor({ plan: rows[0]!.plan, trialEndsAt: rows[0]!.trialEndsAt, paidThrough: rows[0]!.paidThrough }),
+    );
+    return {
+      name: name || DEFAULT_BRAND.name,
+      accent: safeHex(brand.accent_color),
+      logoUrl,
+      logoHeight: !h || h < 16 ? 28 : Math.min(Math.round(h), 64),
+      ...(poweredBy ? { poweredBy } : {}),
+    };
+  } catch {
+    return DEFAULT_BRAND;
+  }
+}
+
+/** The Mailforge envelope mark (same geometry as the dashboard brand mark). */
+const MARK_SVG =
+  '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+  '<path d="M5 5 H19 A3 3 0 0 1 22 8 V16 A3 3 0 0 1 19 19 H5 A3 3 0 0 1 2 16 V8 A3 3 0 0 1 5 5 Z ' +
+  'M4.4 8.1 L12 13.7 L19.6 8.1 L19.6 10.7 L12 16.3 L4.4 10.7 Z" fill="currentColor" fill-rule="evenodd"/></svg>';
+
+/**
+ * Shared page shell: branded header, card, mobile layout, dark mode.
+ * Plain HTML and inline CSS only (no scripts, no external assets other than
+ * the sender own logo) so it renders anywhere an email link opens.
+ */
+function pageShell(brand: PageBrand, title: string, bodyHtml: string): string {
+  const name = escHtml(brand.name);
+  const header = brand.logoUrl
+    ? '<img class="logo" src="' + escHtml(brand.logoUrl) + '" alt="' + name +
+      '" style="height:' + brand.logoHeight + 'px">'
+    : '<span class="mark">' + MARK_SVG + '</span><span class="wordmark">' + name + "</span>";
   return [
     "<!DOCTYPE html>",
-    "<html lang=\"en\">",
+    '<html lang="en">',
     "<head>",
-    "  <meta charset=\"UTF-8\">",
-    "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-    "  <title>Unsubscribe</title>",
+    '  <meta charset="UTF-8">',
+    '  <meta name="viewport" content="width=device-width, initial-scale=1">',
+    '  <meta name="robots" content="noindex">',
+    "  <title>" + escHtml(title) + "</title>",
     "  <style>",
-    "    body { font-family: sans-serif; max-width: 480px; margin: 80px auto; padding: 0 24px; color: #111; }",
-    "    h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }",
-    "    p { color: #555; margin-bottom: 1.5rem; }",
-    "    button { background: #d00; color: #fff; border: none; padding: 12px 24px; font-size: 1rem; cursor: pointer; border-radius: 4px; }",
-    "    button:hover { background: #b00; }",
+    "    :root { --accent: " + brand.accent + "; --accent-fg: " + readableOn(brand.accent) +
+      "; --bg: #f7f5f2; --card: #ffffff; --fg: #1d1b19; --muted: #5c5750; --line: #e6e1da; }",
+    "    @media (prefers-color-scheme: dark) { :root { --bg: #15171c; --card: #1e2128; --fg: #ece9e4; --muted: #a8a39b; --line: #2c3039; } }",
+    "    * { box-sizing: border-box; }",
+    "    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--fg); display: flex; align-items: flex-start; justify-content: center;",
+    "           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; }",
+    "    main { width: 100%; max-width: 440px; margin: 12vh 16px 32px; }",
+    "    .brand { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; color: var(--accent); }",
+    "    .mark { display: flex; }",
+    "    .wordmark { font-size: 1.15rem; font-weight: 700; letter-spacing: 0.01em; color: var(--fg); }",
+    "    .logo { display: block; max-width: 220px; width: auto; }",
+    "    .card { background: var(--card); border: 1px solid var(--line); border-top: 4px solid var(--accent); border-radius: 10px; padding: 28px 24px; }",
+    "    h1 { font-size: 1.35rem; line-height: 1.25; margin: 0 0 8px; }",
+    "    p { color: var(--muted); margin: 0 0 20px; }",
+    "    p:last-child { margin-bottom: 0; }",
+    "    .credit { text-align: center; font-size: 12px; margin: 16px 0 0; }",
+    "    .credit a { color: var(--muted); text-decoration: none; }",
+    "    button { width: 100%; background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 8px; padding: 13px 20px;",
+    "             font: inherit; font-weight: 600; cursor: pointer; }",
+    "    button:hover { filter: brightness(0.93); }",
+    "    button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }",
     "  </style>",
     "</head>",
     "<body>",
-    "  <h1>Unsubscribe</h1>",
-    "  <p>Click the button below to unsubscribe and stop receiving emails from this sender.</p>",
-    "  <form method=\"POST\" action=\"/unsubscribe\">",
-    `    <input type=\"hidden\" name=\"token\" value=\"${safeToken}\">`,
-    "    <button type=\"submit\">Unsubscribe me</button>",
-    "  </form>",
+    "  <main>",
+    '    <div class="brand">' + header + "</div>",
+    '    <div class="card">',
+    bodyHtml,
+    "    </div>",
+    brand.poweredBy && /^https?:\/\//i.test(brand.poweredBy.url)
+      ? '    <p class="credit"><a href="' + escHtml(brand.poweredBy.url) + '">Sent with ' + escHtml(brand.poweredBy.name) + "</a></p>"
+      : "",
+    "  </main>",
     "</body>",
     "</html>",
   ].join("\n");
 }
 
+/**
+ * Unsubscribe confirmation page (GET).
+ * Shows a button the human must click; does not auto-submit.
+ */
+function unsubscribePageHtml(token: string, brand: PageBrand): string {
+  // Escape token for HTML attribute (base64url chars are safe, but be explicit)
+  const safeToken = token.replace(/[^A-Za-z0-9._~-]/g, "");
+  const name = escHtml(brand.name);
+  return pageShell(
+    brand,
+    "Unsubscribe",
+    [
+      "      <h1>Unsubscribe from " + name + "</h1>",
+      "      <p>Click the button below to stop receiving emails from " + name + ".</p>",
+      '      <form method="POST" action="/unsubscribe">',
+      '        <input type="hidden" name="token" value="' + safeToken + '">',
+      '        <button type="submit">Unsubscribe me</button>',
+      "      </form>",
+    ].join("\n"),
+  );
+}
+
 /** HTML shown after a successful unsubscribe. */
-function unsubscribeSuccessHtml(): string {
-  return [
-    "<!DOCTYPE html>",
-    "<html lang=\"en\">",
-    "<head>",
-    "  <meta charset=\"UTF-8\">",
-    "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-    "  <title>Unsubscribed</title>",
-    "  <style>",
-    "    body { font-family: sans-serif; max-width: 480px; margin: 80px auto; padding: 0 24px; color: #111; }",
-    "    h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }",
-    "    p { color: #555; }",
-    "  </style>",
-    "</head>",
-    "<body>",
-    "  <h1>Unsubscribed</h1>",
-    "  <p>You have been unsubscribed. You will no longer receive emails from this sender.</p>",
-    "</body>",
-    "</html>",
-  ].join("\n");
+function unsubscribeSuccessHtml(brand: PageBrand): string {
+  const name = escHtml(brand.name);
+  return pageShell(
+    brand,
+    "Unsubscribed",
+    [
+      "      <h1>You are unsubscribed</h1>",
+      "      <p>Unsubscribed from " + name + ". You will no longer receive emails from this sender.</p>",
+      "      <p>If this was a mistake, reply to any earlier email from " + name + " and ask to be added back.</p>",
+    ].join("\n"),
+  );
 }
 
 /** HTML shown when the token is invalid or resolution fails. */
 function unsubscribeErrorHtml(): string {
-  return [
-    "<!DOCTYPE html>",
-    "<html lang=\"en\">",
-    "<head>",
-    "  <meta charset=\"UTF-8\">",
-    "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-    "  <title>Invalid link</title>",
-    "  <style>",
-    "    body { font-family: sans-serif; max-width: 480px; margin: 80px auto; padding: 0 24px; color: #111; }",
-    "    h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }",
-    "    p { color: #555; }",
-    "  </style>",
-    "</head>",
-    "<body>",
-    "  <h1>Invalid link</h1>",
-    "  <p>This unsubscribe link is invalid. It may have been corrupted or is no longer valid.</p>",
-    "</body>",
-    "</html>",
-  ].join("\n");
+  return pageShell(
+    DEFAULT_BRAND,
+    "Invalid link",
+    [
+      "      <h1>Invalid link</h1>",
+      "      <p>This unsubscribe link is invalid. It may have been corrupted or is no longer valid.</p>",
+    ].join("\n"),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -376,8 +506,10 @@ const unsubscribeRoutes: FastifyPluginAsync = async (app) => {
       return reply.send(unsubscribeErrorHtml());
     }
 
+    // Read-only brand lookup for a signature-valid token. Still no write.
+    const brand = await loadPageBrand(request.server.db, verifyResult.payload.tenantId);
     reply.status(200).header("Content-Type", "text/html; charset=utf-8");
-    return reply.send(unsubscribePageHtml(token));
+    return reply.send(unsubscribePageHtml(token, brand));
   });
 
   // ---------------------------------------------------------------------------
@@ -436,8 +568,9 @@ const unsubscribeRoutes: FastifyPluginAsync = async (app) => {
       return { unsubscribed: true };
     }
 
+    const brand = await loadPageBrand(db, outcome.tenantId);
     reply.status(200).header("Content-Type", "text/html; charset=utf-8");
-    return reply.send(unsubscribeSuccessHtml());
+    return reply.send(unsubscribeSuccessHtml(brand));
   });
 };
 

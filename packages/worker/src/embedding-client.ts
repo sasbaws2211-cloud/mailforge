@@ -13,10 +13,10 @@
  *
  * Mirror side: PUBLIC (packages/worker is mirrored).
  */
-import { eq, and } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { llmConfigs } from "@claros/db/schema";
-import { decrypt, parseEncryptionKey } from "@claros/adapters";
+import { estimateTokens, type LlmSource } from "@mailforge/core";
+import { loadLlmCandidates, recordLlmUsage } from "@mailforge/db/llm";
+import { decrypt, parseEncryptionKey } from "@mailforge/adapters";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,6 +66,10 @@ export interface EmbeddingProviderResolved {
   apiKey: string;
   baseUrl: string;
   embeddingModel: string;
+  /** Whose key and endpoint: the customer's own, or the operator's (Mailforge AI). */
+  source: LlmSource;
+  /** Provider label, for the usage record. */
+  provider: string;
 }
 
 export interface EmbeddingProviderFailure {
@@ -97,14 +101,10 @@ export async function resolveEmbeddingProvider(
   db: Db,
   tenantId: string,
 ): Promise<EmbeddingProviderResult> {
-  // Read the tenant's active LLM config
-  const llmRows = await db
-    .select()
-    .from(llmConfigs)
-    .where(and(eq(llmConfigs.tenantId, tenantId), eq(llmConfigs.isActive, true)))
-    .limit(1);
+  // The workspace's own key, else the operator's providers (primary, then fallback).
+  const found = await loadLlmCandidates(db, tenantId);
 
-  if (llmRows.length === 0) {
+  if (found.candidates.length === 0) {
     return {
       ok: false,
       permanent: true,
@@ -113,8 +113,6 @@ export async function resolveEmbeddingProvider(
         "Add an LLM provider in Settings before KB entries can be embedded.",
     };
   }
-
-  const llmConfig = llmRows[0]!;
 
   const encryptionKeyEnv = process.env.ENCRYPTION_KEY;
   if (!encryptionKeyEnv) {
@@ -125,11 +123,11 @@ export async function resolveEmbeddingProvider(
     };
   }
 
-  let providerConfig: EmbeddingProviderConfig;
+  let key: Buffer;
+  const decoded: Array<{ source: LlmSource; provider: string; config: EmbeddingProviderConfig }> = [];
+  let firstError: string | null = null;
   try {
-    const key = parseEncryptionKey(encryptionKeyEnv);
-    const decrypted = decrypt(llmConfig.config, key);
-    providerConfig = JSON.parse(decrypted) as EmbeddingProviderConfig;
+    key = parseEncryptionKey(encryptionKeyEnv);
   } catch (err) {
     return {
       ok: false,
@@ -137,13 +135,60 @@ export async function resolveEmbeddingProvider(
       reason: `Failed to decrypt LLM configuration: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+  for (const c of found.candidates) {
+    try {
+      decoded.push({
+        source: c.source,
+        provider: c.provider,
+        config: JSON.parse(decrypt(c.config, key)) as EmbeddingProviderConfig,
+      });
+    } catch (err) {
+      firstError ??= `Failed to decrypt LLM configuration: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+  if (decoded.length === 0) {
+    return { ok: false, permanent: true, reason: firstError ?? "No usable LLM configuration." };
+  }
 
+  // Between the operator's providers, prefer one that names an embedding model:
+  // the primary may be a chat-only provider with no embeddings endpoint.
+  const chosen = decoded.find((d) => d.config.embedding_model) ?? decoded[0]!;
   return {
     ok: true,
-    apiKey: providerConfig.apiKey,
-    baseUrl: providerConfig.baseUrl.replace(/\/+$/, ""),
-    embeddingModel: providerConfig.embedding_model ?? DEFAULT_EMBEDDING_MODEL,
+    apiKey: chosen.config.apiKey,
+    baseUrl: chosen.config.baseUrl.replace(/\/+$/, ""),
+    embeddingModel: chosen.config.embedding_model ?? DEFAULT_EMBEDDING_MODEL,
+    source: chosen.source,
+    provider: chosen.provider,
   };
+}
+
+/**
+ * Record one embedding call in the usage log. Providers return no token count
+ * on this path, so it is estimated from the text. Counted toward the month's
+ * Mailforge AI tokens like any other call, but never blocked by the allowance:
+ * embeddings cost a fraction of chat and a refused one would mark a knowledge
+ * base entry as failed.
+ */
+export async function recordEmbeddingUsage(
+  db: Db,
+  tenantId: string,
+  resolved: EmbeddingProviderResolved,
+  input: string,
+  ok: boolean,
+): Promise<void> {
+  const tokens = ok ? estimateTokens(input) : 0;
+  await recordLlmUsage(db, {
+    tenantId,
+    feature: "embedding",
+    source: resolved.source,
+    provider: resolved.provider,
+    model: resolved.embeddingModel,
+    promptTokens: tokens,
+    completionTokens: 0,
+    totalTokens: tokens,
+    ok,
+  });
 }
 
 // ---------------------------------------------------------------------------

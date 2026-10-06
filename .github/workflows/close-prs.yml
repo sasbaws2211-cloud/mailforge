@@ -17,16 +17,16 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              body: `Thank you for your interest in contributing to Claros!
+              body: `Thank you for your interest in contributing to Mailforge!
 
-            Claros uses an open source, not open contribution model (similar to SQLite). Development happens in a private repository and releases are mirrored here. Pull requests are not accepted.
+            Mailforge uses an open source, not open contribution model (similar to SQLite). Development happens in a private repository and releases are mirrored here. Pull requests are not accepted.
 
             **How you can help instead:**
-            - Report bugs via [Issues](https://github.com/claroshq/claros/issues)
+            - Report bugs via [Issues](https://github.com/sasbaws2211-cloud/mailforge/issues)
             - Request features via Issues
             - Report security issues privately (see SECURITY.md)
 
-            Please see [CONTRIBUTING.md](https://github.com/claroshq/claros/blob/main/CONTRIBUTING.md) for details on this model and why it exists.
+            Please see [CONTRIBUTING.md](https://github.com/sasbaws2211-cloud/mailforge/blob/main/CONTRIBUTING.md) for details on this model and why it exists.
 
             This PR will be closed automatically. This is not personal - it is how the project operates.`
             });

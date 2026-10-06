@@ -57,8 +57,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { eq, and, sql } from "drizzle-orm";
-import { kbEntries } from "@claros/db/schema";
-import { QUEUE } from "@claros/core";
+import { kbEntries } from "@mailforge/db/schema";
+import { QUEUE } from "@mailforge/core";
 import type { Db } from "../plugins/db.js";
 
 // ---------------------------------------------------------------------------

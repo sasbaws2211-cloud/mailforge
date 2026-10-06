@@ -10,13 +10,13 @@
  *
  * Key kinds:
  *   publishable - browser-embeddable, write-only, optional origin allowlist,
- *                 stricter rate limit. Prefix cl_pub_.
- *   secret      - server-side. Prefix cl_live_ (matches the pre-existing
+ *                 stricter rate limit. Prefix mf_pub_.
+ *   secret      - server-side. Prefix mf_live_ (matches the pre-existing
  *                 README convention).
  *
  * Only the SHA-256 hash of a key is stored. The raw value is returned by
  * POST once and is unrecoverable afterwards; the prefix column supports
- * masked display (cl_pub_ab...).
+ * masked display (mf_pub_ab...).
  *
  * GET /v1/ingestion/status powers the "waiting for your first event"
  * indicator on the Integrate screen. Events queries are bounded to recent
@@ -30,7 +30,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
-import { apiKeys, contacts, events } from "@claros/db/schema";
+import { apiKeys, contacts, events } from "@mailforge/db/schema";
 import type { Db } from "../plugins/db.js";
 
 // ---------------------------------------------------------------------------
@@ -160,7 +160,7 @@ const ingestionRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = request.tenant!.id;
 
     const raw =
-      (kind === "publishable" ? "cl_pub_" : "cl_live_") +
+      (kind === "publishable" ? "mf_pub_" : "mf_live_") +
       randomBytes(32).toString("base64url");
     const keyHash = createHash("sha256").update(raw).digest("hex");
 

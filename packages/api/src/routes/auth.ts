@@ -29,13 +29,17 @@ import {
   magicLinkTokens,
   transportConfigs,
   tenants,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 import {
   resolveTransportAdapter,
   type TransportAdapter,
-} from "@claros/adapters";
+} from "@mailforge/adapters";
 import { buildLoginEmail, type TransactionalEmailInput } from "../transactional-email.js";
+import { getPlatformTransport } from "../platform-mailer.js";
+import { sendWelcomeEmailOnce } from "../onboarding/welcome.js";
 import type { Db } from "../plugins/db.js";
+import { MARK_SVG } from "../marketing/layout.js";
+import { isPlatformAdmin } from "../admin/platform-admins.js";
 
 /** Token TTL in minutes. */
 const TOKEN_TTL_MINUTES = 10;
@@ -44,7 +48,7 @@ const TOKEN_TTL_MINUTES = 10;
 const SESSION_TTL_DAYS = 30;
 
 /** Cookie name for session ID. */
-export const SESSION_COOKIE_NAME = "claros_session";
+export const SESSION_COOKIE_NAME = "mailforge_session";
 
 /**
  * Generate a cryptographically random token (URL-safe base64).
@@ -80,11 +84,13 @@ export function isConsoleLoginAllowed(): boolean {
 }
 
 export interface AuthRouteOptions {
+  /** False when the admin console is its own deployment: /auth/me then never reports platformAdmin. */
+  adminEmbedded?: boolean;
   /**
    * Base URL of the API server (no trailing slash). Retained for interface
    * compatibility but not currently used in auth route logic. The magic link
    * verify URL is built from dashboardUrl (see below), not baseUrl, because
-   * in Cloud the verify link must point at app.claros.org where the SPA lives
+   * in Cloud the verify link must point at app.mailforge.org where the SPA lives
    * and the Vite dev proxy forwards /auth/* to Fastify.
    */
   baseUrl: string;
@@ -132,7 +138,7 @@ export interface AuthRouteOptions {
  *   create an unrecoverable lockout for the operator. Login links bypass suppression
  *   entirely. This is stated plainly: suppression does not apply to auth email.
  */
-async function resolveAuthTransport(
+export async function resolveAuthTransport(
   db: Db,
   tenantId: string,
 ): Promise<{ adapter: TransportAdapter; fromEmail: string; fromName: string | null } | null> {
@@ -154,7 +160,7 @@ async function resolveAuthTransport(
   const row = rows.rows[0]!;
 
   // Delegate credential decryption + adapter construction to the shared function
-  // in @claros/adapters. Same code path as the drain worker.
+  // in @mailforge/adapters. Same code path as the drain worker.
   const result = resolveTransportAdapter(row.provider, row.config);
   if (!result.ok) return null;
 
@@ -174,7 +180,7 @@ function buildLoginEmailHtml(loginUrl: string, _brand?: unknown): string {
   // Returns a minimal branded HTML through the shell with defaults.
   const { html } = buildLoginEmail(loginUrl, TOKEN_TTL_MINUTES, {
     brand: {},
-    tenantName: "Claros",
+    tenantName: "Mailforge",
   });
   return html;
 }
@@ -182,7 +188,7 @@ function buildLoginEmailHtml(loginUrl: string, _brand?: unknown): string {
 function buildLoginEmailText(loginUrl: string): string {
   const { text } = buildLoginEmail(loginUrl, TOKEN_TTL_MINUTES, {
     brand: {},
-    tenantName: "Claros",
+    tenantName: "Mailforge",
   });
   return text;
 }
@@ -215,7 +221,7 @@ function renderVerifyPage(email: string, token: string): string {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex" />
-    <title>Sign in to Claros</title>
+    <title>Sign in to Mailforge</title>
     <style>
       body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f7f7f9; color: #26282e; font-family: system-ui, sans-serif; }
       main { width: 100%; max-width: 360px; padding: 24px; text-align: center; }
@@ -227,12 +233,8 @@ function renderVerifyPage(email: string, token: string): string {
   </head>
   <body>
     <main>
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <g transform="translate(12 12) rotate(90)">
-          <path d="M0 -10.8 C0 -10.8 -7.8 -2.5 -7.8 1.6 a7.8 7.8 0 0 0 15.6 0 C7.8 -2.5 0 -10.8 0 -10.8 Z M0 -2.4 a3.7 3.7 0 1 0 0.001 0 Z" fill="#008fba" fill-rule="evenodd" />
-        </g>
-      </svg>
-      <h1>Sign in to Claros</h1>
+      <span style="display:inline-flex;color:#b8541a">${MARK_SVG}</span>
+      <h1>Sign in to Mailforge</h1>
       <p>You are signing in as <strong>${escapeHtml(email)}</strong>.</p>
       <form method="post" action="/auth/verify">
         <input type="hidden" name="token" value="${escapeHtmlAttr(token)}" />
@@ -354,7 +356,12 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
 
       const hasTransport = transports.length > 0;
 
-      if (!hasTransport && isConsoleLoginAllowed()) {
+      // A workspace with no transport of its own (for example one just created
+      // through public signup) falls back to the operator's platform sender,
+      // when one is configured. Null when not configured: behavior unchanged.
+      const platformTransport = hasTransport ? null : getPlatformTransport();
+
+      if (!hasTransport && !platformTransport && isConsoleLoginAllowed()) {
         // Console fallback: print the login URL to server logs.
         // This path only fires in non-production environments.
         request.log.info(
@@ -375,7 +382,7 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
         return { message: "Login link printed to server console." };
       }
 
-      if (!hasTransport && !isConsoleLoginAllowed()) {
+      if (!hasTransport && !platformTransport && !isConsoleLoginAllowed()) {
         // Production with no transport: cannot send or print the link.
         // This should not happen in Cloud (transport always exists).
         // Log as error for operator visibility.
@@ -389,7 +396,9 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
       // Has transport: attempt to send the login link via email.
       // This is transactional auth email - bypasses drain, throttle, suppression,
       // and compliance headers. See resolveAuthTransport() for reasoning.
-      const transport = await resolveAuthTransport(db, user.tenantId);
+      const transport = hasTransport
+        ? await resolveAuthTransport(db, user.tenantId)
+        : platformTransport;
 
       // Resolve brand settings for the branded email shell
       const tenantRows = await db
@@ -402,7 +411,7 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
       const brand = (tenantSettings.brand as Record<string, unknown> | undefined) ?? {};
       const emailInput: TransactionalEmailInput = {
         brand: brand as TransactionalEmailInput["brand"],
-        tenantName: tenantRow?.name ?? "Claros",
+        tenantName: tenantRow?.name ?? "Mailforge",
       };
       const { html: brandedHtml, text: brandedText } = buildLoginEmail(
         loginUrl, TOKEN_TTL_MINUTES, emailInput,
@@ -627,6 +636,13 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
         .set({ lastLoginAt: now })
         .where(eq(users.id, tokenRow.userId));
 
+      // First sign-in of a signup workspace: send the welcome email. Not awaited, and it
+      // never throws, so it cannot slow or break sign-in.
+      void sendWelcomeEmailOnce(db, tokenRow.tenantId, tokenRow.userId, {
+        dashboardUrl,
+        log: request.log,
+      });
+
       return reply.redirect(`${dashboardUrl}/`, 302);
     },
   );
@@ -691,6 +707,11 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
     }
 
     const user = userRows[0]!;
+    const tenantRows = await db
+      .select({ suspendedAt: tenants.suspendedAt, deletionScheduledAt: tenants.deletionScheduledAt })
+      .from(tenants)
+      .where(eq(tenants.id, session.tenantId))
+      .limit(1);
     return {
       user: {
         id: user.id,
@@ -699,6 +720,9 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
         role: user.role,
         tenantId: session.tenantId,
       },
+      platformAdmin: opts.adminEmbedded !== false && isPlatformAdmin(user.email),
+      suspended: tenantRows[0]?.suspendedAt != null,
+      pendingDeletion: tenantRows[0]?.deletionScheduledAt ? tenantRows[0].deletionScheduledAt.toISOString() : null,
     };
   });
 };

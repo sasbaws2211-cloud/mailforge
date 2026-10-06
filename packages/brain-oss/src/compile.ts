@@ -9,7 +9,7 @@
  *
  * Mirror side: PUBLIC (packages/brain-oss is mirrored).
  */
-import { compiledPlanSchema, type CompiledPlan } from "@claros/core";
+import { compiledPlanSchema, type CompiledPlan } from "@mailforge/core";
 import type { LlmProvider } from "./providers/types.js";
 import { buildCompileMessages, type CompilePromptContext } from "./prompts/compile.js";
 

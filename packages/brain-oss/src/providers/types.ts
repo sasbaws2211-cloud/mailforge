@@ -57,4 +57,7 @@ export interface LlmProviderConfig {
   apiKey: string;
   baseUrl: string;
   model: string;
+  /** What the provider charges, in US dollars per million tokens. Optional; used only to work out cost. */
+  input_price?: number;
+  output_price?: number;
 }

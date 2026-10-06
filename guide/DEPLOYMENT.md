@@ -22,7 +22,7 @@ You may remove the `postgres` service from docker-compose.yml entirely once exte
 
 ### Why not SQLite?
 
-Claros requires Postgres specifically. SQLite cannot substitute. The reasons:
+Mailforge requires Postgres specifically. SQLite cannot substitute. The reasons:
 
 - **pgvector**: knowledge base embeddings use `vector(1536)` columns with cosine-distance indexes
 - **Table partitioning**: the `events` table is range-partitioned by `received_at` (monthly)
@@ -61,11 +61,11 @@ When running multiple containers (API replicas, separate worker), these values M
 | `UNSUBSCRIBE_SIGNING_KEY` | Instance A signs unsubscribe tokens; instance B cannot validate them. Unsubscribe clicks fail with 400. Symptom: "unsubscribe broken" reports from recipients, compliance risk |
 | `BASE_URL` | Different base URLs mean different unsubscribe links baked into email headers. Once delivered, these links are permanent. Symptom: some emails have working unsubscribe links, others do not |
 
-The `claros install` command generates secrets once and writes them to `.env`. When deploying to multiple instances, copy the same `.env` values (or inject them from your secret manager) to every container.
+The `mailforge install` command generates secrets once and writes them to `.env`. When deploying to multiple instances, copy the same `.env` values (or inject them from your secret manager) to every container.
 
 ### What happens if you lose the keys
 
-- **Lost `ENCRYPTION_KEY`**: all stored transport and LLM credentials become undecryptable. Re-enter them via `claros transport set` / `claros llm set`. No data loss, but operational downtime.
+- **Lost `ENCRYPTION_KEY`**: all stored transport and LLM credentials become undecryptable. Re-enter them via `mailforge transport set` / `mailforge llm set`. No data loss, but operational downtime.
 - **Lost `UNSUBSCRIBE_SIGNING_KEY`**: all one-click unsubscribe links in already-delivered email stop working. This is a compliance failure. You must generate a new key and accept that old links are broken. New email will use the new key.
 
 Both keys should be backed up in a secrets manager alongside your database credentials.
@@ -76,7 +76,7 @@ Both keys should be backed up in a secrets manager alongside your database crede
 
 The claim token (the first-login URL) is stored in memory, not in the database. If you run multiple API instances, each generates its own claim token at boot. Only one needs to be used - the first claim creates the owner user, and all other instances' claim URLs become invalid (they check the users table before accepting).
 
-For automated provisioning (CI, infrastructure-as-code), use `SEED_ADMIN_EMAIL` instead. It creates the owner at boot without a browser claim. Then use `claros login-link <email>` to obtain a login URL.
+For automated provisioning (CI, infrastructure-as-code), use `SEED_ADMIN_EMAIL` instead. It creates the owner at boot without a browser claim. Then use `mailforge login-link <email>` to obtain a login URL.
 
 ---
 
@@ -95,7 +95,7 @@ The claim token (the first-login URL) lives in process memory, not the database.
 **Limitation:** if you start multiple API replicas before claiming, each generates its own token. A claim URL from instance A fails if the load balancer routes the request to instance B. The 403 page explains this clearly.
 
 **Recommended sequence:**
-1. Run `claros install` (one-off, before any instances are running)
+1. Run `mailforge install` (one-off, before any instances are running)
 2. Start a SINGLE API instance
 3. Claim the account via the logged URL
 4. Then scale to multiple replicas
@@ -107,7 +107,42 @@ After the first owner exists, the claim surface is gone permanently and this lim
 ## Upgrading in a multi-instance setup
 
 1. Take a database backup (`pg_dump`)
-2. Run migrations ONCE (either from a one-off container with `CLAROS_MIGRATE_ON_BOOT=true`, or from a source checkout with `pnpm db:migrate`)
+2. Run migrations ONCE (either from a one-off container with `MAILFORGE_MIGRATE_ON_BOOT=true`, or from a source checkout with `pnpm db:migrate`)
 3. Roll new containers. Migrations are expand-contract: new code always works against the previous schema
 
 Do not let every replica migrate simultaneously. Use a leader-election pattern or a dedicated migration job.
+
+## Customer-supplied SMTP servers (hosted service)
+
+A customer can connect their own mail server in Settings, and Mailforge connects to whatever host
+and port they type, both to check the settings and on every send. On a service shared by many
+customers that would let anyone point your server at your own network: the database, other
+containers, `localhost`, or the cloud metadata address `169.254.169.254`.
+
+So on a hosted install (`MAILFORGE_PUBLIC_SITE=true` or `MAILFORGE_ENFORCE_PLANS=true`) the
+server applies these rules to every customer-supplied SMTP server:
+
+- The host name is resolved and the connection is **refused if any of its addresses is** loopback,
+  private (10/8, 172.16/12, 192.168/16), link-local (169.254/16), carrier-grade NAT, reserved or
+  multicast, in IPv4 or IPv6 (including IPv4 hidden inside IPv6 forms). Odd spellings such as
+  `2130706433` or `0x7f.1` are caught because the check is on the resolved address.
+- The connection goes to the address that was checked, with the certificate still verified against
+  the name, and the check is repeated on every send, so a name that changes its DNS answer later
+  (DNS rebinding) cannot get through.
+- Only the usual mail ports are allowed: 25, 465, 587, 2465, 2525.
+- A setting saved before this existed is refused at send time too, with the messages left queued
+  (not failed) until the customer fixes it. The customer is told to use a public SMTP server and
+  is never told anything about your network.
+
+Self-hosted installs are unrestricted (a local relay is normal there). Settings:
+
+| Variable | Meaning |
+|---|---|
+| `MAILFORGE_RESTRICT_SMTP_HOSTS` | `true` or `false` to force the rules on or off. Default: on for a hosted install, off otherwise. |
+| `MAILFORGE_SMTP_ALLOWED_HOSTS` | Comma list of trusted hosts that skip the address and port checks, for example a relay inside your own network. Match is on the exact name or address. |
+| `MAILFORGE_SMTP_ALLOWED_PORTS` | Comma list that replaces the default allowed ports. |
+
+The platform's own mail sender (`PLATFORM_*`, used for login links and notices) is operator
+configuration, is not a customer-supplied server, and is not restricted. In the local stack the
+demo workspace sends through the Mailpit container, so `.env` sets
+`MAILFORGE_SMTP_ALLOWED_HOSTS=mailpit`. Resend is unaffected: it always talks to Resend's own API.

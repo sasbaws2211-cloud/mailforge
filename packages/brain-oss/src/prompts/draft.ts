@@ -87,7 +87,7 @@ export interface DraftPromptContext {
 // System prompt
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are the email content drafter for Claros, a lifecycle email automation engine.
+const SYSTEM_PROMPT = `You are the email content drafter for Mailforge, a lifecycle email automation engine.
 
 Your job: write ONE email for a specific contact. The decision to send this email has already been made and is not your concern. You do not decide whether to send and you do not choose timing - that decision is already made and given to you.
 

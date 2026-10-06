@@ -7,7 +7,7 @@
  * Two distinct editing experiences:
  *   1. Prompt-defined flows (source: "manual" | "brain_suggested") -
  *      the prompt is the primary surface. The user writes what the flow
- *      should do, Claros compiles it into a plan, and the brain drafts
+ *      should do, Mailforge compiles it into a plan, and the brain drafts
  *      each email per contact at send time.
  *   2. Library flows (source: "library") - pre-built flows with fixed
  *      email copy in templates. No prompt, no LLM needed. The editor
@@ -1029,7 +1029,9 @@ export default function FlowEditorPage() {
   const isFixedContentFlow = existingFlow?.content_mode === "fixed_content" && !isLibraryFlow;
 
   // Whether an LLM is configured (for AI draft button)
-  const hasLlm = llmQuery.data?.llm !== null && llmQuery.data?.llm !== undefined;
+  // AI is available when the workspace has its own key or can use Mailforge AI.
+  const hasLlm =
+    llmQuery.data !== undefined && (llmQuery.data.llm !== null || (llmQuery.data.ai?.source ?? "none") !== "none");
 
   // prompt_source is read-only when the flow is active (422 from the API).
   // Archived flows are entirely read-only: archived is terminal.
@@ -1482,7 +1484,7 @@ export default function FlowEditorPage() {
       <div>
         {!isNew && <Label htmlFor="prompt-source">Prompt</Label>}
         <p className="mb-3 text-[14px] leading-relaxed text-muted-foreground">
-          Describe what this flow should do, in your own words. Claros
+          Describe what this flow should do, in your own words. Mailforge
           compiles it into a deterministic plan you review before anything is
           sent. The AI then drafts each email for each contact individually.
         </p>

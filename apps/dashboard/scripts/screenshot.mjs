@@ -2,7 +2,7 @@
  * Screenshot harness for the dashboard.
  *
  * Fresh set of screenshots:
- *   docker compose exec app claros login-link <email>   # copy the URL
+ *   docker compose exec app mailforge login-link <email>   # copy the URL
  *   node scripts/screenshot.mjs --base http://localhost:5173 --verify-url '<url>'
  * or store the URL in .screenshots/.verify-url and run without the flag.
  *
@@ -386,19 +386,19 @@ for (const scheme of ["light", "dark"]) {
         "<p>Hi there,</p><p>We noticed your workspace has been quiet for two weeks. " +
         "Teams usually come back for one of three reasons, and we made a short guide for each.</p>" +
         '<p><a href="https://example.com" style="display:inline-block;background:#2f5dbd;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none">See the guides</a></p>' +
-        "<p>Claros</p><script>alert('must-not-run')</script></body></html>",
+        "<p>Mailforge</p><script>alert('must-not-run')</script></body></html>",
       brain_reasoning:
         "The contact entered at_risk 14 days ago after steady engagement. The playbook says the first touch should be low-pressure and question-led, not a discount. I kept it to three sentences and one link.",
     }),
     mkMsg(2, {
       subject: "Your win-back offer inside",
       body_text:
-        "Hi,\n\nHere is 20% off your next billing period, valid until Friday.\n\nClaros",
+        "Hi,\n\nHere is 20% off your next billing period, valid until Friday.\n\nMailforge",
       brain_action_type: "send_email",
     }),
     mkMsg(3, {
       subject: "One thing before you go",
-      body_text: "Hi,\n\nA single question: what nearly stopped you from upgrading?\n\nClaros",
+      body_text: "Hi,\n\nA single question: what nearly stopped you from upgrading?\n\nMailforge",
     }),
   ];
   await context.route("**/v1/messages", (route) =>

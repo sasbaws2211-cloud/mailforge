@@ -73,8 +73,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { eq, and, sql } from "drizzle-orm";
-import { lifecycleMessages, suppressions, messageEvents } from "@claros/db/schema";
-import { decrypt, parseEncryptionKey } from "@claros/adapters";
+import { lifecycleMessages, suppressions, messageEvents } from "@mailforge/db/schema";
+import { decrypt, parseEncryptionKey } from "@mailforge/adapters";
 import type { Db } from "../../plugins/db.js";
 
 // ---------------------------------------------------------------------------
@@ -512,7 +512,7 @@ export async function processResendWebhookEvent(
 
   if (messageRows.length === 0) {
     // Unknown provider message ID for this tenant - acknowledge without error.
-    // This can happen for emails sent before Claros was integrated,
+    // This can happen for emails sent before Mailforge was integrated,
     // for messages that were purged, or for events belonging to another tenant.
     // Do not return an error status because that would cause Resend to retry.
     return { action: "ignored_unknown_message" };

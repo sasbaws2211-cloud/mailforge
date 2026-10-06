@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in Claros
+about: Report a bug in Mailforge
 title: "[Bug] "
 labels: bug
 assignees: ""
@@ -26,7 +26,7 @@ What actually happened.
 
 ## Environment
 
-- Claros version (tag): 
+- Mailforge version (tag): 
 - OS: 
 - Docker version: 
 - Postgres version: 
@@ -44,4 +44,4 @@ Any other context about the problem.
 
 ---
 
-**Note:** Claros is maintained by a solo developer. There is no SLA on response times, but clear bug reports with reproduction steps are prioritized and appreciated.
+**Note:** Mailforge is maintained by a solo developer. There is no SLA on response times, but clear bug reports with reproduction steps are prioritized and appreciated.

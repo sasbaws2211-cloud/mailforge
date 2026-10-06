@@ -30,7 +30,7 @@ import {
   flows,
   flowMemberships,
   lifecycleMessages,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 
 // ---------------------------------------------------------------------------
 // Mocks: brain-oss decide and draft, and provider-resolver
@@ -41,10 +41,10 @@ const mockDraft = vi.fn();
 const mockAssess = vi.fn();
 const mockResolveTenantProvider = vi.fn();
 
-vi.mock("@claros/brain-oss", async () => {
+vi.mock("@mailforge/brain-oss", async () => {
   // Import the real module to get the prompt builders and other pure functions.
   // Only the three LLM call functions (decide, draft, assess) are mocked.
-  const real = await vi.importActual<typeof import("@claros/brain-oss")>("@claros/brain-oss");
+  const real = await vi.importActual<typeof import("@mailforge/brain-oss")>("@mailforge/brain-oss");
   return {
     ...real,
     decide: (...args: unknown[]) => mockDecide(...args),
@@ -72,12 +72,13 @@ if (!TEST_DB_URL) {
     `[content.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 
 let pool: pg.Pool;
+let lockClient: pg.PoolClient | undefined;
 let db: ReturnType<typeof drizzle>;
 let dbAvailable = false;
 let testTenantId: string;
@@ -92,6 +93,9 @@ beforeAll(async () => {
     await pool.query("SELECT 1");
     db = drizzle(pool);
     dbAvailable = true;
+    // These files share global tables (platform_llm_configs, platform_alert_state), so only one runs at a time.
+    lockClient = await pool.connect();
+    await lockClient.query("SELECT pg_advisory_lock(7770001)");
   } catch (err) {
     const inCI = process.env.CI === "true";
     if (inCI) {
@@ -170,6 +174,10 @@ beforeEach(async () => {
 afterAll(async () => {
   if (dbAvailable) {
     await cleanup();
+  }
+  if (lockClient) {
+    await lockClient.query("SELECT pg_advisory_unlock(7770001)");
+    lockClient.release();
   }
   await pool.end();
 });

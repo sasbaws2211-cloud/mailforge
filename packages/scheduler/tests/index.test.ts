@@ -1,5 +1,5 @@
 /**
- * Tests for @claros/scheduler: startScheduler cron registration pattern.
+ * Tests for @mailforge/scheduler: startScheduler cron registration pattern.
  *
  * Covers the one schedule defined in task 5 (SCAN every 15 min). Pattern
  * tests confirm:
@@ -8,12 +8,12 @@
  * - startScheduler never calls boss.work() (handler registration is the worker's job)
  * - the call is idempotent (pg-boss schedule() is an upsert)
  *
- * QUEUE is imported from @claros/core. Scheduler has no dependency on
- * @claros/worker - the queue name string is the only coupling.
+ * QUEUE is imported from @mailforge/core. Scheduler has no dependency on
+ * @mailforge/worker - the queue name string is the only coupling.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { QUEUE } from "@claros/core";
-import { CLAROS_SCHEDULER_VERSION, startScheduler } from "../src/index.js";
+import { QUEUE } from "@mailforge/core";
+import { MAILFORGE_SCHEDULER_VERSION, startScheduler } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // pg-boss mock
@@ -40,9 +40,9 @@ vi.mock("pg-boss", async () => {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("@claros/scheduler - version", () => {
+describe("@mailforge/scheduler - version", () => {
   it("exports version", () => {
-    expect(CLAROS_SCHEDULER_VERSION).toBe("0.0.0");
+    expect(MAILFORGE_SCHEDULER_VERSION).toBe("0.0.0");
   });
 });
 

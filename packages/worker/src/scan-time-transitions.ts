@@ -3,7 +3,7 @@
  *
  * Iterates all tenants, then paginates contacts in states that have time-driven
  * transitions (engaged, at_risk, dormant, resurrected, activated). For each
- * contact, calls evaluateTimeTransition from @claros/core. If a transition is
+ * contact, calls evaluateTimeTransition from @mailforge/core. If a transition is
  * indicated, applies it via CAS on contacts.lifecycle_state and writes an audit
  * row to lifecycle_transitions.
  *
@@ -16,13 +16,13 @@
  */
 import { eq, and, inArray, gt } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { contacts, tenants, lifecycleTransitions } from "@claros/db/schema";
+import { contacts, tenants, lifecycleTransitions } from "@mailforge/db/schema";
 import {
   evaluateTimeTransition,
   resolveLifecycleConfig,
   type LifecycleConfig,
   type LifecycleState,
-} from "@claros/core";
+} from "@mailforge/core";
 
 // ---------------------------------------------------------------------------
 // Constants

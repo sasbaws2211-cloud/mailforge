@@ -8,7 +8,7 @@
  *
  *   docker build --build-arg COMMIT_SHA=<sha> ...
  *
- * which sets CLAROS_COMMIT_SHA in the runner stage ENV. A locally built image
+ * which sets MAILFORGE_COMMIT_SHA in the runner stage ENV. A locally built image
  * without the argument returns "unknown" for commit - this is intentional and
  * never crashes or blocks startup.
  *
@@ -43,9 +43,9 @@ const versionRoute: FastifyPluginAsync<VersionRouteOptions> = async (app, opts) 
       },
     },
     async () => ({
-      commit:  process.env.CLAROS_COMMIT_SHA ?? "unknown",
+      commit:  process.env.MAILFORGE_COMMIT_SHA ?? "unknown",
       edition,
-      builtAt: process.env.CLAROS_BUILT_AT ?? null,
+      builtAt: process.env.MAILFORGE_BUILT_AT ?? null,
     }),
   );
 };

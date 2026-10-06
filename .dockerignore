@@ -1,0 +1,12 @@
+# Keep the build context small and platform-neutral. Dependencies are installed fresh
+# inside the image (pnpm install --frozen-lockfile), so the host's node_modules must not
+# be sent: on Windows they are links to Linux paths that cannot even be read.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+.env
+.env.*
+!.env.example
+**/.turbo
+**/coverage

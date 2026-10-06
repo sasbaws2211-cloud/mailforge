@@ -13,7 +13,7 @@ import { tenants } from "./tenants.js";
  * [impl] Added in task 11. BYO LLM key for flow compilation and content drafting.
  * Follows the transport_configs pattern: one active config per tenant.
  *
- * The `config` column stores an encrypted JSON envelope (see @claros/adapters crypto module).
+ * The `config` column stores an encrypted JSON envelope (see @mailforge/adapters crypto module).
  * Decrypted shape: { "apiKey": "sk-...", "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o" }
  *
  * provider values: openai | anthropic | ollama | custom

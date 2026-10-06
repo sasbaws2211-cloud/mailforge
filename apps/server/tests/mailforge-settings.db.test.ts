@@ -1,5 +1,5 @@
 /**
- * Integration tests for the Claros operator CLI (apps/server/bin/claros.mjs).
+ * Integration tests for the Mailforge operator CLI (apps/server/bin/mailforge.mjs).
  *
  * Tests the unified CLI binary by spawning it as a Node.js subprocess and
  * driving it via stdin.
@@ -14,7 +14,7 @@
  *     - postal-address show: returns the stored address.
  *     - login-link: generates a token row in the DB, prints a URL.
  *
- *   Interactive (CLAROS_SETTINGS_INTERACTIVE=1 + scripted piped answers):
+ *   Interactive (MAILFORGE_SETTINGS_INTERACTIVE=1 + scripted piped answers):
  *     - transport set: prompts for each field; Enter accepts defaults for
  *       optional fields; required fields are filled from the scripted input.
  *     - llm set: same.
@@ -32,8 +32,8 @@
  *       and the drain stops returning skippedNoPostalAddress once set.
  *
  * TTY detection:
- *   The CLI uses process.stdin.isTTY || CLAROS_SETTINGS_INTERACTIVE === "1".
- *   Tests set CLAROS_SETTINGS_INTERACTIVE=1 to force interactive mode through
+ *   The CLI uses process.stdin.isTTY || MAILFORGE_SETTINGS_INTERACTIVE === "1".
+ *   Tests set MAILFORGE_SETTINGS_INTERACTIVE=1 to force interactive mode through
  *   a pipe (a pipe cannot be a real TTY, but we need to cover the prompt path).
  *
  * Shared write path:
@@ -60,23 +60,23 @@ import pg from "pg";
 import { eq, and, sql } from "drizzle-orm";
 import {
   tenants, users, sessions, transportConfigs, llmConfigs, magicLinkTokens,
-} from "@claros/db/schema";
-import { decrypt, parseEncryptionKey, encrypt } from "@claros/adapters";
-import { buildTenantTransportResolver } from "@claros/worker";
-import { processDrainTick, fetchDrainBatchSimple } from "@claros/worker";
+} from "@mailforge/db/schema";
+import { decrypt, parseEncryptionKey, encrypt } from "@mailforge/adapters";
+import { buildTenantTransportResolver } from "@mailforge/worker";
+import { processDrainTick, fetchDrainBatchSimple } from "@mailforge/worker";
 import {
   contacts,
   flows,
   flowMemberships,
   lifecycleMessages,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const CLI_PATH = resolve(repoRoot, "apps/server/bin/claros.mjs");
+const CLI_PATH = resolve(repoRoot, "apps/server/bin/mailforge.mjs");
 
 // ---------------------------------------------------------------------------
 // DB setup
@@ -85,9 +85,9 @@ const CLI_PATH = resolve(repoRoot, "apps/server/bin/claros.mjs");
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) {
   throw new Error(
-    `[claros-cli.test] DATABASE_URL is not set.\n` +
+    `[mailforge-cli.test] DATABASE_URL is not set.\n` +
       `This test requires a Postgres connection. Set it in .env:\n` +
-      `  DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`,
+      `  DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`,
   );
 }
 
@@ -99,7 +99,7 @@ const TEST_WEBHOOK_SECRET = "whsec_CLITestSecretAAAAAAAAAAAAAAAAAAAAAAAAA";
 const TEST_POSTAL_ADDRESS = "1 CLI Test St, Command Town, CT 10001";
 const TEST_SIGNING_KEY = "cli-test-signing-key-do-not-use-in-production";
 const TEST_BASE_URL = "http://localhost:3000";
-const TEST_LOGIN_EMAIL = "cli-test-owner@claros.test";
+const TEST_LOGIN_EMAIL = "cli-test-owner@mailforge.test";
 
 const SLUG = "test-cli-settings";
 
@@ -148,11 +148,11 @@ beforeAll(async () => {
     const inCI = process.env.CI === "true";
     if (inCI) {
       throw new Error(
-        `[claros-cli.test] DATABASE_URL not reachable in CI.\n` +
+        `[mailforge-cli.test] DATABASE_URL not reachable in CI.\n` +
           `URL: ${TEST_DB_URL}\nCause: ${(err as Error).message}`,
       );
     }
-    console.warn("[claros-cli.test] DATABASE_URL not reachable - tests skipped.");
+    console.warn("[mailforge-cli.test] DATABASE_URL not reachable - tests skipped.");
     return;
   }
 
@@ -382,7 +382,7 @@ async function insertApprovedMessage(contactId: string, flowId: string, membersh
 // Tests: non-interactive (piped JSON)
 // ---------------------------------------------------------------------------
 
-describe("claros CLI - non-interactive (piped JSON)", () => {
+describe("mailforge CLI - non-interactive (piped JSON)", () => {
   it("transport set: writes config; DB decrypts to what was written", async () => {
     if (!dbAvailable) return;
 
@@ -623,7 +623,7 @@ describe("claros CLI - non-interactive (piped JSON)", () => {
     const { exitCode } = await runCli(
       ["transport", "set", SLUG],
       scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
+      { MAILFORGE_SETTINGS_INTERACTIVE: "1" },
     );
 
     expect(exitCode).toBe(0);
@@ -636,7 +636,7 @@ describe("claros CLI - non-interactive (piped JSON)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: interactive (CLAROS_SETTINGS_INTERACTIVE=1 + scripted answers)
+// Tests: interactive (MAILFORGE_SETTINGS_INTERACTIVE=1 + scripted answers)
 // ---------------------------------------------------------------------------
 //
 // Scripted input format: each answer is on its own line. The CLI reads answers
@@ -646,7 +646,7 @@ describe("claros CLI - non-interactive (piped JSON)", () => {
 //
 // For optional fields with defaults: send an empty line to accept the default.
 
-describe("claros CLI - interactive (scripted input)", () => {
+describe("mailforge CLI - interactive (scripted input)", () => {
   it("transport set interactive: prompts accepted, config written", async () => {
     if (!dbAvailable) return;
 
@@ -667,7 +667,7 @@ describe("claros CLI - interactive (scripted input)", () => {
     const { exitCode, stdout, stderr } = await runCli(
       ["transport", "set", SLUG],
       scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
+      { MAILFORGE_SETTINGS_INTERACTIVE: "1" },
     );
 
     expect(exitCode).toBe(0);
@@ -709,7 +709,7 @@ describe("claros CLI - interactive (scripted input)", () => {
     const { exitCode, stdout, stderr } = await runCli(
       ["transport", "set", SLUG],
       scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
+      { MAILFORGE_SETTINGS_INTERACTIVE: "1" },
     );
 
     expect(exitCode).toBe(0);
@@ -738,7 +738,7 @@ describe("claros CLI - interactive (scripted input)", () => {
     const { exitCode, stdout, stderr } = await runCli(
       ["transport", "set", SLUG],
       scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
+      { MAILFORGE_SETTINGS_INTERACTIVE: "1" },
     );
 
     expect(exitCode).toBe(0);
@@ -771,7 +771,7 @@ describe("claros CLI - interactive (scripted input)", () => {
     const { exitCode, stdout, stderr } = await runCli(
       ["llm", "set", SLUG],
       scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
+      { MAILFORGE_SETTINGS_INTERACTIVE: "1" },
     );
 
     expect(exitCode).toBe(0);
@@ -817,7 +817,7 @@ describe("claros CLI - interactive (scripted input)", () => {
     const { exitCode } = await runCli(
       ["llm", "set", SLUG],
       scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
+      { MAILFORGE_SETTINGS_INTERACTIVE: "1" },
     );
     expect(exitCode).toBe(0);
 
@@ -843,7 +843,7 @@ describe("claros CLI - interactive (scripted input)", () => {
     const { exitCode } = await runCli(
       ["postal-address", "set", SLUG],
       scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
+      { MAILFORGE_SETTINGS_INTERACTIVE: "1" },
     );
 
     expect(exitCode).toBe(0);
@@ -874,7 +874,7 @@ describe("claros CLI - interactive (scripted input)", () => {
     const { stdout, stderr } = await runCli(
       ["transport", "set", SLUG],
       scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
+      { MAILFORGE_SETTINGS_INTERACTIVE: "1" },
     );
 
     expect(stdout + stderr).not.toContain(TEST_API_KEY);
@@ -899,7 +899,7 @@ describe("claros CLI - interactive (scripted input)", () => {
     const { exitCode } = await runCli(
       ["transport", "set", SLUG],
       scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
+      { MAILFORGE_SETTINGS_INTERACTIVE: "1" },
     );
 
     expect(exitCode).toBe(0);
@@ -915,7 +915,7 @@ describe("claros CLI - interactive (scripted input)", () => {
 // Tests: postal address and drain interaction
 // ---------------------------------------------------------------------------
 
-describe("claros CLI - postal address and drain", () => {
+describe("mailforge CLI - postal address and drain", () => {
   it("postal address set via CLI unblocks drain", async () => {
     if (!dbAvailable) return;
 
@@ -1019,7 +1019,7 @@ describe("claros CLI - postal address and drain", () => {
 // Tests: shared write path - CLI-written configs are resolved by the resolvers
 // ---------------------------------------------------------------------------
 
-describe("claros CLI - shared write path", () => {
+describe("mailforge CLI - shared write path", () => {
   it("transport config written by CLI is resolved by buildTenantTransportResolver", async () => {
     if (!dbAvailable) return;
 
@@ -1046,7 +1046,7 @@ describe("claros CLI - shared write path", () => {
 // Tests: login-link command
 // ---------------------------------------------------------------------------
 
-describe("claros CLI - login-link", () => {
+describe("mailforge CLI - login-link", () => {
   it("generates a magic_link_tokens row and prints a URL", async () => {
     if (!dbAvailable) return;
 
@@ -1100,7 +1100,7 @@ describe("claros CLI - login-link", () => {
 // ---------------------------------------------------------------------------
 //
 // The setup wizard uses interactive prompts. Tests drive it via
-// CLAROS_SETTINGS_INTERACTIVE=1 with scripted piped input.
+// MAILFORGE_SETTINGS_INTERACTIVE=1 with scripted piped input.
 //
 // Scripted input for the full wizard (all steps configured, no replacements):
 //   Step 1 (postal address not set): <address> then the summary "y"
@@ -1113,7 +1113,7 @@ describe("claros CLI - login-link", () => {
 // When pressing Enter at the provider prompt for LLM or transport, that step
 // is skipped. The wizard reports it as still-missing at the end.
 
-describe("claros CLI - setup wizard", () => {
+describe("mailforge CLI - setup wizard", () => {
   // ---------------------------------------------------------------------------
   // Helper: scripted input that fully configures all three steps.
   // Shared by the two first-time-run variants below.
@@ -1167,7 +1167,7 @@ describe("claros CLI - setup wizard", () => {
       ["setup", SLUG],
       fullSetupInput(),
       {
-        CLAROS_SETTINGS_INTERACTIVE: "1",
+        MAILFORGE_SETTINGS_INTERACTIVE: "1",
         UNSUBSCRIBE_SIGNING_KEY: TEST_SIGNING_KEY,
       },
     );
@@ -1190,14 +1190,14 @@ describe("claros CLI - setup wizard", () => {
     // UNSUBSCRIBE_SIGNING_KEY is explicitly set to empty string here, which
     // the CLI treats as absent (it checks `!!(value ?? "").trim()`). An empty
     // string also prevents the CLI's own .env loader from overriding the value
-    // (the loader skips keys already set in the subprocess env, per claros.mjs:94).
+    // (the loader skips keys already set in the subprocess env, per mailforge.mjs:94).
     // Without this explicit control, the test passes on machines where the
     // developer has the key in .env and fails on CI where the key is absent.
     const { exitCode, stdout, stderr } = await runCli(
       ["setup", SLUG],
       fullSetupInput(),
       {
-        CLAROS_SETTINGS_INTERACTIVE: "1",
+        MAILFORGE_SETTINGS_INTERACTIVE: "1",
         UNSUBSCRIBE_SIGNING_KEY: "",
       },
     );
@@ -1223,7 +1223,7 @@ describe("claros CLI - setup wizard", () => {
     const trimmed = TEST_POSTAL_ADDRESS;
     await db.update(tenants).set({ settings: { postal_address: trimmed } }).where(eq(tenants.id, testTenantId));
     const encKey = parseEncryptionKey(TEST_KEY_BASE64);
-    const { encrypt: encFn } = await import("@claros/adapters");
+    const { encrypt: encFn } = await import("@mailforge/adapters");
     await db.insert(llmConfigs).values({
       tenantId: testTenantId,
       provider: "openai",
@@ -1245,7 +1245,7 @@ describe("claros CLI - setup wizard", () => {
     const { exitCode, stdout } = await runCli(
       ["setup", SLUG],
       scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
+      { MAILFORGE_SETTINGS_INTERACTIVE: "1" },
     );
 
     expect(exitCode).toBe(0);
@@ -1282,7 +1282,7 @@ describe("claros CLI - setup wizard", () => {
     const { exitCode, stdout } = await runCli(
       ["setup", SLUG],
       scriptedInput,
-      { CLAROS_SETTINGS_INTERACTIVE: "1" },
+      { MAILFORGE_SETTINGS_INTERACTIVE: "1" },
     );
 
     expect(exitCode).toBe(0);

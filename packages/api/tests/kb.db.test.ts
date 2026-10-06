@@ -51,7 +51,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import { buildApp } from "../src/index.js";
-import { tenants, users, sessions, apiKeys } from "@claros/db/schema";
+import { tenants, users, sessions, apiKeys } from "@mailforge/db/schema";
 import { randomBytes, createHash } from "node:crypto";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
@@ -61,8 +61,8 @@ if (!TEST_DB_URL) {
     `[kb.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 
@@ -130,7 +130,7 @@ beforeAll(async () => {
     })
     .returning({ id: sessions.id });
   sessionAId = sA!.id;
-  cookieA = `claros_session=${sessionAId}`;
+  cookieA = `mailforge_session=${sessionAId}`;
 
   // API key for wrong-scope test
   rawApiKey = randomBytes(24).toString("base64url");
@@ -416,7 +416,7 @@ describe("KB CRUD", () => {
       // Create an entry as tenant B
       const rB = await app.inject({
         method: "POST", url: "/v1/kb",
-        headers: { cookie: `claros_session=${sessionBId}` },
+        headers: { cookie: `mailforge_session=${sessionBId}` },
         payload: minimalEntry({ title: "Tenant B Private Entry Pag" }),
       });
       const idB = rB.json().id;
@@ -601,7 +601,7 @@ describe("KB CRUD", () => {
       for (let i = 1; i <= 3; i++) {
         await app.inject({
           method: "POST", url: "/v1/kb",
-          headers: { cookie: `claros_session=${sessionBId}` },
+          headers: { cookie: `mailforge_session=${sessionBId}` },
           payload: minimalEntry({ title: `Tenant B Scope Page ${i}` }),
         });
       }
@@ -627,7 +627,7 @@ describe("KB CRUD", () => {
       // Fetch all tenant B entries directly to get their IDs
       const tenantBList = await app.inject({
         method: "GET", url: "/v1/kb?include_inactive=true",
-        headers: { cookie: `claros_session=${sessionBId}` },
+        headers: { cookie: `mailforge_session=${sessionBId}` },
       });
       const tenantBIds = tenantBList.json().entries.map((e: any) => e.id);
 
@@ -694,7 +694,7 @@ describe("KB CRUD", () => {
       // Create under tenant B
       const created = await app.inject({
         method: "POST", url: "/v1/kb",
-        headers: { cookie: `claros_session=${sessionBId}` },
+        headers: { cookie: `mailforge_session=${sessionBId}` },
         payload: minimalEntry({ title: "Tenant B Entry" }),
       });
       const idB = created.json().id;
@@ -781,7 +781,7 @@ describe("KB CRUD", () => {
 
       expect(enqueue).toHaveBeenCalledOnce();
       const [queueName, payload] = enqueue.mock.calls[0]!;
-      expect(queueName).toBe("claros.kb-embed");
+      expect(queueName).toBe("mailforge.kb-embed");
       expect(payload).toMatchObject({ kb_entry_id: id, tenant_id: tenantAId });
     });
 
@@ -807,7 +807,7 @@ describe("KB CRUD", () => {
 
       // Enqueue must not have been called for KB_EMBED
       const kbEmbedCalls = enqueue.mock.calls.filter(
-        ([q]: [string]) => q === "claros.kb-embed",
+        ([q]: [string]) => q === "mailforge.kb-embed",
       );
       expect(kbEmbedCalls).toHaveLength(0);
     });
@@ -863,7 +863,7 @@ describe("KB CRUD", () => {
       const app = await buildApp({ db, logger: false });
       const created = await app.inject({
         method: "POST", url: "/v1/kb",
-        headers: { cookie: `claros_session=${sessionBId}` },
+        headers: { cookie: `mailforge_session=${sessionBId}` },
         payload: minimalEntry({ title: "Tenant B PATCH Target" }),
       });
       const idB = created.json().id;
@@ -916,7 +916,7 @@ describe("KB CRUD", () => {
       const app = await buildApp({ db, logger: false });
       const created = await app.inject({
         method: "POST", url: "/v1/kb",
-        headers: { cookie: `claros_session=${sessionBId}` },
+        headers: { cookie: `mailforge_session=${sessionBId}` },
         payload: minimalEntry({ title: "Tenant B DELETE Target" }),
       });
       const idB = created.json().id;
@@ -965,7 +965,7 @@ describe("KB CRUD", () => {
       const cleanTenantId = cleanTenant!.id;
       const [cleanUser] = await db.insert(users).values({ tenantId: cleanTenantId, email: "owner@clean-reembed.test", role: "owner" }).returning({ id: users.id });
       const [cleanSession] = await db.insert(sessions).values({ tenantId: cleanTenantId, userId: cleanUser!.id, expiresAt: new Date(Date.now() + 86400_000) }).returning({ id: sessions.id });
-      const cleanCookie = `claros_session=${cleanSession!.id}`;
+      const cleanCookie = `mailforge_session=${cleanSession!.id}`;
 
       // Insert an entry already embedded
       await db.execute(sql`
@@ -1014,7 +1014,7 @@ describe("KB CRUD", () => {
         method: "POST", url: "/v1/kb/re-embed", headers: { cookie: cookieA },
       });
       expect(res.statusCode).toBe(202);
-      const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "claros.kb-embed");
+      const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "mailforge.kb-embed");
       const enqueuedIds = kbEmbedCalls.map(([, p]: [string, { kb_entry_id: string }]) => p.kb_entry_id);
       expect(enqueuedIds).toContain(r1.json().id);
       expect(enqueuedIds).toContain(r2.json().id);
@@ -1041,7 +1041,7 @@ describe("KB CRUD", () => {
       });
       expect(res.statusCode).toBe(202);
 
-      const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "claros.kb-embed");
+      const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "mailforge.kb-embed");
       const enqueuedIds = kbEmbedCalls.map(([, p]: [string, { kb_entry_id: string }]) => p.kb_entry_id);
       expect(enqueuedIds).toContain(id);
     });
@@ -1068,7 +1068,7 @@ describe("KB CRUD", () => {
       expect(res1.statusCode).toBe(202);
 
       const callsAfterFirst = enqueue.mock.calls.filter(
-        ([q]: [string]) => q === "claros.kb-embed",
+        ([q]: [string]) => q === "mailforge.kb-embed",
       ).filter(([, p]: [string, { kb_entry_id: string }]) => p.kb_entry_id === id);
       expect(callsAfterFirst.length).toBe(1);
 
@@ -1081,7 +1081,7 @@ describe("KB CRUD", () => {
       });
 
       const callsAfterSecond = enqueue.mock.calls.filter(
-        ([q]: [string]) => q === "claros.kb-embed",
+        ([q]: [string]) => q === "mailforge.kb-embed",
       ).filter(([, p]: [string, { kb_entry_id: string }]) => p.kb_entry_id === id);
       expect(callsAfterSecond.length).toBe(0);
     });
@@ -1108,7 +1108,7 @@ describe("KB CRUD", () => {
       expect(res.statusCode).toBe(202);
 
       const kbEmbedCalls = enqueue.mock.calls.filter(
-        ([q]: [string]) => q === "claros.kb-embed",
+        ([q]: [string]) => q === "mailforge.kb-embed",
       ).filter(([, p]: [string, { kb_entry_id: string }]) => p.kb_entry_id === id);
       expect(kbEmbedCalls.length).toBe(0);
     });
@@ -1142,7 +1142,7 @@ describe("KB CRUD", () => {
       expect(res.statusCode).toBe(202);
 
       const kbEmbedCalls = enqueue.mock.calls.filter(
-        ([q]: [string]) => q === "claros.kb-embed",
+        ([q]: [string]) => q === "mailforge.kb-embed",
       ).filter(([, p]: [string, { kb_entry_id: string }]) => p.kb_entry_id === id);
       expect(kbEmbedCalls.length).toBe(1);
     });
@@ -1164,7 +1164,7 @@ describe("KB CRUD", () => {
       const capTenantId = capTenant!.id;
       const [capUser] = await db.insert(users).values({ tenantId: capTenantId, email: "owner@cap-reembed.test", role: "owner" }).returning({ id: users.id });
       const [capSession] = await db.insert(sessions).values({ tenantId: capTenantId, userId: capUser!.id, expiresAt: new Date(Date.now() + 86400_000) }).returning({ id: sessions.id });
-      const capCookie = `claros_session=${capSession!.id}`;
+      const capCookie = `mailforge_session=${capSession!.id}`;
 
       // Insert CAP + 3 entries all with embedding_status = 'failed'
       const CAP = 100; // must match RE_EMBED_BATCH_CAP in kb.ts
@@ -1189,7 +1189,7 @@ describe("KB CRUD", () => {
       expect(body.remaining).toBe(EXTRA);
       expect(body.total_qualifying).toBe(TOTAL);
 
-      const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "claros.kb-embed");
+      const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "mailforge.kb-embed");
       expect(kbEmbedCalls.length).toBe(CAP);
 
       // Second call processes the remaining entries
@@ -1242,7 +1242,7 @@ describe("KB CRUD", () => {
       // Create entry as tenant B and set to failed
       const rB = await app.inject({
         method: "POST", url: "/v1/kb",
-        headers: { cookie: `claros_session=${sessionBId}` },
+        headers: { cookie: `mailforge_session=${sessionBId}` },
         payload: minimalEntry({ title: "Tenant B Entry Re-embed Isolation" }),
       });
       const idB = rB.json().id;
@@ -1256,7 +1256,7 @@ describe("KB CRUD", () => {
       });
       expect(res.statusCode).toBe(202);
 
-      const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "claros.kb-embed");
+      const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "mailforge.kb-embed");
       const enqueuedIds = kbEmbedCalls.map(([, p]: [string, { kb_entry_id: string }]) => p.kb_entry_id);
       expect(enqueuedIds).not.toContain(idB);
     });

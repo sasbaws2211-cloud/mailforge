@@ -6,7 +6,7 @@
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */
 import * as React from "react";
-import { AlertTriangle, Info, type LucideIcon } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, X, type LucideIcon } from "lucide-react";
 import { Badge } from "../../components/ui/badge.js";
 import type { FlowApiError } from "../../api.js";
 import { cn } from "../../lib/utils.js";
@@ -69,28 +69,42 @@ export function Section({
   );
 }
 
-const NOTICE_STYLES: Record<"warning" | "info", { box: string; icon: LucideIcon }> = {
-  warning: { box: "border-warning bg-warning-soft", icon: AlertTriangle },
-  info: { box: "border-border bg-sunken", icon: Info },
+const NOTICE_STYLES: Record<"warning" | "info" | "success", { box: string; icon: LucideIcon; iconColor: string }> = {
+  warning: { box: "border-warning bg-warning-soft", icon: AlertTriangle, iconColor: "text-warning" },
+  info: { box: "border-border bg-sunken", icon: Info, iconColor: "text-muted-foreground" },
+  success: { box: "border-success bg-success-soft", icon: CheckCircle2, iconColor: "text-success" },
 };
 
 export function Notice({
   variant = "warning",
   children,
   className,
+  onDismiss,
 }: {
-  variant?: "warning" | "info";
+  variant?: "warning" | "info" | "success";
   children: React.ReactNode;
   className?: string;
+  /** When set, a small close button is shown and calls this. */
+  onDismiss?: () => void;
 }) {
-  const { box, icon: Icon } = NOTICE_STYLES[variant];
+  const { box, icon: Icon, iconColor } = NOTICE_STYLES[variant];
   return (
     <div
-      role={variant === "warning" ? "alert" : "note"}
+      role={variant === "warning" ? "alert" : "status"}
       className={cn("flex items-start gap-2.5 rounded-md border px-4 py-3", box, className)}
     >
-      <Icon size={14} className={cn("mt-0.5 shrink-0", variant === "warning" ? "text-warning" : "text-muted-foreground")} />
-      <p className="text-[14px] leading-relaxed text-foreground">{children}</p>
+      <Icon size={14} className={cn("mt-0.5 shrink-0", iconColor)} aria-hidden="true" />
+      <p className="flex-1 text-[14px] leading-relaxed text-foreground">{children}</p>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+        >
+          <X size={14} aria-hidden="true" />
+        </button>
+      )}
     </div>
   );
 }

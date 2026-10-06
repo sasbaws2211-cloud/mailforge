@@ -12,11 +12,12 @@ import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
-import { buildApp } from "@claros/api";
-import { tenants, users } from "@claros/db/schema";
+import { buildApp, buildAdminApp, platformAdminEmails, startAiAlertMonitor, startSendingMonitor, startOnboardingNudgeMonitor } from "@mailforge/api";
+import { parseAdminPort } from "./admin-port.js";
+import { tenants, users } from "@mailforge/db/schema";
 import { eq } from "drizzle-orm";
-import { createBoss, startWorker } from "@claros/worker";
-import { startScheduler } from "@claros/scheduler";
+import { createBoss, startWorker } from "@mailforge/worker";
+import { startScheduler } from "@mailforge/scheduler";
 
 const VALID_ROLES = ["all", "api", "worker", "scheduler"] as const;
 type Role = (typeof VALID_ROLES)[number];
@@ -33,7 +34,7 @@ function parseRole(): Role {
 const role = parseRole();
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "0.0.0.0";
-const edition = process.env.CLAROS_EDITION ?? "community";
+const edition = process.env.MAILFORGE_EDITION ?? "community";
 
 /**
  * Bootstrap seed: ensure one default tenant exists on first boot.
@@ -127,37 +128,37 @@ async function bootstrapSeed(db: ReturnType<typeof drizzle>): Promise<boolean> {
 }
 
 async function start(): Promise<void> {
-  // Edition safety check: if CLAROS_EDITION=cloud, verify the cloud brain is
+  // Edition safety check: if MAILFORGE_EDITION=cloud, verify the cloud brain is
   // actually implemented. The brain-cloud package exports a BRAIN_READY sentinel
   // that is false while the implementation is a stub. A stub brain returns
   // action:"skip" for every message, producing a deployment that silently
   // generates nothing. Refuse to start rather than fail silently.
   if (edition === "cloud") {
     try {
-      const pkg = "@claros/" + "brain-cloud"; // non-literal defeats static resolution
+      const pkg = "@mailforge/" + "brain-cloud"; // non-literal defeats static resolution
       const mod = await import(pkg);
       if (mod.BRAIN_READY !== true) {
         console.error("");
         console.error("==========================================================");
-        console.error(`  FATAL: CLAROS_EDITION=cloud but ${pkg} is not ready.`);
+        console.error(`  FATAL: MAILFORGE_EDITION=cloud but ${pkg} is not ready.`);
         console.error("");
         console.error("  The cloud brain is still a stub (BRAIN_READY=false).");
         console.error("  A deployment with this edition would silently produce no");
-        console.error("  messages for any contact. Use CLAROS_EDITION=community");
+        console.error("  messages for any contact. Use MAILFORGE_EDITION=community");
         console.error("  until the cloud brain implementation is wired.");
         console.error("==========================================================");
         console.error("");
         process.exit(1);
       }
     } catch (err) {
-      const pkg = "@claros/" + "brain-cloud";
+      const pkg = "@mailforge/" + "brain-cloud";
       console.error("");
       console.error("==========================================================");
-      console.error(`  FATAL: CLAROS_EDITION=cloud but ${pkg} cannot be loaded.`);
+      console.error(`  FATAL: MAILFORGE_EDITION=cloud but ${pkg} cannot be loaded.`);
       console.error(`  ${err instanceof Error ? err.message : String(err)}`);
       console.error("");
       console.error(`  The cloud edition requires ${pkg} to be present`);
-      console.error("  in the image. Use CLAROS_EDITION=community or ensure the");
+      console.error("  in the image. Use MAILFORGE_EDITION=community or ensure the");
       console.error("  package is included in the build.");
       console.error("==========================================================");
       console.error("");
@@ -212,7 +213,7 @@ async function start(): Promise<void> {
 
   // Auto-migrate: apply pending community schema migrations on startup.
   //
-  // GATE: only runs when CLAROS_MIGRATE_ON_BOOT=true is explicitly set.
+  // GATE: only runs when MAILFORGE_MIGRATE_ON_BOOT=true is explicitly set.
   // This is an opt-in, not an opt-out. The fail-safe direction is CLOSED:
   // if the variable is absent, empty, or any value other than the exact
   // string "true", migration does NOT run.
@@ -226,15 +227,15 @@ async function start(): Promise<void> {
   //   data integrity risk regardless of Drizzle's idempotency claim.
   //
   // Who sets it:
-  //   docker-compose.yml sets CLAROS_MIGRATE_ON_BOOT=true.
+  //   docker-compose.yml sets MAILFORGE_MIGRATE_ON_BOOT=true.
   //   Cloud deploy (wrangler) does not set it. Local .env can set it for
   //   pnpm dev convenience, but never ships to production.
   //
   // Cases:
-  //   - local compose (CLAROS_MIGRATE_ON_BOOT=true):  migrate() runs.
+  //   - local compose (MAILFORGE_MIGRATE_ON_BOOT=true):  migrate() runs.
   //   - Cloud production (var absent):                migrate() is skipped.
   //   - Signal absent or any other value:             migrate() is skipped.
-  if (process.env.CLAROS_MIGRATE_ON_BOOT === "true") {
+  if (process.env.MAILFORGE_MIGRATE_ON_BOOT === "true") {
     // Migrations folder resolves relative to this compiled file so it
     // works inside the Docker image (/app/drizzle/migrations) and locally.
     // Compiled output: apps/server/dist/main.js - three levels up = repo root.
@@ -287,7 +288,7 @@ async function start(): Promise<void> {
       console.warn(
         "[config] BASE_URL is not set. In production the default (http://localhost:3000) is unusable: " +
         "unsubscribe links baked into delivered emails would point at localhost and cannot be corrected. " +
-        "Set BASE_URL to the HTTPS domain where Claros is hosted before the first send.",
+        "Set BASE_URL to the HTTPS domain where Mailforge is hosted before the first send.",
       );
     } else {
       // Minimal parse check at startup. The drain checkBaseUrl() is the authoritative
@@ -303,7 +304,7 @@ async function start(): Promise<void> {
           console.warn(
             `[config] BASE_URL is set to a loopback address ("${parsed.hostname}") in production. ` +
             "Unsubscribe links baked into delivered emails would point at localhost and cannot be corrected. " +
-            "The drain will block all sends until BASE_URL is set to the HTTPS domain where Claros is hosted.",
+            "The drain will block all sends until BASE_URL is set to the HTTPS domain where Mailforge is hosted.",
           );
         } else if (parsed.protocol !== "https:") {
           console.warn(
@@ -315,7 +316,7 @@ async function start(): Promise<void> {
       } catch {
         console.warn(
           `[config] BASE_URL "${rawBaseUrl}" is not a valid URL in production. ` +
-          "The drain will block all sends until BASE_URL is set to the HTTPS domain where Claros is hosted.",
+          "The drain will block all sends until BASE_URL is set to the HTTPS domain where Mailforge is hosted.",
         );
       }
     }
@@ -407,8 +408,10 @@ async function start(): Promise<void> {
   // closure below can capture it. It remains undefined for pure worker and
   // scheduler roles that never start Fastify.
   let app: Awaited<ReturnType<typeof buildApp>> | undefined;
+  let adminApp: Awaited<ReturnType<typeof buildAdminApp>> | undefined;
+  let adminPort: number | null = null;
   if (role === "all" || role === "api") {
-    // CLAROS_SERVE_DASHBOARD controls @fastify/static serving of the built
+    // MAILFORGE_SERVE_DASHBOARD controls @fastify/static serving of the built
     // dashboard SPA and the SPA catch-all fallback.
     //
     // Default: true for community edition, false for cloud edition.
@@ -416,24 +419,58 @@ async function start(): Promise<void> {
     // not attempt to serve them. The edition-based default means a Cloud
     // container never accidentally enables SPA serving without an explicit
     // override - it does not require the operator to remember to set the flag.
-    // An explicit CLAROS_SERVE_DASHBOARD value ("true" or "false") still
+    // An explicit MAILFORGE_SERVE_DASHBOARD value ("true" or "false") still
     // overrides in both directions.
     //
     // If enabled but apps/dashboard/dist does not exist, a warning is logged
     // and serving is skipped - the server still starts cleanly.
     const editionDefault = edition !== "cloud";
     const serveDashboard =
-      process.env.CLAROS_SERVE_DASHBOARD === "true"
+      process.env.MAILFORGE_SERVE_DASHBOARD === "true"
         ? true
-        : process.env.CLAROS_SERVE_DASHBOARD === "false"
+        : process.env.MAILFORGE_SERVE_DASHBOARD === "false"
           ? false
           : editionDefault;
 
-    app = await buildApp({ role, edition, db, enqueue, serveDashboard, claimToken });
+    // Public marketing site + self-serve signup. Opt-in: off for self-hosted installs.
+    const publicSite = process.env.MAILFORGE_PUBLIC_SITE === "true";
+
+    // Admin console as its own deployment: MAILFORGE_ADMIN_PORT starts a second listener
+    // (its own origin behind a proxy) and takes the admin API out of the customer app.
+    adminPort = parseAdminPort(process.env.MAILFORGE_ADMIN_PORT, port);
+
+    app = await buildApp({ role, edition, db, enqueue, serveDashboard, claimToken, publicSite, adminEmbedded: adminPort === null });
 
     try {
       await app.listen({ port, host });
-      app.log.info(`Claros server started (role=${role}) on ${host}:${port}`);
+      app.log.info(`Mailforge server started (role=${role}) on ${host}:${port}`);
+
+      // Email the platform admins if Mailforge AI starts failing. Checks every 5 minutes, only reads the
+      // usage log, and does nothing unless a platform email sender and platform admins are configured.
+      startAiAlertMonitor(db, { log: app.log });
+
+      // Managed sending upkeep: remove orphaned sending domains from Resend, and pause workspaces whose
+      // bounces or spam complaints would hurt the shared account. Does nothing unless managed sending is offered.
+      startSendingMonitor(db, { log: app.log });
+
+      // Hosted only: remind owners who signed in but stalled before sending their first email (at most two
+      // reminders each). Does nothing unless plans are enforced and a platform email sender is configured.
+      startOnboardingNudgeMonitor(db, { log: app.log });
+
+      if (adminPort !== null) {
+        const adminUrl = process.env.MAILFORGE_ADMIN_URL || `http://localhost:${adminPort}`;
+        adminApp = await buildAdminApp({
+          db,
+          adminUrl,
+          customerUrl: process.env.BASE_URL || `http://localhost:${port}`,
+          serveDashboard,
+        });
+        await adminApp.listen({ port: adminPort, host: process.env.MAILFORGE_ADMIN_HOST || host });
+        adminApp.log.info(`Mailforge admin console started on ${process.env.MAILFORGE_ADMIN_HOST || host}:${adminPort} (public URL ${adminUrl})`);
+        if (platformAdminEmails().length === 0) {
+          console.warn("[admin] MAILFORGE_ADMIN_PORT is set but MAILFORGE_PLATFORM_ADMINS is empty: nobody can sign in to the admin console.");
+        }
+      }
 
       // Log the claim URL prominently when no users exist.
       if (claimToken) {
@@ -516,6 +553,10 @@ async function start(): Promise<void> {
 
     try {
       // Step 1: stop accepting HTTP connections.
+      if (adminApp) {
+        console.log("[shutdown] closing admin console server...");
+        await adminApp.close();
+      }
       if (app) {
         console.log("[shutdown] closing HTTP server...");
         await app.close();

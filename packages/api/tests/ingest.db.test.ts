@@ -24,7 +24,7 @@ import {
   apiKeys,
   contacts,
   events,
-} from "@claros/db/schema";
+} from "@mailforge/db/schema";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) {
@@ -33,8 +33,8 @@ if (!TEST_DB_URL) {
     `[ingest.test] DATABASE_URL is not set.\n\n` +
     `This test requires a Postgres connection.\n` +
     (inCI
-      ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://claros:claros@localhost:5432/claros\n`
-      : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://claros:claros@localhost:5433/claros'\n`),
+      ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
+      : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
   );
 }
 
@@ -107,7 +107,7 @@ beforeAll(async () => {
   testUserId = user!.id;
 
   // Create test API key
-  rawApiKey = `cl_live_${randomBytes(32).toString("base64url")}`;
+  rawApiKey = `mf_live_${randomBytes(32).toString("base64url")}`;
   const keyHash = hashApiKey(rawApiKey);
   const prefix = rawApiKey.slice(0, 8);
   const [apiKey] = await db
@@ -579,7 +579,7 @@ describe("authentication", () => {
     const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
 
     // Create a key and then revoke it
-    const revokedRaw = `cl_live_${randomBytes(32).toString("base64url")}`;
+    const revokedRaw = `mf_live_${randomBytes(32).toString("base64url")}`;
     const revokedHash = hashApiKey(revokedRaw);
     await db.insert(apiKeys).values({
       tenantId: testTenantId,

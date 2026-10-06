@@ -1,17 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <!--
-    Claros mark - favicon / avatar form.
-    Transparent ground: just the droplet, no tile. The fill adapts to the
+    Mailforge mark - favicon / avatar form.
+    Transparent ground: just the envelope, no tile. The fill adapts to the
     browser chrome via prefers-color-scheme: light chrome gets the light
-    theme accent (oklch(0.6 0.13 225) = #008fba), dark chrome gets the dark
-    theme accent (oklch(0.78 0.12 220) = #4ac9ec).
+    theme accent (oklch(0.66 0.17 50) = #e2702a), dark chrome gets the dark
+    theme accent (oklch(0.78 0.14 60) = #f6a94e).
     Values copied from src/index.css tokens; keep in sync.
   -->
   <style>
-    .mark { fill: #008fba; }
-    @media (prefers-color-scheme: dark) { .mark { fill: #4ac9ec; } }
+    .mark { fill: #e2702a; }
+    @media (prefers-color-scheme: dark) { .mark { fill: #f6a94e; } }
   </style>
-  <g transform="translate(12 12.2) rotate(90) scale(0.86)">
-    <path class="mark" d="M0 -10.8 C0 -10.8 -7.8 -2.5 -7.8 1.6 a7.8 7.8 0 0 0 15.6 0 C7.8 -2.5 0 -10.8 0 -10.8 Z M0 -2.4 a3.7 3.7 0 1 0 0.001 0 Z" fill-rule="evenodd"/>
-  </g>
+  <path class="mark" d="M5 5 H19 A3 3 0 0 1 22 8 V16 A3 3 0 0 1 19 19 H5 A3 3 0 0 1 2 16 V8 A3 3 0 0 1 5 5 Z M4.4 8.1 L12 13.7 L19.6 8.1 L19.6 10.7 L12 16.3 L4.4 10.7 Z" fill-rule="evenodd"/>
 </svg>

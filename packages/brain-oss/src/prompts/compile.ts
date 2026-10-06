@@ -3,7 +3,7 @@
  *
  * Instructs the LLM to read a natural-language flow description and produce
  * a deterministic execution plan as JSON. The output is validated against
- * the compiledPlanSchema from @claros/core before being stored.
+ * the compiledPlanSchema from @mailforge/core before being stored.
  *
  * Mirror side: PUBLIC (packages/brain-oss is mirrored).
  */
@@ -30,7 +30,7 @@ export interface CompilePromptContext {
 // System prompt
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are a flow compiler for Claros, a lifecycle email automation engine.
+const SYSTEM_PROMPT = `You are a flow compiler for Mailforge, a lifecycle email automation engine.
 
 Your job: read a natural-language flow description and produce a deterministic execution plan as JSON.
 

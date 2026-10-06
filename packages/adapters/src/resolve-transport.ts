@@ -25,6 +25,7 @@
 import { decrypt, parseEncryptionKey } from "./crypto.js";
 import { ResendTransportAdapter } from "./resend.js";
 import { SmtpTransportAdapter, type SmtpAdapterConfig } from "./smtp.js";
+import { smtpHostPolicyFromEnv } from "./smtp-guard.js";
 import type { TransportAdapter } from "./transport-types.js";
 
 // ---------------------------------------------------------------------------
@@ -96,6 +97,8 @@ export function resolveTransportAdapter(
         username: (parsed.username as string) || undefined,
         password: (parsed.password as string) || undefined,
         rejectUnauthorized: parsed.rejectUnauthorized as boolean | undefined,
+        // A customer typed this host in: apply the operator's destination rules (hosted installs).
+        hostPolicy: smtpHostPolicyFromEnv(),
       };
       adapter = new SmtpTransportAdapter(smtpConfig);
     }

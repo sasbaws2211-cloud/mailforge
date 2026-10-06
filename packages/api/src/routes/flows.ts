@@ -25,7 +25,7 @@
  *     by the API client. If prompt_source changes (draft/paused only), compiled_plan and
  *     compiled_at are cleared to signal the plan is now stale.
  *   - status starts as 'draft' on create; transitions are validated against the table in
- *     @claros/core (validateStatusTransition). archived is terminal.
+ *     @mailforge/core (validateStatusTransition). archived is terminal.
  *
  * Cross-tenant isolation: any flow that exists but belongs to a different tenant
  * returns 404 (not 403) to avoid leaking information about other tenants.
@@ -35,7 +35,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { eq, and, ne } from "drizzle-orm";
-import { flows, llmConfigs, tenants, templates } from "@claros/db/schema";
+import { flows, tenants, templates } from "@mailforge/db/schema";
 import {
   isValidDelay,
   validateStatusTransition,
@@ -49,10 +49,11 @@ import {
   QUEUE,
   compiledPlanSchema,
   type FlowStatus,
-} from "@claros/core";
-import { decrypt, parseEncryptionKey } from "@claros/adapters";
-import { OpenAICompatibleProvider, draft } from "@claros/brain-oss";
+} from "@mailforge/core";
+import { draft } from "@mailforge/brain-oss";
 import type { Db } from "../plugins/db.js";
+import { loadAiStatus, resolveProviderForRequest } from "../ai/resolver.js";
+import { AI_UNAVAILABLE_MESSAGE, aiAllowanceMessage, NO_AI_PROVIDER_MESSAGE } from "@mailforge/core";
 
 // ---------------------------------------------------------------------------
 // Zod schemas
@@ -501,18 +502,22 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
       return { error: "Flow has no prompt_source. Set a prompt before compiling." };
     }
 
-    // Precondition: tenant has an active LLM configuration.
-    // This is a user-resolvable error (go to Settings, add an LLM key), not an
-    // async job failure. Check synchronously so the operator learns immediately.
-    const llmRows = await db
-      .select({ id: llmConfigs.id })
-      .from(llmConfigs)
-      .where(and(eq(llmConfigs.tenantId, tenantId), eq(llmConfigs.isActive, true)))
-      .limit(1);
-
-    if (llmRows.length === 0) {
+    // Precondition: the workspace has AI to use: its own key, or Mailforge AI
+    // with tokens left this month. These are user-resolvable errors (go to
+    // Settings, add a key or upgrade), not async job failures, so they are
+    // checked synchronously and the operator learns immediately.
+    const ai = await loadAiStatus(db, tenantId);
+    if (ai.source === "none") {
       reply.status(422);
-      return { error: "No LLM configuration found. Add an LLM provider in Settings before compiling flows." };
+      return { error: NO_AI_PROVIDER_MESSAGE };
+    }
+    if (ai.unavailable) {
+      reply.status(503);
+      return { error: AI_UNAVAILABLE_MESSAGE, code: "ai_unavailable" };
+    }
+    if (ai.spent && ai.allowance.limit !== null) {
+      reply.status(402);
+      return { error: aiAllowanceMessage(ai.allowance.planName, ai.allowance.limit), code: "ai_allowance" };
     }
 
     // Set compile_status = 'pending' and clear any previous error
@@ -766,35 +771,13 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
 
       const flow = flowRows[0]!;
 
-      // Require active LLM config and resolve provider
-      const llmRows = await db
-        .select()
-        .from(llmConfigs)
-        .where(and(eq(llmConfigs.tenantId, tenantId), eq(llmConfigs.isActive, true)))
-        .limit(1);
-
-      if (llmRows.length === 0) {
-        reply.status(422);
-        return { error: "No LLM configuration found. Add an LLM provider in Settings to use AI drafting." };
+      // Resolve the AI provider: the workspace's own key, else Mailforge AI.
+      const resolved = await resolveProviderForRequest(db, tenantId, "ai_draft");
+      if (!resolved.ok) {
+        reply.status(resolved.status);
+        return resolved.code ? { error: resolved.error, code: resolved.code } : { error: resolved.error };
       }
-
-      const llmConfig = llmRows[0]!;
-      const encryptionKeyEnv = process.env.ENCRYPTION_KEY;
-      if (!encryptionKeyEnv) {
-        reply.status(500);
-        return { error: "ENCRYPTION_KEY not configured." };
-      }
-
-      let provider;
-      try {
-        const key = parseEncryptionKey(encryptionKeyEnv);
-        const decrypted = decrypt(llmConfig.config, key);
-        const providerConfig = JSON.parse(decrypted);
-        provider = new OpenAICompatibleProvider(providerConfig);
-      } catch (err) {
-        reply.status(500);
-        return { error: `Failed to resolve LLM provider: ${err instanceof Error ? err.message : String(err)}` };
-      }
+      const provider = resolved.provider;
 
       // Fetch tenant name for product context
       const tenantRows = await db

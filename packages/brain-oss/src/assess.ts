@@ -27,7 +27,7 @@
  *
  * Mirror side: PUBLIC (packages/brain-oss is mirrored).
  */
-import { assessOutputSchema, type AssessOutput } from "@claros/core";
+import { assessOutputSchema, type AssessOutput } from "@mailforge/core";
 import type { LlmProvider } from "./providers/types.js";
 import { LlmProviderError } from "./providers/openai-compatible.js";
 import { buildAssessMessages, type AssessPromptContext } from "./prompts/assess.js";

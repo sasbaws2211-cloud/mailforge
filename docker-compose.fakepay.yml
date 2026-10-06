@@ -1,0 +1,37 @@
+# Local stand-in for Flutterwave, so you can click through paying, renewing and
+# cancelling without a Flutterwave account. For development only.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mailpit.yml -f docker-compose.fakepay.yml up -d
+#
+# Then sign in, open Settings -> Plan & usage and choose a plan. You are sent to a
+# fake hosted checkout at http://localhost:4010 where you pick the outcome. The
+# control page at http://localhost:4010/ shows payments and subscriptions and can
+# trigger a renewal charge.
+#
+# The keys below are obviously fake development values, not real credentials.
+services:
+  fake-flutterwave:
+    image: node:22-alpine
+    command: ["node", "/tools/fake-flutterwave.mjs"]
+    volumes:
+      - ./tools:/tools:ro
+    ports:
+      - "4010:4010"
+    environment:
+      PORT: "4010"
+      FAKE_FW_SECRET: "FLWSECK_TEST-local-fake-key"
+      FAKE_FW_HASH: "local-fake-webhook-hash"
+      # Server to server: the fake calls the app over the compose network.
+      FAKE_FW_WEBHOOK_URL: "http://app:${PORT:-3010}/webhooks/flutterwave"
+      # Browser facing: the checkout link the customer is sent to.
+      FAKE_FW_PUBLIC_URL: "http://localhost:4010"
+    restart: unless-stopped
+
+  app:
+    environment:
+      FLUTTERWAVE_SECRET_KEY: "FLWSECK_TEST-local-fake-key"
+      FLUTTERWAVE_WEBHOOK_HASH: "local-fake-webhook-hash"
+      FLUTTERWAVE_BASE_URL: "http://fake-flutterwave:4010/v3"
+      FLUTTERWAVE_CURRENCY: "USD"
+    depends_on:
+      - fake-flutterwave
