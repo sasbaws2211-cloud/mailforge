@@ -69,6 +69,7 @@ import { Textarea } from "../components/ui/textarea.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { TemplateEditorBySlug } from "../components/template-editor.js";
 import { StepWriter, buildPlanBody, type StepData } from "../components/step-writer.js";
+import { PromptGuidance } from "../components/prompt-guidance.js";
 import { useLlm } from "../settings.js";
 
 // ---------------------------------------------------------------------------
@@ -1488,6 +1489,8 @@ export default function FlowEditorPage() {
           compiles it into a deterministic plan you review before anything is
           sent. The AI then drafts each email for each contact individually.
         </p>
+
+        <PromptGuidance />
 
         {existingFlow?.status === "active" && (
           <p

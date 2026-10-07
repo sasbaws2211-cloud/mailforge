@@ -97,6 +97,10 @@ export const KB_SIMILARITY_FLOOR = 0.70;
  * Build the kb_context string for the draft prompt.
  *
  * Steps:
+ * 0. If the tenant has no searchable entry (active, with an embedding), stop here: there is nothing
+ *    to match against, so the embedding call for the query would be wasted. Without this a tenant
+ *    that never used the knowledge base paid for (or, on a provider with no embedding endpoint,
+ *    failed) one embedding call for every draft.
  * 1. Resolve the tenant's embedding provider.
  * 2. Embed the query text (brain_instruction + action_type).
  * 3. If the step carries an explicit kb_ref, fetch that entry by title.
@@ -133,6 +137,9 @@ export async function buildKbContextSection(
   maxResults: number = KB_MAX_RESULTS,
   similarityFloor: number = KB_SIMILARITY_FLOOR,
 ): Promise<string | undefined> {
+  // 0. Nothing to search: no embedding call, no usage row, no log noise.
+  if (!(await hasSearchableEntries(db, tenantId))) return undefined;
+
   // 1. Resolve the tenant's embedding provider.
   const providerResult = await resolveEmbeddingProvider(db, tenantId);
   if (!providerResult.ok) {
@@ -215,6 +222,22 @@ interface KbEntry {
   id: string;
   title: string;
   content: string;
+}
+
+/**
+ * Whether the tenant has at least one entry that a query could match: active and already embedded
+ * (the same condition the pinned-entry lookup and the similarity search apply).
+ */
+async function hasSearchableEntries(db: Db, tenantId: string): Promise<boolean> {
+  const rows = await db.execute<{ one: number }>(sql`
+    SELECT 1 AS one
+    FROM kb_entries
+    WHERE tenant_id = ${tenantId}::uuid
+      AND is_active = true
+      AND embedding IS NOT NULL
+    LIMIT 1
+  `);
+  return rows.rows.length > 0;
 }
 
 /**

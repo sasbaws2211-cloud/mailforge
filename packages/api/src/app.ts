@@ -17,6 +17,7 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { trustProxyFromEnv } from "./trust-proxy.js";
+import { installDbErrorHandler } from "./db-errors.js";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -218,6 +219,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   // Cookie parser - required for session handling
   await app.register(cookie);
+
+  // An id in a URL that is not a UUID answers 404, not a 500 (see db-errors.ts).
+  installDbErrorHandler(app);
 
   // Database client decoration (app.db)
   if (opts.db) {

@@ -185,6 +185,18 @@ Keep Segment exactly as it is and add Mailforge as a second sink:
   to Mailforge. (This is the zero-code option; it depends on Segment's webhook
   retry behavior for delivery guarantees.)
 
+## What the AI sees of the data you send
+
+AI-drafted emails use only a few of the things you send, so it pays to send them in the right fields:
+
+- `identify` with `traits.email`, `traits.name` (the full name), and `traits.company`. These are stored on the contact and shown to the AI. A trait called `first_name` is kept on the contact but the AI does not see it.
+- `traits.plan` is the **name of the plan**, for example `"Growth"`. It is stored on the contact and shown to the AI as the contact's plan. The five payment-status words are the exception: `plan: "paid"` (or `free`, `trial`, `past_due`, `cancelled`) sets the contact's payment status, as `traits.payment_status` does, and is not kept as a plan name. To set both, send both: `{ "payment_status": "paid", "plan": "Growth" }`. Send `plan: null` to remove the plan name (the payment status is left as it is).
+- `traits.payment_status` is only ever a **status**, one of `free`, `trial`, `paid`, `past_due`, `cancelled`. Any other value (a plan name, say) is refused and recorded as a conflict, and the status is left unchanged.
+- Every other trait is stored on the contact, but only used by your own fixed templates.
+- **Event properties are not shown to the AI**, only the event name. Use properties for your own analytics and for fixed templates.
+
+How to write prompts around this is in [FLOW-PROMPTS.md](./FLOW-PROMPTS.md#what-the-ai-can-see-when-it-writes-each-email).
+
 ## 7. Verifying your integration
 
 Open **Integrate** in the dashboard. The "Your first event" panel polls

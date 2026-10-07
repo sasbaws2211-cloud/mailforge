@@ -32,7 +32,8 @@
  *   and a 23505 catch on uq_contacts_tenant_email handles the concurrent race.
  *   On violation: one retry without the email, then stop. If the retry also
  *   fails, the error surfaces as a 500 to the client.
- * - Invalid payment_status: rejected and recorded as a conflict.
+ * - Invalid payment_status: rejected and recorded as a conflict. (The "plan" alias is not rejected for a
+ *   value that is not a status: that is a plan name and is kept in properties.plan.)
  * - Concurrency: properties merge uses Postgres jsonb operators (|| and -)
  *   in a single UPDATE to avoid lost-update races. No read-modify-write in Node.
  *
@@ -93,8 +94,10 @@ const VALID_PAYMENT_STATUSES = new Set([
 ]);
 
 /**
- * Trait keys that map to dedicated columns rather than properties JSONB.
- * "plan" is accepted as an alias for "payment_status".
+ * Trait keys with special handling rather than plain properties JSONB.
+ * "plan" is two things: a payment status word (free, trial, paid, past_due, cancelled) still sets
+ * the payment_status column, as it always did; any other value is the plan's NAME (for example
+ * "Growth") and is stored in properties.plan, which is where the AI drafter reads it from.
  */
 const RESERVED_TRAIT_KEYS = new Set([
   "email",
@@ -326,7 +329,7 @@ function partitionTraits(traits: Record<string, unknown>): {
       } else if (typeof value === "string") {
         columnUpdates.company = value;
       }
-    } else if (key === "payment_status" || key === "plan") {
+    } else if (key === "payment_status") {
       if (value === null) {
         columnUpdates.paymentStatus = null;
       } else if (typeof value === "string") {
@@ -336,6 +339,17 @@ function partitionTraits(traits: Record<string, unknown>): {
           // Invalid payment_status - record as conflict, do not apply
           conflicts.push({ field: "payment_status", rejectedValue: value });
         }
+      }
+    } else if (key === "plan") {
+      // "plan" carries either a payment status word or the plan's name.
+      if (value === null) {
+        // Unset the plan name. The payment status is left alone: clear it with payment_status: null.
+        keysToRemove.push("plan");
+      } else if (typeof value === "string" && VALID_PAYMENT_STATUSES.has(value)) {
+        columnUpdates.paymentStatus = value;
+      } else {
+        // Anything else is the plan's name ("Growth", "Pro annual"): keep it where the AI reads it.
+        propsToMerge.plan = value;
       }
     } else {
       // Non-reserved trait: goes into properties JSONB

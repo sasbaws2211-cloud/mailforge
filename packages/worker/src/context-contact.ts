@@ -35,6 +35,9 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 type Db = NodePgDatabase<Record<string, never>>;
 
 /** Contact identity section of the context packet. */
+/** Longest plan name passed to the AI. A plan name is a word or two; this only stops junk. */
+export const MAX_PLAN_NAME_LENGTH = 100;
+
 export interface ContactSection {
   name?: string;
   email?: string;
@@ -287,10 +290,14 @@ export async function buildContactSections(
   if (row.email != null) contact.email = row.email;
   if (row.company != null) contact.company = row.company;
 
-  // plan comes from properties['plan']; absent if missing or not a string
+  // plan comes from properties['plan'] (the plan's name, set by identify's "plan" trait); absent if missing,
+  // not a string, or empty. It goes into the prompt as one short line, whatever was sent.
   if (row.properties != null) {
     const plan = row.properties["plan"];
-    if (typeof plan === "string") contact.plan = plan;
+    if (typeof plan === "string") {
+      const oneLine = plan.replace(/\s+/g, " ").trim().slice(0, MAX_PLAN_NAME_LENGTH);
+      if (oneLine !== "") contact.plan = oneLine;
+    }
   }
 
   const firstSeenAt = toDate(row.first_seen_at);

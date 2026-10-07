@@ -370,6 +370,33 @@ describe("buildKbContextSection - graceful degradation", () => {
 
     const result = await buildKbContextSection(db, testTenantId, "any query");
     expect(result).toBeUndefined();
+    // With nothing to search, the embedding provider is not called at all (no wasted call per draft).
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("makes no embedding call when every entry is inactive or not yet embedded", async () => {
+    if (!dbAvailable) return;
+    const vec = makeVector([0, 1, 2]);
+    await insertEntryWithEmbedding("Switched Off", "Content.", vec, testTenantId, false);
+    await db.execute(sql`
+      INSERT INTO kb_entries (tenant_id, title, content, content_type, source, is_active)
+      VALUES (${testTenantId}::uuid, 'Not Embedded Yet', 'Content.', 'markdown', 'manual', true)
+    `);
+    mockFetch.mockResolvedValue({ ok: true, status: 200, json: async () => ({ data: [{ embedding: vec }] }) });
+
+    expect(await buildKbContextSection(db, testTenantId, "query")).toBeUndefined();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("still embeds the query as soon as one searchable entry exists", async () => {
+    if (!dbAvailable) return;
+    const vec = makeVector([0, 1, 2]);
+    await insertEntryWithEmbedding("Searchable", "Real content.", vec, testTenantId, true);
+    mockFetch.mockResolvedValue({ ok: true, status: 200, json: async () => ({ data: [{ embedding: vec }] }) });
+
+    const result = await buildKbContextSection(db, testTenantId, "query");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result).toContain("Searchable");
   });
 
   it("inactive entries are excluded from results", async () => {

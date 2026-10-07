@@ -22,6 +22,40 @@ Limits to know before writing:
 - Conditions cannot reference plan names, prices, or arbitrary traits. Move product facts into Settings → Brain context (`brain_context`) or a knowledge base entry and reference it with `@kb:name`.
 - Your own fixed templates can be referenced with `@template:name`.
 
+## What the AI can see when it writes each email
+
+Compiling turns your prompt into steps. Later, for each contact and each step, the AI writes the email, and then a quality check reads the draft against the step's instruction. If the draft misses something the instruction demanded, the email is **held back** (status `value_gated`) rather than sent generic. So a prompt must only ask for things the AI is actually given.
+
+**The AI is given, for every email:**
+
+- the contact's `name`, `email` and `company`
+- the **name of their plan** (for example `Growth`), if you send it as the `plan` trait when you identify the user
+- their lifecycle state, how long they have been a contact, and their engagement depth
+- their payment status: `free`, `trial`, `paid`, `past_due` or `cancelled`
+- how active they were this week compared with last week
+- when they were last emailed, and what kind of email it was
+- the **names** of their recent events and the features they use most (names only)
+- your Brain context (Settings) and any knowledge-base entries that match the step
+
+**The AI is not given:**
+
+- the **details inside an event**: an amount, an order, a product or page name. Event properties are deliberately kept out of the prompt (they are free text from your users' side and can be large).
+- custom fields you send with `identify`, such as `first_name` or `job_title`. Only `name`, `email`, `company`, `plan` and the payment status are used. Send `name` (for example "Ama Boateng"), not `first_name`.
+
+| Works | Does not |
+|---|---|
+| "Congratulate them by name, mention their company, and suggest one next step." | "Mention the amount they paid." (the amount is inside the event) |
+| "Thank them for upgrading and mention their plan." (after you identify them with `plan: "Growth"`) | "Confirm which plan they chose" when the plan is only inside the upgrade event |
+| "Thank them for upgrading." | "Reference the last page they visited." |
+| "Remind them they have been with us since signing up." | "Mention their order total." |
+| "If they are on a trial, mention it ends soon." (payment status) | "Say their trial ends on 14 October." (a date from your app) |
+
+To name the plan in an upgrade email, send the new plan when you identify the user, **before or together with** the upgrade event (`identify` with `traits: { plan: "Growth" }`), and write "mention their plan". Sending it only inside the event does not work.
+
+If you need a fact the AI is not given, put it where it is: a product fact that is the same for everyone (what each plan includes) goes in **Brain context** or a **knowledge-base entry**; a fact that differs per contact and is not in the list above (an order total, a renewal date) cannot be used in an AI-drafted email today. For that, write the email yourself with a fixed template (`@template:name`), which can use the contact's fields directly.
+
+One more rule that surprises people: a contact can be in only **one nurture flow at a time** (a higher-priority flow can take over). A contact still waiting on the day-3 step of one nurture flow is not enrolled in another.
+
 ---
 
 ## Onboarding and activation

@@ -449,20 +449,110 @@ describe("invalid payment_status conflict recording", () => {
     await app.close();
   });
 
-  it("rejects invalid plan alias and records as payment_status conflict", async () => {
+  it("a value that is not a status is NOT a conflict on the plan trait: it is the plan's name", async () => {
     if (!dbAvailable) return;
     const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
 
     await identify(app, "user_bad_plan", { plan: "gold_tier" });
 
     const contact = await getContact("user_bad_plan");
-    expect(contact!.paymentStatus).toBe("free");
+    expect(contact!.paymentStatus).toBe("free"); // status untouched
+    expect((contact!.properties as Record<string, unknown>).plan).toBe("gold_tier");
+    expect(await getConflicts(contact!.id)).toHaveLength(0);
 
-    const conflicts = await getConflicts(contact!.id);
-    expect(conflicts.length).toBe(1);
+    await app.close();
+  });
+});
+
+describe("the plan trait: a payment status word, or the plan's name", () => {
+  const props = (c: Awaited<ReturnType<typeof getContact>>) => (c!.properties ?? {}) as Record<string, unknown>;
+
+  it("a plan name is stored where the AI reads it, and changes nothing else", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    await identify(app, "user_plan_name", { name: "Ama Boateng", plan: "Growth" });
+    const c = await getContact("user_plan_name");
+    expect(props(c).plan).toBe("Growth");
+    expect(c!.paymentStatus).toBe("free");
+    expect(c!.name).toBe("Ama Boateng");
+    expect(await getConflicts(c!.id)).toHaveLength(0);
+    await app.close();
+  });
+
+  it("each of the five status words still sets the payment status and is not kept as a plan name", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    for (const status of ["free", "trial", "paid", "past_due", "cancelled"]) {
+      await identify(app, `user_plan_status_${status}`, { plan: status });
+      const c = await getContact(`user_plan_status_${status}`);
+      expect(c!.paymentStatus, status).toBe(status);
+      expect(props(c).plan, status).toBeUndefined();
+    }
+    await app.close();
+  });
+
+  it("the plan name can change, and a later status word does not erase it", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    await identify(app, "user_plan_change", { plan: "Starter" });
+    await identify(app, "user_plan_change", { plan: "Growth" });
+    expect(props(await getContact("user_plan_change")).plan).toBe("Growth");
+    await identify(app, "user_plan_change", { plan: "paid" });
+    const c = await getContact("user_plan_change");
+    expect(c!.paymentStatus).toBe("paid");
+    expect(props(c).plan).toBe("Growth");
+    await app.close();
+  });
+
+  it("sending the status and the name together sets both", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    await identify(app, "user_plan_both", { payment_status: "paid", plan: "Scale" });
+    const c = await getContact("user_plan_both");
+    expect(c!.paymentStatus).toBe("paid");
+    expect(props(c).plan).toBe("Scale");
+    await app.close();
+  });
+
+  it("plan: null removes the plan name and leaves the payment status alone", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    await identify(app, "user_plan_null", { payment_status: "paid", plan: "Growth" });
+    await identify(app, "user_plan_null", { plan: null });
+    const c = await getContact("user_plan_null");
+    expect(props(c).plan).toBeUndefined();
+    expect(c!.paymentStatus).toBe("paid");
+    await app.close();
+  });
+
+  it("payment_status is still strict: a plan name there is a conflict and is not kept as the plan", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    await identify(app, "user_ps_strict", { payment_status: "Growth" });
+    const c = await getContact("user_ps_strict");
+    expect(c!.paymentStatus).toBe("free");
+    expect(props(c).plan).toBeUndefined();
+    const conflicts = await getConflicts(c!.id);
+    expect(conflicts).toHaveLength(1);
     expect(conflicts[0]!.field).toBe("payment_status");
-    expect(conflicts[0]!.rejectedValue).toBe("gold_tier");
+    await app.close();
+  });
 
+  it("a plan name is any text, kept as sent (cleaning for the AI happens where its prompt is built)", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    await identify(app, "user_plan_text", { plan: "Pro (annual, EU)" });
+    expect(props(await getContact("user_plan_text")).plan).toBe("Pro (annual, EU)");
+    await app.close();
+  });
+
+  it("the identify event keeps the original traits, plan included", async () => {
+    if (!dbAvailable) return;
+    const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
+    await identify(app, "user_plan_event", { plan: "Growth" });
+    const c = await getContact("user_plan_event");
+    const evts = await db.select().from(events).where(and(eq(events.tenantId, testTenantId), eq(events.contactId, c!.id)));
+    expect(evts.some((e) => (e.properties as Record<string, unknown>)?.plan === "Growth")).toBe(true);
     await app.close();
   });
 });

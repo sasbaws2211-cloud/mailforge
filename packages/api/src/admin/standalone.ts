@@ -27,6 +27,7 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { trustProxyFromEnv } from "../trust-proxy.js";
+import { installDbErrorHandler } from "../db-errors.js";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import type { FastifyInstance, FastifyServerOptions } from "fastify";
@@ -95,6 +96,7 @@ export async function buildAdminApp(opts: AdminAppOptions): Promise<FastifyInsta
   const app = Fastify({ logger, forceCloseConnections: true, trustProxy: trustProxyFromEnv(process.env.MAILFORGE_TRUST_PROXY) });
 
   await app.register(cookie);
+  installDbErrorHandler(app);
   registerDbPlugin(app, opts.db);
   app.decorateRequest("adminSession", null);
 
