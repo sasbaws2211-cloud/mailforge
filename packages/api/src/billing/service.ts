@@ -2,7 +2,7 @@
  * Billing service: everything that changes a workspace's paid plan.
  *
  * The rules this file enforces:
- *   - Money is only believed after Flutterwave confirms it. Callers pass in a
+ *   - Money is only believed after Paystack confirms it. Callers pass in a
  *     transaction that was fetched from the provider's verify endpoint, never
  *     one taken straight from a webhook body or a browser redirect.
  *   - A payment must match what we asked for: successful status, the same
@@ -23,6 +23,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   addBillingPeriod,
   BILLING_INTERVALS,
+  chargeAmountMinor,
   entitlementsFor,
   isBillingInterval,
   isPaidPlanId,
@@ -40,9 +41,9 @@ import {
   tenants,
 } from "@mailforge/db/schema";
 import type { Db } from "../plugins/db.js";
-import { FlutterwaveError, type FlutterwaveClient, type FlutterwaveTransaction } from "./flutterwave.js";
+import { PaystackError, type PaystackClient, type PaystackTransaction } from "./paystack.js";
 
-const PROVIDER = "flutterwave";
+const PROVIDER = "paystack";
 
 export type BillingErrorCode = "invalid_plan" | "already_subscribed" | "no_subscription" | "provider_error";
 
@@ -61,13 +62,17 @@ export class BillingError extends Error {
 }
 
 export interface BillingConfig {
-  /** Charge currency. Must match the currency of the provider plans (USD). */
+  /** Charge currency. Must match the currency of the provider plans. */
   currency: string;
+  /** Units of `currency` per 1 USD (1 for USD). The charge is the USD list price times this, rounded up. */
+  usdRate: number;
   /** Where the provider sends the customer after paying (absolute URL). */
   returnUrl: string;
 }
 
-const cents = (usd: number): number => Math.round(usd * 100);
+/** What one period of a plan costs in the charge currency's minor unit (cents, pesewas, kobo). */
+export const chargeCents = (plan: PaidPlanId, interval: BillingInterval, currency: string, usdRate: number): number =>
+  chargeAmountMinor(planPriceUsd(plan, interval), currency, usdRate);
 
 // ---------------------------------------------------------------------------
 // Provider plans
@@ -80,12 +85,12 @@ const cents = (usd: number): number => Math.round(usd * 100);
  */
 export async function ensureProviderPlan(
   db: Db,
-  fw: FlutterwaveClient,
-  args: { plan: PaidPlanId; interval: BillingInterval; currency: string },
+  ps: PaystackClient,
+  args: { plan: PaidPlanId; interval: BillingInterval; currency: string; amountCents: number },
 ): Promise<string> {
-  const amountCents = cents(planPriceUsd(args.plan, args.interval));
+  const { amountCents } = args;
   return db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`fwplan:${args.plan}:${args.interval}:${args.currency}:${amountCents}`}))`);
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`psplan:${args.plan}:${args.interval}:${args.currency}:${amountCents}`}))`);
     const [existing] = await tx
       .select({ id: billingProviderPlans.providerPlanId })
       .from(billingProviderPlans)
@@ -101,9 +106,9 @@ export async function ensureProviderPlan(
       .limit(1);
     if (existing) return existing.id;
 
-    const created = await fw.createPaymentPlan({
+    const created = await ps.createPlan({
       name: `Mailforge ${PLANS[args.plan].name} (${args.interval})`,
-      amount: amountCents / 100,
+      amountCents,
       interval: args.interval,
       currency: args.currency,
     });
@@ -113,9 +118,9 @@ export async function ensureProviderPlan(
       interval: args.interval,
       currency: args.currency,
       amountCents,
-      providerPlanId: created.id,
+      providerPlanId: created.code,
     });
-    return created.id;
+    return created.code;
   });
 }
 
@@ -126,7 +131,7 @@ export async function ensureProviderPlan(
 export interface StartCheckoutInput {
   tenantId: string;
   userId: string;
-  /** The payer. Flutterwave ties the subscription to this address for good. */
+  /** The payer. Paystack ties the subscription to this address for good. */
   email: string;
   workspaceName: string;
   plan: PaidPlanId;
@@ -136,10 +141,10 @@ export interface StartCheckoutInput {
 
 export async function startCheckout(
   db: Db,
-  fw: FlutterwaveClient,
+  ps: PaystackClient,
   cfg: BillingConfig,
   input: StartCheckoutInput,
-): Promise<{ url: string; txRef: string }> {
+): Promise<{ url: string; txRef: string; accessCode: string | null }> {
   if (!isPaidPlanId(input.plan) || !isBillingInterval(input.interval)) {
     throw new BillingError("invalid_plan", "Choose a paid plan and a billing interval.", 400);
   }
@@ -155,10 +160,10 @@ export async function startCheckout(
     throw new BillingError("already_subscribed", `You are already on the ${PLANS[input.plan].name} plan, billed ${input.interval}.`, 409);
   }
 
-  const amountCents = cents(planPriceUsd(input.plan, input.interval));
+  const amountCents = chargeCents(input.plan, input.interval, cfg.currency, cfg.usdRate);
   let providerPlanId: string;
   try {
-    providerPlanId = await ensureProviderPlan(db, fw, { plan: input.plan, interval: input.interval, currency: cfg.currency });
+    providerPlanId = await ensureProviderPlan(db, ps, { plan: input.plan, interval: input.interval, currency: cfg.currency, amountCents });
   } catch (err) {
     throw providerFailure(err);
   }
@@ -181,28 +186,86 @@ export async function startCheckout(
     .returning({ id: billingCheckouts.id });
 
   try {
-    const { link } = await fw.createPaymentLink({
-      txRef,
-      amount: amountCents / 100,
+    const { url, accessCode } = await ps.initializeTransaction({
+      reference: txRef,
+      amount: amountCents,
       currency: cfg.currency,
-      redirectUrl: cfg.returnUrl,
-      customer: { email: input.email, name: input.workspaceName },
-      paymentPlanId: providerPlanId,
-      title: "Mailforge",
-      description: `${PLANS[input.plan].name} plan, billed ${input.interval}`,
-      meta: { tenant_id: input.tenantId, plan: input.plan, interval: input.interval, checkout_id: checkout!.id },
+      email: input.email,
+      callbackUrl: cfg.returnUrl,
+      cancelUrl: `${cfg.returnUrl}?status=cancelled&reference=${encodeURIComponent(txRef)}`,
+      planCode: providerPlanId,
+      metadata: {
+        tenant_id: input.tenantId,
+        plan: input.plan,
+        interval: input.interval,
+        checkout_id: checkout!.id,
+        workspace: input.workspaceName,
+        description: `${PLANS[input.plan].name} plan, billed ${input.interval}`,
+      },
     });
-    await db.update(billingCheckouts).set({ checkoutUrl: link }).where(eq(billingCheckouts.id, checkout!.id));
-    return { url: link, txRef };
+    await db.update(billingCheckouts).set({ checkoutUrl: url }).where(eq(billingCheckouts.id, checkout!.id));
+    return { url, txRef, accessCode };
   } catch (err) {
     await db.update(billingCheckouts).set({ status: "failed" }).where(eq(billingCheckouts.id, checkout!.id));
     throw providerFailure(err);
   }
 }
 
+export type CheckoutStatus = "pending" | "paid" | "failed" | "cancelled";
+
+/** When each pending checkout was last checked with the provider, so a page that polls cannot hammer it. */
+const lastVerifiedAt = new Map<string, number>();
+const MIN_VERIFY_GAP_MS = 2_000;
+
+/** For tests: forget when checkouts were last checked, so the next poll goes to the provider. */
+export function resetCheckoutThrottle(): void {
+  lastVerifiedAt.clear();
+}
+
+/**
+ * Where one of THIS workspace's checkouts stands, for a page that is waiting on a payment.
+ *
+ * A checkout that is still pending is looked up with the provider (at most once every two seconds
+ * per checkout) and applied if it has been paid, so the answer does not depend on a webhook or on
+ * the customer being redirected back. A provider hiccup just leaves it pending. Returns null for a
+ * reference that is not this workspace's, so one workspace cannot probe another's payments.
+ */
+export async function checkoutStatus(
+  db: Db,
+  ps: PaystackClient,
+  tenantId: string,
+  reference: string,
+  now: Date = new Date(),
+): Promise<{ status: CheckoutStatus; plan: string; interval: string } | null> {
+  const find = async () =>
+    (await db.select().from(billingCheckouts).where(and(eq(billingCheckouts.txRef, reference), eq(billingCheckouts.tenantId, tenantId))).limit(1))[0];
+  let checkout = await find();
+  if (!checkout) return null;
+
+  if (checkout.status === "pending") {
+    const last = lastVerifiedAt.get(reference) ?? 0;
+    if (now.getTime() - last >= MIN_VERIFY_GAP_MS) {
+      lastVerifiedAt.set(reference, now.getTime());
+      if (lastVerifiedAt.size > 500) {
+        for (const [ref, at] of lastVerifiedAt) if (now.getTime() - at > 3_600_000) lastVerifiedAt.delete(ref);
+      }
+      try {
+        const tx = await ps.verifyTransaction(reference);
+        // Only what the provider says about OUR reference counts.
+        if (tx.reference === reference) await applyVerifiedPayment(db, ps, tx, now);
+      } catch {
+        // Could not confirm just now: it stays pending and the page asks again.
+      }
+      checkout = (await find()) ?? checkout;
+    }
+  }
+  const status: CheckoutStatus = checkout.status === "paid" || checkout.status === "failed" || checkout.status === "cancelled" ? checkout.status : "pending";
+  return { status, plan: checkout.plan, interval: checkout.interval };
+}
+
 /** A provider problem, in words that are safe to show a customer. */
 function providerFailure(err: unknown): BillingError {
-  if (err instanceof FlutterwaveError) {
+  if (err instanceof PaystackError) {
     return new BillingError(
       "provider_error",
       err.transient
@@ -232,7 +295,7 @@ export interface ApplyResult {
   tenantId?: string;
 }
 
-const eventKeyFor = (tx: FlutterwaveTransaction): string => `charge:${tx.id}`;
+const eventKeyFor = (tx: PaystackTransaction): string => `charge:${tx.id}`;
 
 async function recordEvent(
   db: Db,
@@ -253,28 +316,34 @@ async function recordEvent(
   return rows.length > 0;
 }
 
-function txSummary(tx: FlutterwaveTransaction): Record<string, unknown> {
+/** The plan code a charge was made under, or null when it was not under a plan. */
+function planCodeOf(tx: PaystackTransaction): string | null {
+  const code = tx.plan?.plan_code;
+  return typeof code === "string" && code !== "" ? code : null;
+}
+
+function txSummary(tx: PaystackTransaction): Record<string, unknown> {
   return {
     id: tx.id,
-    tx_ref: tx.tx_ref,
+    reference: tx.reference,
     status: tx.status,
     amount: tx.amount,
     currency: tx.currency,
     email: tx.customer?.email ?? null,
-    plan: tx.plan ?? tx.payment_plan ?? null,
+    plan: planCodeOf(tx),
   };
 }
 
 /**
  * Apply a transaction that has been verified with the provider.
  *
- * `tx` MUST come from FlutterwaveClient.verifyTransaction, not from a webhook
+ * `tx` MUST come from PaystackClient.verifyTransaction, not from a webhook
  * body. Safe to call any number of times for the same transaction.
  */
 export async function applyVerifiedPayment(
   db: Db,
-  fw: FlutterwaveClient,
-  tx: FlutterwaveTransaction,
+  ps: PaystackClient,
+  tx: PaystackTransaction,
   now: Date = new Date(),
 ): Promise<ApplyResult> {
   const key = eventKeyFor(tx);
@@ -286,32 +355,34 @@ export async function applyVerifiedPayment(
     .limit(1);
   if (seen) return { outcome: "duplicate" };
 
-  const [checkout] = await db.select().from(billingCheckouts).where(eq(billingCheckouts.txRef, tx.tx_ref)).limit(1);
+  const [checkout] = await db.select().from(billingCheckouts).where(eq(billingCheckouts.txRef, tx.reference)).limit(1);
 
-  // A failed or cancelled attempt: remember it on the checkout, change nothing else.
-  // No event is recorded, so a later successful attempt (a different transaction) still works.
-  if (tx.status !== "successful") {
-    if (checkout && checkout.status === "pending") {
+  // Not paid. Only a definite failure closes the checkout; a payment that is still in
+  // progress or was abandoned leaves it pending, because the customer may yet finish it.
+  // No event is recorded either way, so a later successful attempt still works.
+  if (tx.status !== "success") {
+    if (checkout && checkout.status === "pending" && (tx.status === "failed" || tx.status === "reversed")) {
       await db.update(billingCheckouts).set({ status: "failed", providerTransactionId: String(tx.id), completedAt: now }).where(eq(billingCheckouts.id, checkout.id));
     }
     return { outcome: "ignored", reason: `transaction status is ${tx.status}`, tenantId: checkout?.tenantId };
   }
 
-  return checkout ? applyInitialPayment(db, fw, tx, checkout, key, now) : applyRenewal(db, tx, key, now);
+  return checkout ? applyInitialPayment(db, ps, tx, checkout, key, now) : applyRenewal(db, tx, key, now);
 }
 
 type Checkout = typeof billingCheckouts.$inferSelect;
 
 async function applyInitialPayment(
   db: Db,
-  fw: FlutterwaveClient,
-  tx: FlutterwaveTransaction,
+  ps: PaystackClient,
+  tx: PaystackTransaction,
   checkout: Checkout,
   key: string,
   now: Date,
 ): Promise<ApplyResult> {
   // 1. Does the payment match what we asked for?
-  const paidCents = cents(Number(tx.amount));
+  // Paystack reports amounts in minor units already.
+  const paidCents = Number(tx.amount);
   if (tx.currency?.toUpperCase() !== checkout.currency.toUpperCase() || !Number.isFinite(paidCents) || paidCents < checkout.amountCents) {
     await db.transaction(async (t) => {
       const fresh = await recordEvent(t, {
@@ -397,8 +468,8 @@ async function applyInitialPayment(
 
   // 4. Housekeeping with the provider. The plan is already active; if either call
   //    fails, billing still works and the next sweep or cancel can finish the job.
-  await learnProviderSubscriptionId(db, fw, { tenantId: checkout.tenantId, email: payer, providerPlanId: checkout.providerPlanId });
-  if (holder.replaced) await cancelAtProvider(fw, holder.replaced);
+  await learnProviderSubscriptionId(db, ps, { tenantId: checkout.tenantId, email: payer, providerPlanId: checkout.providerPlanId });
+  if (holder.replaced) await cancelAtProvider(ps, holder.replaced);
 
   return { outcome: "applied_initial", tenantId: checkout.tenantId };
 }
@@ -406,46 +477,94 @@ async function applyInitialPayment(
 /** Find our new subscription's id at the provider, so it can be cancelled later. */
 async function learnProviderSubscriptionId(
   db: Db,
-  fw: FlutterwaveClient,
+  ps: PaystackClient,
   args: { tenantId: string; email: string; providerPlanId: string | null },
 ): Promise<void> {
   try {
-    const list = await fw.listSubscriptions(args.email);
-    const mine = list
-      .filter((s) => s.status === "active" && (args.providerPlanId === null || String(s.plan) === args.providerPlanId))
-      .sort((a, b) => Number(b.id) - Number(a.id))[0];
+    const list = await ps.listSubscriptions(args.email);
+    // Newest first, as Paystack lists them. An id already attached to another of our
+    // subscriptions is somebody else's, so skip it.
+    const mine = list.find((s) => s.status === "active" && (args.providerPlanId === null || s.plan?.plan_code === args.providerPlanId));
     if (!mine) return;
     await db
       .update(subscriptions)
-      .set({ providerSubscriptionId: String(mine.id), updatedAt: new Date() })
-      .where(and(eq(subscriptions.tenantId, args.tenantId), eq(subscriptions.status, "active")));
+      .set({ providerSubscriptionId: mine.subscription_code, updatedAt: new Date() })
+      .where(and(eq(subscriptions.tenantId, args.tenantId), eq(subscriptions.status, "active"), sql`${subscriptions.providerSubscriptionId} IS NULL`));
   } catch {
-    // Not fatal: cancellation will look the id up again when it is needed.
+    // Not fatal: the subscription.create webhook, or cancellation itself, will find the id.
   }
+}
+
+/**
+ * Paystack announced a new subscription (subscription.create). Attach its code to our
+ * matching subscription (same payer and provider plan, id not yet known) so it can be
+ * cancelled. Harmless to repeat, and harmless when it arrives before the payment has
+ * been applied: the id is then learned by the lookup after that payment instead.
+ */
+export async function applySubscriptionCreated(
+  db: Db,
+  payload: { subscriptionCode?: string | null; email?: string | null; planCode?: string | null },
+): Promise<ApplyResult> {
+  const code = payload.subscriptionCode?.trim();
+  const email = payload.email?.trim().toLowerCase();
+  if (!code || !email) return { outcome: "ignored", reason: "no subscription code or email" };
+  const key = `subscription-created:${code}`;
+
+  const [seen] = await db
+    .select({ id: billingEvents.id })
+    .from(billingEvents)
+    .where(and(eq(billingEvents.provider, PROVIDER), eq(billingEvents.eventKey, key)))
+    .limit(1);
+  if (seen) return { outcome: "duplicate" };
+
+  const [taken] = await db.select({ id: subscriptions.id }).from(subscriptions).where(eq(subscriptions.providerSubscriptionId, code)).limit(1);
+  const live = taken
+    ? []
+    : await db
+        .select()
+        .from(subscriptions)
+        .where(
+          and(
+            eq(subscriptions.provider, PROVIDER),
+            eq(subscriptions.status, "active"),
+            sql`${subscriptions.providerSubscriptionId} IS NULL`,
+            sql`lower(${subscriptions.customerEmail}) = ${email}`,
+          ),
+        );
+  const planCode = payload.planCode?.trim() || null;
+  const sub = live.filter((s) => planCode === null || s.providerPlanId === planCode).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+  if (!sub) {
+    // Nothing to attach to yet. Not recorded, so a later redelivery can still attach.
+    return { outcome: "ignored", reason: "no matching subscription yet" };
+  }
+  const fresh = await recordEvent(db, { key, type: "subscription.create", tenantId: sub.tenantId, outcome: "applied", payload: { subscription_code: code, email, plan: planCode } });
+  if (!fresh) return { outcome: "duplicate", tenantId: sub.tenantId };
+  await db.update(subscriptions).set({ providerSubscriptionId: code, updatedAt: new Date() }).where(and(eq(subscriptions.id, sub.id), sql`${subscriptions.providerSubscriptionId} IS NULL`));
+  return { outcome: "ignored", reason: "subscription code recorded", tenantId: sub.tenantId };
 }
 
 /** Stop a replaced subscription's future charges. Never throws. */
 async function cancelAtProvider(
-  fw: FlutterwaveClient,
+  ps: PaystackClient,
   sub: { providerSubscriptionId: string | null; customerEmail: string; providerPlanId: string | null },
 ): Promise<void> {
   try {
     let id = sub.providerSubscriptionId;
     if (!id) {
-      const list = await fw.listSubscriptions(sub.customerEmail);
-      id = list.find((s) => s.status === "active" && (sub.providerPlanId === null || String(s.plan) === sub.providerPlanId))?.id?.toString() ?? null;
+      const list = await ps.listSubscriptions(sub.customerEmail);
+      id = list.find((s) => s.status === "active" && (sub.providerPlanId === null || s.plan?.plan_code === sub.providerPlanId))?.subscription_code ?? null;
     }
-    if (id) await fw.cancelSubscription(id);
+    if (id) await ps.cancelSubscription(id);
   } catch {
     // The customer is on the new plan either way. A stray old subscription would keep
     // charging, so this is logged by the caller's event record and worth a manual check.
   }
 }
 
-async function applyRenewal(db: Db, tx: FlutterwaveTransaction, key: string, now: Date): Promise<ApplyResult> {
+async function applyRenewal(db: Db, tx: PaystackTransaction, key: string, now: Date): Promise<ApplyResult> {
   const email = tx.customer?.email?.trim().toLowerCase();
-  const paidCents = cents(Number(tx.amount));
-  const planId = tx.plan ?? tx.payment_plan;
+  const paidCents = Number(tx.amount);
+  const planId = planCodeOf(tx);
 
   if (!email) {
     await recordEvent(db, { key, type: "charge.completed", outcome: "ignored: no customer email", payload: txSummary(tx) });
@@ -465,7 +584,7 @@ async function applyRenewal(db: Db, tx: FlutterwaveTransaction, key: string, now
       ),
     );
   const byPlan = planId == null ? candidates : candidates.filter((c) => c.providerPlanId === String(planId));
-  // The charge says which provider plan it belongs to when it can; otherwise email + amount.
+  // A renewal names its Paystack plan, which is the strongest match; email + amount is the fallback.
   const matches = byPlan.length > 0 ? byPlan : planId == null ? candidates : [];
   const sub = [...matches].sort((a, b) => a.currentPeriodEnd.getTime() - b.currentPeriodEnd.getTime())[0];
 
@@ -510,8 +629,8 @@ async function applyRenewal(db: Db, tx: FlutterwaveTransaction, key: string, now
 // ---------------------------------------------------------------------------
 
 /**
- * The provider told us a subscription was cancelled (by the customer through
- * their email link, by the dashboard, or after three failed charges). Plan keeps
+ * The provider told us a subscription was cancelled or will not renew (by the customer
+ * through Paystack's emails, by the Paystack dashboard, or by our own cancel call). Plan keeps
  * working until the period paid for ends.
  */
 export async function applySubscriptionCancelled(
@@ -559,7 +678,7 @@ export async function applySubscriptionCancelled(
 /** Customer-initiated cancel: stop future charges, keep the plan until the period ends. */
 export async function cancelSubscriptionForTenant(
   db: Db,
-  fw: FlutterwaveClient,
+  ps: PaystackClient,
   tenantId: string,
   now: Date = new Date(),
 ): Promise<SubscriptionSummary> {
@@ -573,15 +692,15 @@ export async function cancelSubscriptionForTenant(
   try {
     let id = sub.providerSubscriptionId;
     if (!id) {
-      const list = await fw.listSubscriptions(sub.customerEmail);
-      id = list.find((s) => s.status === "active" && (sub.providerPlanId === null || String(s.plan) === sub.providerPlanId))?.id?.toString() ?? null;
+      const list = await ps.listSubscriptions(sub.customerEmail);
+      id = list.find((s) => s.status === "active" && (sub.providerPlanId === null || s.plan?.plan_code === sub.providerPlanId))?.subscription_code ?? null;
     }
     if (id) {
       try {
-        await fw.cancelSubscription(id);
+        await ps.cancelSubscription(id);
       } catch (err) {
         // Provider says it does not exist: nothing is left that could charge, so carry on.
-        if (!(err instanceof FlutterwaveError && err.httpStatus === 404)) throw err;
+        if (!(err instanceof PaystackError && err.httpStatus === 404)) throw err;
       }
     }
     // No id found at all means the provider has nothing active for this payer either.
@@ -604,13 +723,27 @@ export async function cancelSubscriptionForTenant(
 export interface SubscriptionSummary {
   plan: PaidPlanId;
   interval: BillingInterval;
+  /** The US dollar list price this subscription corresponds to (what the customer sees as the price). */
   amountUsd: number;
+  /** What is actually charged each period, in `currency` major units (49 for $49 in USD, 760 for GHS 760). */
+  chargedAmount: number;
+  currency: string;
   /** active: renewing. cancelling: cancelled, plan works until currentPeriodEnd. ended: over. */
   status: "active" | "cancelling" | "ended";
   currentPeriodEnd: Date;
   cancelAtPeriodEnd: boolean;
   /** current | overdue | lapsed | none (see paymentStatus in @mailforge/core). */
   paymentStatus: PaymentStatus;
+}
+
+/**
+ * The US dollar value of a subscription row. A USD subscription is its own charge (so a customer who
+ * signed up at an older price keeps showing it); one charged in another currency is worth the plan's
+ * list price, because the local amount depends on the exchange rate at the time they subscribed.
+ */
+export function subscriptionUsd(sub: { plan: string; interval: string; currency: string; amountCents: number }): number {
+  if (sub.currency.toUpperCase() === "USD") return sub.amountCents / 100;
+  return isPaidPlanId(sub.plan) && isBillingInterval(sub.interval) ? planPriceUsd(sub.plan, sub.interval) : 0;
 }
 
 /** The workspace's current or most recent subscription, shaped for the dashboard. */
@@ -630,7 +763,9 @@ export async function subscriptionSummary(db: Db, tenantId: string, now: Date = 
   return {
     plan: sub.plan,
     interval: sub.interval,
-    amountUsd: sub.amountCents / 100,
+    amountUsd: subscriptionUsd(sub),
+    chargedAmount: sub.amountCents / 100,
+    currency: sub.currency,
     status,
     currentPeriodEnd: sub.currentPeriodEnd,
     cancelAtPeriodEnd: sub.cancelAtPeriodEnd,

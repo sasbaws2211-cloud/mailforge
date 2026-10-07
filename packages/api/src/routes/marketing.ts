@@ -18,7 +18,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply } from "fastify";
 import { eq, sql } from "drizzle-orm";
 import { managedSending, tenants, users } from "@mailforge/db/schema";
-import { TRIAL_PLAN_VALUE, trialEndDate, PLAN_IDS, managedSendingConfigFromEnv, parseGoal } from "@mailforge/core";
+import { TRIAL_PLAN_VALUE, trialEndDate, PLAN_IDS, managedSendingConfigFromEnv, parseGoal, parseUsdRate } from "@mailforge/core";
 import type { Db } from "../plugins/db.js";
 import { SESSION_COOKIE_NAME } from "./auth.js";
 import { SITE_NAME, type SiteContext } from "../marketing/layout.js";
@@ -41,6 +41,18 @@ export interface MarketingRouteOptions {
 const IP_PER_HOUR = 6;
 const EMAIL_PER_HOUR = 3;
 
+/**
+ * The currency customers are charged in when it is not US dollars, for the pricing note. Only
+ * reported when billing is really on in that currency (a key and a valid rate are set), the same
+ * condition under which checkout charges it.
+ */
+function chargeCurrencyFromEnv(): { currency: string; rate: number } | null {
+  const currency = (process.env.PAYSTACK_CURRENCY?.trim() || "USD").toUpperCase();
+  if (currency === "USD" || !process.env.PAYSTACK_SECRET_KEY?.trim()) return null;
+  const rate = parseUsdRate(process.env.PAYSTACK_USD_RATE);
+  return rate === null ? null : { currency, rate };
+}
+
 function siteContext(siteUrl: string): SiteContext {
   let host = "example.com";
   try {
@@ -48,10 +60,13 @@ function siteContext(siteUrl: string): SiteContext {
   } catch {
     /* keep default */
   }
+  const charge = chargeCurrencyFromEnv();
   return {
     siteUrl,
     supportEmail: process.env.MAILFORGE_SUPPORT_EMAIL?.trim() || `support@${host}`,
     legalName: process.env.MAILFORGE_LEGAL_NAME?.trim() || SITE_NAME,
+    chargeCurrency: charge?.currency ?? null,
+    usdRate: charge?.rate ?? null,
   };
 }
 

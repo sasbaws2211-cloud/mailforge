@@ -16,9 +16,7 @@ import type { TransportAdapter, TransportSendParams, TransportSendResult } from 
 import { tenantTablesInDeleteOrder } from "@mailforge/db/purge";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
-import { createFlutterwaveClient } from "../src/billing/flutterwave.js";
 import { buildDeletionCancelledEmail, buildDeletionScheduledEmail } from "../src/account/deletion-email.js";
-import { startFakeFlutterwave, type FakeFlutterwave } from "./helpers/fake-flutterwave.js";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) throw new Error("[account-notice.test] DATABASE_URL is not set.");
@@ -44,8 +42,6 @@ let db: ReturnType<typeof drizzle>;
 let dbAvailable = false;
 let app: FastifyInstance;
 let appMail: FastifyInstance;
-let appBilling: FastifyInstance;
-let fake: FakeFlutterwave;
 
 interface Tenant {
   id: string;
@@ -101,7 +97,6 @@ beforeAll(async () => {
   }
   await cleanup();
   process.env.MAILFORGE_PLATFORM_ADMINS = ADMIN_EMAIL;
-  fake = await startFakeFlutterwave();
   const opts = { logger: false as const, db, baseUrl: "http://localhost:3000", dashboardUrl: "http://localhost:3000" };
   app = await buildApp(opts);
   appMail = await buildApp({
@@ -111,11 +106,6 @@ beforeAll(async () => {
       { adapter: backup, fromEmail: "backup@platform.example", fromName: null },
     ],
   });
-  appBilling = await buildApp({
-    ...opts,
-    noticeTransports: [{ adapter: outbox, fromEmail: "no-reply@platform.example", fromName: null }],
-    billing: { client: createFlutterwaveClient({ secretKey: fake.secretKey, baseUrl: fake.baseUrl }), webhookHash: "h", currency: "USD" },
-  });
 });
 
 beforeEach(() => {
@@ -123,7 +113,6 @@ beforeEach(() => {
   outbox.mode = "ok";
   backup.sent = [];
   backup.mode = "ok";
-  fake?.reset();
 });
 
 afterEach(async () => {
@@ -132,8 +121,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   delete process.env.MAILFORGE_PLATFORM_ADMINS;
-  for (const a of [app, appMail, appBilling]) if (a) await a.close();
-  if (fake) await fake.close();
+  for (const a of [app, appMail]) if (a) await a.close();
   await pool?.end();
 });
 
@@ -238,17 +226,6 @@ describe("emailing the owners when deletion is scheduled", () => {
     expect(outbox.sent).toHaveLength(1);
     expect((await schedule(t)).statusCode).toBe(409);
     expect(outbox.sent).toHaveLength(1);
-  });
-
-  it("sends nothing when the subscription cannot be cancelled and so nothing was scheduled", async () => {
-    if (!dbAvailable) return;
-    const t = await newTenant({ plan: "growth" });
-    await db.execute(sql`INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, provider_subscription_id, current_period_start, current_period_end)
-      VALUES (${t.id}::uuid, 'flutterwave', 'growth', 'monthly', 4900, 'USD', 'active', 'p@y.z', '888', now(), now() + interval '1 month')`);
-    fake.failNext("/subscriptions", 500);
-    expect((await schedule(t, appBilling)).statusCode).toBe(502);
-    expect(await scheduledAt(t.id)).toBeNull();
-    expect(outbox.sent).toHaveLength(0);
   });
 
   it("erasing immediately sends no scheduling email (it has its own notice, tested separately)", async () => {

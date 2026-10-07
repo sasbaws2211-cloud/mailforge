@@ -176,7 +176,7 @@ export function isBillingInterval(value: unknown): value is BillingInterval {
 
 /**
  * Days after the paid-through date during which a paid plan still works. A card
- * retry or a slow webhook should not cut a customer off at midnight; Flutterwave
+ * retry or a slow webhook should not cut a customer off at midnight; Paystack
  * itself retries a failed charge three times, 30 minutes apart.
  */
 export const BILLING_GRACE_DAYS = 3;
@@ -184,6 +184,35 @@ export const BILLING_GRACE_DAYS = 3;
 /** The exact amount in USD charged for one billing period of a paid plan. */
 export function planPriceUsd(plan: PaidPlanId, interval: BillingInterval): number {
   return interval === "yearly" ? PLANS[plan].priceAnnualUsd : PLANS[plan].priceMonthlyUsd;
+}
+
+/**
+ * The amount to charge, in the charge currency's minor unit, for a USD list price.
+ *
+ * In USD it is exact (cents). In any other currency the price is converted at the operator's
+ * fixed rate (units of that currency per 1 USD) and rounded UP to a whole unit, so a customer
+ * is never charged a fraction of a cedi/naira and the operator is never short by rounding.
+ * The 1e-6 allowance keeps floating point noise (100 x 1.1 = 110.00000000000001) from tipping
+ * an exact figure up by a whole unit.
+ */
+export function chargeAmountMinor(usd: number, currency: string, usdRate: number): number {
+  if (currency.toUpperCase() === "USD") return Math.round(usd * 100);
+  return Math.ceil(usd * usdRate - 1e-6) * 100;
+}
+
+/** Highest conversion rate accepted: a typo guard (no real currency is worth less than 1/100000 USD). */
+export const MAX_USD_RATE = 100_000;
+
+/**
+ * Reads an exchange rate (units of local currency per 1 USD) from configuration text.
+ * Returns null unless it is a plain positive decimal number within sane bounds, so values such
+ * as "", "abc", "0", "-5", "1e3", "0x10" and "15,5" are all refused rather than guessed at.
+ */
+export function parseUsdRate(text: string | undefined | null): number | null {
+  const t = (text ?? "").trim();
+  if (!/^\d+(\.\d+)?$/.test(t)) return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n > 0 && n <= MAX_USD_RATE ? n : null;
 }
 
 function daysInUtcMonth(year: number, month0: number): number {

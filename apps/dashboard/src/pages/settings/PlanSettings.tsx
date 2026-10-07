@@ -5,10 +5,11 @@
  * (contacts, emails this month, team members), the subscription (renewal date,
  * cancel), and the plans available with working upgrade buttons.
  *
- * Paying happens on Flutterwave's hosted page: the button asks the server for a
- * checkout link and sends the browser there. Flutterwave then returns the
- * customer to this page with ?billing=success|pending|failed|cancelled|unknown,
- * which is turned into a notice here.
+ * Paying happens in Paystack's popup, on this page: the button asks the server to set the
+ * payment up, opens the popup, and polls the server until the payment is confirmed, then the
+ * plan refreshes by itself. If the popup cannot load, the browser is sent to Paystack's hosted
+ * page instead, which returns the customer here with
+ * ?billing=success|pending|failed|cancelled|unknown, turned into a notice below.
  *
  * Only owners can change the plan. When online billing is not configured the
  * plan cards fall back to a "contact us" link.
@@ -26,11 +27,13 @@ import { useMe } from "../../auth.js";
 import {
   barFraction,
   billingReturnNotice,
+  checkoutPhaseNotice,
   formatDay,
+  formatMoney,
   METER_LABEL,
   usePlan,
   useCancelSubscription,
-  useStartCheckout,
+  useCheckoutFlow,
   type MeterKind,
 } from "../../plan.js";
 import type { BillingInterval, BillingSubscription, PlanCatalogEntry, PlanInfo, PlanMeter, PlanMeterState } from "../../api.js";
@@ -110,6 +113,8 @@ function PlanCard({
   canPurchase,
   billingEnabled,
   busyPlan,
+  busyLabel,
+  currency,
   onChoose,
 }: {
   p: PlanCatalogEntry;
@@ -119,9 +124,14 @@ function PlanCard({
   canPurchase: boolean;
   billingEnabled: boolean;
   busyPlan: string | null;
+  /** What the button of the plan being paid for says meanwhile. */
+  busyLabel: string;
+  /** The currency a checkout charges in. */
+  currency: string;
   onChoose: (plan: string) => void;
 }) {
   const isFree = p.id === "free";
+  const charge = interval === "yearly" ? p.charge_annual : p.charge_monthly;
   const liveSub = sub && sub.status !== "ended" ? sub : null;
   const exactlyThis = liveSub !== null && liveSub.plan === p.id && liveSub.interval === interval && liveSub.status === "active";
   const subject = encodeURIComponent(`Change my plan to ${p.name}`);
@@ -143,7 +153,7 @@ function PlanCard({
           disabled={busyPlan !== null}
           onClick={() => onChoose(p.id)}
         >
-          {busyPlan === p.id ? "Opening checkout..." : `${verb} ${p.name}`}
+          {busyPlan === p.id ? busyLabel : `${verb} ${p.name}`}
         </Button>
       );
     }
@@ -178,6 +188,9 @@ function PlanCard({
       <p className="mt-1 text-[22px] font-semibold tracking-[-0.02em] text-foreground">
         {isFree ? "$0/mo" : priceLabel(p, interval)}
       </p>
+      {!isFree && charge !== null && (
+        <p className="text-[12px] text-muted-foreground">billed as {formatMoney(charge, currency)}{interval === "yearly" ? "/yr" : "/mo"}</p>
+      )}
       {!isFree && interval === "yearly" && (
         <p className="text-[12px] text-muted-foreground">about ${n(Math.round(p.price_annual_usd / 12))}/mo, two months free</p>
       )}
@@ -223,7 +236,8 @@ function BillingSection({ plan, canManage }: { plan: PlanInfo; canManage: boolea
   if (!sub) return null;
   const planName = plan.plans.find((p) => p.id === sub.plan)?.name ?? sub.plan;
   const end = formatDay(sub.current_period_end);
-  const price = `$${n(sub.amount_usd)} ${sub.interval === "yearly" ? "a year" : "a month"}`;
+  const per = sub.interval === "yearly" ? "a year" : "a month";
+  const price = sub.currency.toUpperCase() === "USD" ? `$${n(sub.amount_usd)} ${per}` : `${formatMoney(sub.charged_amount, sub.currency)} ${per} ($${n(sub.amount_usd)} list price)`;
 
   async function doCancel() {
     setError(null);
@@ -239,7 +253,7 @@ function BillingSection({ plan, canManage }: { plan: PlanInfo; canManage: boolea
     <Section
       title="Subscription"
       configured={null}
-      description="Your payment plan with Flutterwave."
+      description="Your payment plan with Paystack."
       actions={
         <Badge variant={sub.status === "active" ? "success" : sub.status === "cancelling" ? "warning" : "muted"}>
           {sub.status === "active" ? "Active" : sub.status === "cancelling" ? "Cancelling" : "Ended"}
@@ -292,7 +306,8 @@ export default function PlanSettings() {
   // While a payment is being confirmed, look again every few seconds.
   const { data: plan, isLoading, error } = usePlan({ pollMs: waiting ? 3000 : undefined });
   const { data: me } = useMe();
-  const checkout = useStartCheckout();
+  const flow = useCheckoutFlow();
+  const [choosing, setChoosing] = useState<string | null>(null);
   const [interval, setPeriod] = useState<BillingInterval>("monthly");
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
@@ -332,7 +347,9 @@ export default function PlanSettings() {
   const isOwner = me?.user.role === "owner";
   const { meters } = plan;
   const trial = trialLine(plan);
-  const returnNotice = billingReturnNotice(returned);
+  // What the in-page payment says wins over the notice from a redirect back (the fallback path).
+  const phaseNotice = checkoutPhaseNotice(flow.phase);
+  const returnNotice = phaseNotice ?? billingReturnNotice(returned);
   const seatDetail =
     `${meters.seats.members} ${meters.seats.members === 1 ? "member" : "members"}` +
     (meters.seats.pending_invites > 0
@@ -340,6 +357,7 @@ export default function PlanSettings() {
       : "");
 
   function dismissReturn() {
+    flow.reset();
     const next = new URLSearchParams(params);
     next.delete("billing");
     setParams(next, { replace: true });
@@ -347,10 +365,13 @@ export default function PlanSettings() {
 
   async function choose(planId: string) {
     setCheckoutError(null);
+    setChoosing(planId);
     try {
-      await checkout.mutateAsync({ plan: planId, interval });
+      await flow.start({ plan: planId, interval });
     } catch (err) {
       setCheckoutError(errorMessage(err));
+    } finally {
+      setChoosing(null);
     }
   }
 
@@ -443,7 +464,9 @@ export default function PlanSettings() {
               supportEmail={plan.support_email}
               canPurchase={isOwner}
               billingEnabled={plan.billing.enabled}
-              busyPlan={checkout.isPending ? (checkout.variables?.plan ?? null) : null}
+              busyPlan={flow.busy ? choosing : null}
+              busyLabel={flow.phase === "popup" ? "Waiting for payment..." : "Opening checkout..."}
+              currency={plan.billing.currency}
               onChoose={(id) => void choose(id)}
             />
           ))}
@@ -451,7 +474,9 @@ export default function PlanSettings() {
         <FormError message={checkoutError} />
         {plan.billing.enabled && (
           <p className="mt-4 text-[12px] text-muted-foreground">
-            Payments are by card, in US dollars, and are processed by Flutterwave. We never see or store your card.
+            {plan.billing.currency.toUpperCase() === "USD"
+              ? "Payments are by card, in US dollars, and are processed by Paystack. We never see or store your card."
+              : `Prices are listed in US dollars and charged in ${plan.billing.currency} at a fixed rate of ${plan.billing.usd_rate} per $1. Payments are by card and processed by Paystack. We never see or store your card.`}
           </p>
         )}
       </Section>

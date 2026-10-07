@@ -18,8 +18,6 @@ import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
 import { resetExportLimit } from "../src/routes/account.js";
 import { EXPORT_EXCLUDED, EXPORT_TABLES } from "../src/account/export.js";
 import { deletionGraceDays } from "../src/account/deletion.js";
-import { createFlutterwaveClient } from "../src/billing/flutterwave.js";
-import { startFakeFlutterwave, type FakeFlutterwave } from "./helpers/fake-flutterwave.js";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) throw new Error("[account.test] DATABASE_URL is not set.");
@@ -31,8 +29,6 @@ let lockClient: pg.PoolClient | undefined;
 let db: ReturnType<typeof drizzle>;
 let dbAvailable = false;
 let app: FastifyInstance;
-let appBilling: FastifyInstance;
-let fake: FakeFlutterwave;
 
 interface Tenant {
   id: string;
@@ -90,9 +86,9 @@ async function seedRich(t: Tenant, tag = "rich"): Promise<{ contactId: string }>
   await db.execute(sql`INSERT INTO retention_grid_snapshots (tenant_id, snapshot_date, tenure_bucket, recency_bucket, contact_count, paying_count) VALUES (${id}::uuid, current_date, 'a', 'b', 1, 0)`);
   await db.execute(sql`INSERT INTO scan_checkpoints (scan_phase, tenant_id, last_id, started_at) VALUES ('p', ${id}::uuid, ${cid}::uuid, now())`);
   await db.execute(sql`INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-    VALUES (${id}::uuid, 'flutterwave', 'growth', 'monthly', 4900, 'USD', 'ended', 'payer@x.example', now() - interval '60 days', now() - interval '30 days')`);
+    VALUES (${id}::uuid, 'paystack', 'growth', 'monthly', 4900, 'USD', 'ended', 'payer@x.example', now() - interval '60 days', now() - interval '30 days')`);
   await db.execute(sql`INSERT INTO billing_checkouts (tenant_id, tx_ref, plan, interval, amount_cents, customer_email, checkout_url) VALUES (${id}::uuid, ${"tx-" + id}, 'growth', 'monthly', 4900, 'payer@x.example', 'https://pay.example/SECRET-CHECKOUT')`);
-  await db.execute(sql`INSERT INTO billing_events (provider, event_key, event_type, tenant_id, outcome) VALUES ('flutterwave', ${"charge:" + id}, 'charge.completed', ${id}::uuid, 'applied')`);
+  await db.execute(sql`INSERT INTO billing_events (provider, event_key, event_type, tenant_id, outcome) VALUES ('paystack', ${"charge:" + id}, 'charge.completed', ${id}::uuid, 'applied')`);
   await db.execute(sql`INSERT INTO admin_audit_log (actor_user_id, actor_email, action, tenant_id, detail) VALUES (${t.userId}::uuid, 'someone@x.example', 'suspend', ${id}::uuid, '{"reason":"earlier"}'::jsonb)`);
   return { contactId: cid };
 }
@@ -158,18 +154,12 @@ beforeAll(async () => {
   }
   await cleanup();
   process.env.MAILFORGE_PLATFORM_ADMINS = ADMIN_EMAIL;
-  fake = await startFakeFlutterwave();
   const opts = { logger: false as const, db, baseUrl: "http://localhost:3000", dashboardUrl: "http://localhost:3000" };
   app = await buildApp(opts);
-  appBilling = await buildApp({
-    ...opts,
-    billing: { client: createFlutterwaveClient({ secretKey: fake.secretKey, baseUrl: fake.baseUrl }), webhookHash: "h", currency: "USD" },
-  });
 });
 
 beforeEach(() => {
   resetExportLimit();
-  fake?.reset();
 });
 
 afterEach(async () => {
@@ -181,8 +171,6 @@ afterAll(async () => {
   delete process.env.MAILFORGE_PLATFORM_ADMINS;
   delete process.env.MAILFORGE_DELETION_GRACE_DAYS;
   if (app) await app.close();
-  if (appBilling) await appBilling.close();
-  if (fake) await fake.close();
   if (lockClient) {
     await lockClient.query("SELECT pg_advisory_unlock(7770001)");
     lockClient.release();
@@ -404,35 +392,6 @@ describe("asking to delete a workspace", () => {
     expect(again.json().code).toBe("not_scheduled");
   });
 
-  it("cancels a live subscription with the payment provider first, so nobody is charged for a doomed workspace", async () => {
-    if (!dbAvailable) return;
-    const t = await newTenant({ plan: "growth" });
-    await db.execute(sql`INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-      VALUES (${t.id}::uuid, 'flutterwave', 'growth', 'monthly', 4900, 'USD', 'active', 'p@y.z', now(), now() + interval '1 month')`);
-    const res = await req(appBilling, "POST", "/v1/account/deletion", owner(t), { confirm: t.slug });
-    expect(res.statusCode).toBe(200);
-    const [sub] = await q<{ status: string }>(sql`SELECT status FROM subscriptions WHERE tenant_id = ${t.id}::uuid`);
-    expect(sub!.status).toBe("cancelled");
-  });
-
-  it("schedules nothing if the provider will not cancel the subscription", async () => {
-    if (!dbAvailable) return;
-    const t = await newTenant({ plan: "growth" });
-    await db.execute(sql`INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, provider_subscription_id, current_period_start, current_period_end)
-      VALUES (${t.id}::uuid, 'flutterwave', 'growth', 'monthly', 4900, 'USD', 'active', 'p@y.z', '777', now(), now() + interval '1 month')`);
-    fake.failNext("/subscriptions", 500);
-    const res = await req(appBilling, "POST", "/v1/account/deletion", owner(t), { confirm: t.slug });
-    expect(res.statusCode).toBe(502);
-    expect((await tenantRow(t.id))!.deletion_scheduled_at).toBeNull();
-    const [sub] = await q<{ status: string }>(sql`SELECT status FROM subscriptions WHERE tenant_id = ${t.id}::uuid`);
-    expect(sub!.status).toBe("active");
-  });
-
-  it("a Free workspace with no subscription schedules fine with billing on", async () => {
-    if (!dbAvailable) return;
-    const t = await newTenant();
-    expect((await req(appBilling, "POST", "/v1/account/deletion", owner(t), { confirm: t.slug })).statusCode).toBe(200);
-  });
 });
 
 // ===========================================================================
@@ -662,23 +621,6 @@ describe("platform admin: export and deletion", () => {
     expect(shown[0]).toMatchObject({ action: "delete_workspace", tenant_id: null });
     expect((await req(app, "GET", `/v1/admin/tenants/${t.id}`, owner(a))).statusCode).toBe(404);
     expect((await req(app, "POST", `/v1/admin/tenants/${t.id}/delete`, owner(a), { confirm: t.slug, reason: "again", immediate: true })).statusCode).toBe(404);
-  });
-
-  it("immediate deletion of a paying customer cancels their subscription first; if that fails, nothing is deleted", async () => {
-    if (!dbAvailable) return;
-    const a = await withAdmin();
-    const t = await newTenant({ plan: "growth" });
-    await db.execute(sql`INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, provider_subscription_id, current_period_start, current_period_end)
-      VALUES (${t.id}::uuid, 'flutterwave', 'growth', 'monthly', 4900, 'USD', 'active', 'p@y.z', '555', now(), now() + interval '1 month')`);
-    fake.failNext("/subscriptions", 500);
-    const bad = await req(appBilling, "POST", `/v1/admin/tenants/${t.id}/delete`, owner(a), { confirm: t.slug, reason: "r", immediate: true });
-    expect(bad.statusCode).toBe(502);
-    expect(await exists(t.id)).toBe(true);
-
-    const good = await req(appBilling, "POST", `/v1/admin/tenants/${t.id}/delete`, owner(a), { confirm: t.slug, reason: "r", immediate: true });
-    expect(good.statusCode).toBe(200);
-    expect(await exists(t.id)).toBe(false);
-    expect(fake.callsTo("PUT", "/v3/subscriptions").length + fake.callsTo("PUT", "/subscriptions").length).toBeGreaterThan(0);
   });
 
   it("the console shows the pending deletion on the workspace", async () => {

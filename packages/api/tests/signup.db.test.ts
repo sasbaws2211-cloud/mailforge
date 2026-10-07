@@ -290,6 +290,59 @@ describe("POST /signup: rate limits", () => {
     expect((await post(app, goodFields(`rl-ip7${DOMAIN}`), "203.0.113.10")).statusCode).toBe(200);
   });
 
+  describe("behind a reverse proxy (MAILFORGE_TRUST_PROXY)", () => {
+    // Every request arrives from the proxy (10.0.0.1); the real visitor is in X-Forwarded-For.
+    const viaProxy = (app: FastifyInstance, email: string, visitor: string) =>
+      app.inject({
+        method: "POST",
+        url: "/signup",
+        headers: { "content-type": "application/x-www-form-urlencoded", "x-forwarded-for": visitor },
+        payload: form(goodFields(email)),
+        remoteAddress: "10.0.0.1",
+      });
+
+    it("by default the header is ignored, so one client cannot dodge the limit by changing it", async () => {
+      if (!dbAvailable) return;
+      delete process.env.MAILFORGE_TRUST_PROXY;
+      const app = await newApp();
+      for (let i = 0; i < 6; i++) expect((await viaProxy(app, `tp-off${i}${DOMAIN}`, `198.51.100.${i + 1}`)).statusCode, `attempt ${i}`).toBe(200);
+      expect((await viaProxy(app, `tp-off6${DOMAIN}`, "198.51.100.77")).statusCode).toBe(429);
+    });
+
+    it("with trust on, each visitor is counted by their own address, not the proxy's", async () => {
+      if (!dbAvailable) return;
+      process.env.MAILFORGE_TRUST_PROXY = "true";
+      try {
+        const app = await newApp();
+        // Eight different visitors through the same proxy: none is limited.
+        for (let i = 0; i < 8; i++) expect((await viaProxy(app, `tp-on${i}${DOMAIN}`, `198.51.100.${i + 1}`)).statusCode, `visitor ${i}`).toBe(200);
+        // One visitor still hits the per-IP limit of six.
+        for (let i = 0; i < 6; i++) expect((await viaProxy(app, `tp-same${i}${DOMAIN}`, "203.0.113.50")).statusCode, `same ${i}`).toBe(200);
+        expect((await viaProxy(app, `tp-same6${DOMAIN}`, "203.0.113.50")).statusCode).toBe(429);
+      } finally {
+        delete process.env.MAILFORGE_TRUST_PROXY;
+      }
+    });
+
+    it("trusting one proxy takes the address that proxy added, ignoring what the client sent before it", async () => {
+      if (!dbAvailable) return;
+      process.env.MAILFORGE_TRUST_PROXY = "1";
+      try {
+        const app = await newApp();
+        // The client claims a different address each time, but the proxy always appends the real one.
+        for (let i = 0; i < 6; i++) {
+          expect((await viaProxy(app, `tp-one${i}${DOMAIN}`, `198.51.100.${i + 1}, 203.0.113.60`)).statusCode, `attempt ${i}`).toBe(200);
+        }
+        // The same real visitor (the proxy-added entry) is limited, whatever the client wrote before it...
+        expect((await viaProxy(app, `tp-one6${DOMAIN}`, "192.0.2.1, 203.0.113.60")).statusCode).toBe(429);
+        // ...and a different real visitor through the same proxy is not.
+        expect((await viaProxy(app, `tp-one7${DOMAIN}`, "192.0.2.1, 203.0.113.61")).statusCode).toBe(200);
+      } finally {
+        delete process.env.MAILFORGE_TRUST_PROXY;
+      }
+    });
+  });
+
   it("JSON clients get a 429 JSON body", async () => {
     if (!dbAvailable) return;
     const app = await newApp();

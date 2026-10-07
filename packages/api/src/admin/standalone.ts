@@ -26,6 +26,7 @@
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
+import { trustProxyFromEnv } from "../trust-proxy.js";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import type { FastifyInstance, FastifyServerOptions } from "fastify";
@@ -91,7 +92,7 @@ export async function buildAdminApp(opts: AdminAppOptions): Promise<FastifyInsta
 
   const logger =
     opts.logger !== undefined ? opts.logger : process.env.NODE_ENV === "test" ? false : { level: process.env.LOG_LEVEL ?? "info" };
-  const app = Fastify({ logger, forceCloseConnections: true });
+  const app = Fastify({ logger, forceCloseConnections: true, trustProxy: trustProxyFromEnv(process.env.MAILFORGE_TRUST_PROXY) });
 
   await app.register(cookie);
   registerDbPlugin(app, opts.db);

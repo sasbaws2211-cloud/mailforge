@@ -14,7 +14,7 @@ import { tenants } from "./tenants.js";
 import { users } from "./users.js";
 
 /**
- * Billing tables. The payment provider (Flutterwave) is recorded on every row
+ * Billing tables. The payment provider (Paystack) is recorded on every row
  * so a second provider could be added without a schema change.
  *
  * Money is stored in minor units (cents) as integers, never floats.
@@ -42,7 +42,7 @@ export const subscriptions = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id),
-    provider: text("provider").notNull().default("flutterwave"),
+    provider: text("provider").notNull().default("paystack"),
     /** starter | growth | scale */
     plan: text("plan").notNull(),
     /** monthly | yearly */
@@ -50,7 +50,7 @@ export const subscriptions = pgTable(
     amountCents: integer("amount_cents").notNull(),
     currency: text("currency").notNull().default("USD"),
     status: text("status").notNull(),
-    /** The payer. Flutterwave ties a subscription to this address; it cannot change. */
+    /** The payer. Paystack ties a subscription to this address; it cannot change. */
     customerEmail: text("customer_email").notNull(),
     /** The provider's payment plan id this subscription charges under. */
     providerPlanId: text("provider_plan_id"),

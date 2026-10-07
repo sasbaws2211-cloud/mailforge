@@ -2,7 +2,7 @@
 
 Work top to bottom. Nothing here needs code changes except where marked. Items marked **[you]** need your own accounts, keys or decisions.
 
-Why this exists: everything below was built and tested against local fakes (fake Flutterwave, fake Resend, stub LLM, Mailpit). Section 5 is the first time real services are touched, so expect to fix small things there.
+Why this exists: everything below was built and tested against local fakes (fake Resend, stub LLM, Mailpit); the Paystack payment flow has no automated test, so it has only been checked against Paystack's documentation. Section 5 is the first time real services are touched, so expect to fix small things there.
 
 ---
 
@@ -12,7 +12,7 @@ Why this exists: everything below was built and tested against local fakes (fake
 - [ ] **[you]** Sending domain for platform mail and the shared sender, e.g. `mail.<domain>`.
 - [ ] **[you]** Host. It must run Docker and keep ONE app container (see 3). Any VPS or container host works.
 - [ ] **[you]** Managed Postgres 16 with pgvector, direct connection (no pooler). Neon/RDS/Cloud SQL all work. Turn on automated daily backups and point-in-time recovery.
-- [ ] **[you]** Accounts: Flutterwave (live), Resend, one LLM provider, and an error-tracking service if you want one (Mailforge has no Sentry hook built in).
+- [ ] **[you]** Accounts: Paystack (live), Resend, one LLM provider, and an error-tracking service if you want one (Mailforge has no Sentry hook built in).
 - [ ] **[you]** Legal entity name for `MAILFORGE_LEGAL_NAME`, a real support mailbox, a real postal address (email footers require one).
 
 ## 2. Code cleanup (no credentials needed)
@@ -29,7 +29,7 @@ Why this exists: everything below was built and tested against local fakes (fake
 - [ ] Create the production `.env` from `.env.example` on the server. Never reuse the local `.env`.
 - [ ] Generate fresh secrets: `ENCRYPTION_KEY`, `UNSUBSCRIBE_SIGNING_KEY`. **Back both up in a secrets manager.** Losing `ENCRYPTION_KEY` loses every stored transport and LLM credential. Losing `UNSUBSCRIBE_SIGNING_KEY` breaks every unsubscribe link already delivered.
 - [ ] `DATABASE_URL` = the managed Postgres direct URL. Run migrations (`MAILFORGE_MIGRATE_ON_BOOT=true` on first boot, or the install command).
-- [ ] Use the production compose only: `docker compose up -d`. Do NOT include the Mailpit, fake-pay or local-admin override files. Remove the `postgres` service if using managed Postgres.
+- [ ] Use the production compose only: `docker compose up -d`. Do NOT include the Mailpit or local-admin override files. Remove the `postgres` service if using managed Postgres.
 - [ ] Put HTTPS in front (Caddy or nginx, or the host's load balancer) for the app and admin hostnames.
 - [ ] **Exactly one app container.** Rate limiters are in memory and the scheduler has no multi-instance lock. If you ever scale out, follow `DEPLOYMENT.md` (one `--role=scheduler`, shared limiter store needed first).
 - [ ] Set `NODE_ENV=production`.
@@ -67,13 +67,14 @@ PLATFORM_RESEND_API_KEY=re_...   # or PLATFORM_SMTP_HOST/PORT/SECURE/USER/PASSWO
 ```
 Without this nobody can sign in. Verify the sending domain in Resend first (SPF, DKIM, DMARC).
 
-Billing (Flutterwave live):
+Billing (Paystack live):
 ```
-FLUTTERWAVE_SECRET_KEY=FLWSECK-...        # LIVE key
-FLUTTERWAVE_WEBHOOK_HASH=<long random>    # also entered in the Flutterwave dashboard
-FLUTTERWAVE_CURRENCY=USD
+PAYSTACK_SECRET_KEY=sk_live_...   # LIVE key; Paystack signs webhooks with it, so there is no separate hash
+PAYSTACK_CURRENCY=USD             # must be a currency your Paystack account can charge
+# For Ghana cedis instead: PAYSTACK_CURRENCY=GHS and PAYSTACK_USD_RATE=<cedis per $1>.
+# Billing stays OFF for a non-USD currency until a valid rate is set.
 ```
-In Flutterwave: webhook URL `https://app.<domain>/webhooks/flutterwave`, secret hash = the value above. Remove `FLUTTERWAVE_BASE_URL` (that is only for the fake).
+In Paystack (Settings, API Keys & Webhooks): Live Webhook URL `https://app.<domain>/webhooks/paystack`. Leave `PAYSTACK_BASE_URL` unset (it is only for the fake). Check first that USD is enabled for your business; see "Currency" in `BILLING.md`.
 
 Managed sending (customers without their own SMTP):
 ```
@@ -111,14 +112,17 @@ Use small real amounts and your own addresses. Tick each only when you saw it wo
 - [ ] Sign up with a real inbox. The login link arrives within a minute and is not in spam.
 - [ ] Check the headers of that email: SPF, DKIM and DMARC all pass.
 
-**Flutterwave** (these are the guesses from my notes, so watch them closely)
+**Paystack** (the payment flow has never run against real Paystack, so watch these closely)
+- [ ] Plan creation works in your currency (if USD is not enabled for the account it fails here: see `BILLING.md`, Currency).
 - [ ] Upgrade to Starter monthly with a real card. Plan flips to Starter, receipt arrives.
-- [ ] Webhook arrives (look in `billing_events`) and `plan_paid_through` is set.
-- [ ] Wait for or force a renewal. Confirm the renewal is matched to the right workspace (matching is by email and amount; a customer who pays with a different email would not match).
-- [ ] Cancel. Confirm the cancel call really works against live Flutterwave (the endpoint path was inferred). If it fails, the code must be fixed before launch.
-- [ ] Try a customer with no phone number: does checkout still work?
-- [ ] Annual plan: confirm the charged amount is `priceAnnualUsd` (190/490/1290).
-- [ ] Mobile-money customers: confirm what happens (recurring is cards only).
+- [ ] The webhooks arrive and are accepted: look in `billing_events` for `charge.completed` and `subscription.create`, and in the Paystack dashboard that deliveries show 200. A 401 means the secret key and the webhook disagree.
+- [ ] `subscriptions.provider_subscription_id` is filled in (it comes from `subscription.create`). If it is empty after a minute, check the payload shape.
+- [ ] Close the payment page without paying: you land back on the Plan page with a "cancelled" notice.
+- [ ] Wait for or force a renewal (Paystack test mode can bill sooner on a short plan). Confirm it is matched to the right workspace (matching is by email, plan code and amount).
+- [ ] Cancel from the Plan page: the subscription shows as disabled in Paystack, and no further charge happens.
+- [ ] Cancel from a Paystack email link or the Paystack dashboard: the plan page shows "cancelling" after the `subscription.disable` webhook.
+- [ ] Annual plan: confirm the charged amount is `priceAnnualUsd` (190/490/1290) and the interval is annually.
+- [ ] Mobile-money customers: confirm what happens (subscriptions are cards only).
 
 **Resend managed sending**
 - [ ] New workspace turns on "Mailforge Sending" and a test email goes out from the shared sender.
@@ -137,7 +141,7 @@ Use small real amounts and your own addresses. Tick each only when you saw it wo
 - [ ] Hit a plan limit on purpose (a Free workspace past 500 contacts) and see the 402 and the banner.
 - [ ] Export data, schedule deletion, cancel deletion.
 - [ ] Admin console: sign in, register a passkey on a REAL device, sign out, sign in with it. Then flip to `enforced`.
-- [ ] Suspended paying customers are still charged by Flutterwave. Know the manual step: cancel the subscription in the admin console first.
+- [ ] Suspended paying customers are still charged by Paystack. Know the manual step: cancel the subscription in the admin console first.
 
 ## 6. Soft launch
 

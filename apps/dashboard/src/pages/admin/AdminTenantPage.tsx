@@ -440,7 +440,7 @@ export default function AdminTenantPage() {
             {d.subscriptions.map((s, i) => (
               <li key={i} className="py-2.5 text-[14px]">
                 <p className="text-foreground">
-                  {planLabel(s.plan)}, {s.interval}, ${s.amount_usd} {s.currency} <Badge variant={s.status === "active" ? "success" : "muted"}>{s.status}</Badge>
+                  {planLabel(s.plan)}, {s.interval}, ${s.amount_usd}{s.currency.toUpperCase() === "USD" ? "" : ` (charged ${s.charged_amount} ${s.currency})`} <Badge variant={s.status === "active" ? "success" : "muted"}>{s.status}</Badge>
                 </p>
                 <p className="text-[13px] text-muted-foreground">
                   payer {s.payer_email}

@@ -1,7 +1,8 @@
 /**
  * Billing routes for signed-in owners.
  *
- *   POST /v1/billing/checkout   { plan, interval }  -> { url }   start a payment
+ *   POST /v1/billing/checkout   { plan, interval }  -> { url, reference, access_code }   start a payment
+ *   GET  /v1/billing/checkouts/:reference            -> { status, plan, interval }       poll one of your checkouts
  *   POST /v1/billing/cancel                          -> subscription summary
  *
  * Only owners can change the plan. When billing is not configured both answer
@@ -15,7 +16,7 @@ import { isBillingInterval, isPaidPlanId } from "@mailforge/core";
 import { tenants, users } from "@mailforge/db/schema";
 import type { Db } from "../plugins/db.js";
 import type { BillingRuntime } from "../billing/config.js";
-import { BillingError, cancelSubscriptionForTenant, startCheckout } from "../billing/service.js";
+import { BillingError, cancelSubscriptionForTenant, checkoutStatus, startCheckout } from "../billing/service.js";
 
 export interface BillingRouteOptions {
   runtime: BillingRuntime;
@@ -44,10 +45,10 @@ const billingRoutes: FastifyPluginAsync<BillingRouteOptions> = async (app, opts)
       if (!user || !tenant) return reply.status(404).send({ error: "Account not found." });
 
       try {
-        const { url } = await startCheckout(
+        const { url, txRef, accessCode } = await startCheckout(
           db,
           runtime.client,
-          { currency: runtime.currency, returnUrl },
+          { currency: runtime.currency, usdRate: runtime.usdRate, returnUrl },
           {
             tenantId: request.tenant!.id,
             userId: request.tenant!.userId,
@@ -57,13 +58,23 @@ const billingRoutes: FastifyPluginAsync<BillingRouteOptions> = async (app, opts)
             interval,
           },
         );
-        return { url };
+        // `url` is the hosted page (the fallback); `access_code` opens the same payment in the inline popup.
+        return { url, reference: txRef, access_code: accessCode };
       } catch (err) {
         if (err instanceof BillingError) return reply.status(err.httpStatus).send(err.toJSON());
         throw err;
       }
     },
   );
+
+  // The page polls this while the payment popup is open. Only the workspace's own checkouts are visible.
+  app.get<{ Params: { reference: string } }>("/checkouts/:reference", { config: { minRole: "owner" } }, async (request, reply) => {
+    if (!runtime.enabled || !runtime.client) return reply.status(503).send(NOT_AVAILABLE);
+    const found = await checkoutStatus(request.server.db as Db, runtime.client, request.tenant!.id, request.params.reference);
+    if (!found) return reply.status(404).send({ error: "Checkout not found.", code: "checkout_not_found" });
+    reply.header("Cache-Control", "no-store");
+    return found;
+  });
 
   app.post("/cancel", { config: { minRole: "owner" } }, async (request, reply) => {
     if (!runtime.enabled || !runtime.client) return reply.status(503).send(NOT_AVAILABLE);

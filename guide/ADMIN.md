@@ -52,7 +52,7 @@ log with your email, in the same step as the change.
 | --- | --- |
 | Set plan by hand | Puts the workspace on Free, Starter, Growth or Scale with no expiry, replacing any trial. For design partners, goodwill, fixing a mistake. |
 | Give a trial | Growth trial ending the chosen number of days from now (1 to 90). Revives an ended trial. |
-| Cancel subscription | Stops future charges. The plan runs to the end of the paid period. Needs billing configured. Nothing is refunded here: do refunds in Flutterwave. |
+| Cancel subscription | Stops future charges. The plan runs to the end of the paid period. Needs billing configured. Nothing is refunded here: do refunds in Paystack. |
 | Suspend / Reinstate | Suspend switches the workspace off. Reinstate switches it back on. |
 
 Rules the server enforces:
@@ -71,7 +71,7 @@ Rules the server enforces:
   with `403 workspace_suspended`.
 - Nothing is sent. Approved emails stay queued and go out when you reinstate.
 - Nothing is deleted. Data, flows, contacts and subscriptions are untouched.
-- A paying customer who is suspended is **still charged** by Flutterwave. Cancel the
+- A paying customer who is suspended is **still charged** by Paystack. Cancel the
   subscription too if you do not want that.
 - Unsubscribe links in emails already sent keep working: they are public pages.
 

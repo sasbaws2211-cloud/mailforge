@@ -32,6 +32,10 @@ export interface SiteContext {
   siteUrl: string;
   /** Contact address shown in the footer and legal pages. */
   supportEmail: string;
+  /** The currency customers are really charged in, when it is not US dollars (for example GHS). */
+  chargeCurrency?: string | null;
+  /** Units of chargeCurrency per 1 USD, used to show what each plan costs in that currency. */
+  usdRate?: number | null;
   /** Legal entity name for the legal pages. */
   legalName: string;
 }

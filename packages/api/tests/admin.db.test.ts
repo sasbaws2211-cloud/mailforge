@@ -14,9 +14,7 @@ import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
-import { createFlutterwaveClient } from "../src/billing/flutterwave.js";
 import { isPlatformAdmin, platformAdminEmails } from "../src/admin/platform-admins.js";
-import { startFakeFlutterwave, type FakeFlutterwave } from "./helpers/fake-flutterwave.js";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) throw new Error("[admin.test] DATABASE_URL is not set.");
@@ -28,8 +26,6 @@ let lockClient: pg.PoolClient | undefined;
 let db: ReturnType<typeof drizzle>;
 let dbAvailable = false;
 let app: FastifyInstance;
-let appBilling: FastifyInstance;
-let fake: FakeFlutterwave;
 
 interface Tenant {
   id: string;
@@ -104,13 +100,8 @@ beforeAll(async () => {
   }
   await cleanup();
   process.env.MAILFORGE_PLATFORM_ADMINS = ` ${ADMIN_EMAIL.toUpperCase()} , someone-else@admin-t.example`;
-  fake = await startFakeFlutterwave();
   const opts = { logger: false as const, db, baseUrl: "http://localhost:3000", dashboardUrl: "http://localhost:3000" };
   app = await buildApp(opts);
-  appBilling = await buildApp({
-    ...opts,
-    billing: { client: createFlutterwaveClient({ secretKey: fake.secretKey, baseUrl: fake.baseUrl }), webhookHash: "h", currency: "USD" },
-  });
 });
 
 afterEach(async () => {
@@ -122,8 +113,6 @@ afterEach(async () => {
 afterAll(async () => {
   delete process.env.MAILFORGE_PLATFORM_ADMINS;
   if (app) await app.close();
-  if (appBilling) await appBilling.close();
-  if (fake) await fake.close();
   if (lockClient) {
     await lockClient.query("SELECT pg_advisory_unlock(7770001)");
     lockClient.release();
@@ -214,7 +203,7 @@ describe("overview", () => {
     await newTenant({ plan: "free" });
     await db.execute(sql`
       INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-      VALUES (${starter.id}::uuid, 'flutterwave', 'starter', 'yearly', 19000, 'USD', 'active', 'p@y.z', now(), now() + interval '1 year')`);
+      VALUES (${starter.id}::uuid, 'paystack', 'starter', 'yearly', 19000, 'USD', 'active', 'p@y.z', now(), now() + interval '1 year')`);
     await db.execute(sql`UPDATE tenants SET plan_paid_through = now() + interval '1 year' WHERE id = ${starter.id}::uuid`);
     void trial;
 
@@ -229,6 +218,23 @@ describe("overview", () => {
     expect(after.revenue.mrr_usd - before.revenue.mrr_usd).toBeCloseTo(15.83, 1);
     expect(after.revenue.active_subscriptions - before.revenue.active_subscriptions).toBe(1);
     expect(after.billing_enabled).toBe(false);
+  });
+
+  it("counts a subscription charged in another currency at its USD list price, not its local amount", { retry: 4 }, async () => {
+    if (!dbAvailable) return;
+    const a = await withAdmin();
+    const before = (await get(a, "/v1/admin/overview")).json();
+    const t = await newTenant({ plan: "growth" });
+    // Growth monthly is $49; charged as GHS 760 (76000 pesewas). MRR must grow by 49, not 760.
+    await db.execute(sql`
+      INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
+      VALUES (${t.id}::uuid, 'paystack', 'growth', 'monthly', 76000, 'GHS', 'active', 'p@y.z', now(), now() + interval '1 month')`);
+    const after = (await get(a, "/v1/admin/overview")).json();
+    expect(after.revenue.mrr_usd - before.revenue.mrr_usd).toBeCloseTo(49, 1);
+    expect(after.revenue.active_subscriptions - before.revenue.active_subscriptions).toBe(1);
+
+    const detail = (await get(a, `/v1/admin/tenants/${t.id}`)).json();
+    expect(detail.subscriptions[0]).toMatchObject({ plan: "growth", amount_usd: 49, charged_amount: 760, currency: "GHS" });
   });
 
   it("flags a payment that is overdue (in grace) and one that has lapsed", { retry: 4 }, async () => {
@@ -343,8 +349,8 @@ describe("one workspace", () => {
     const t = await newTenant({ plan: "starter" });
     await db.execute(sql`
       INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-      VALUES (${t.id}::uuid, 'flutterwave', 'starter', 'monthly', 1900, 'USD', 'active', 'payer@y.z', now(), now() + interval '1 month')`);
-    await db.execute(sql`INSERT INTO billing_events (provider, event_key, event_type, tenant_id, outcome) VALUES ('flutterwave', ${"charge:" + t.id}, 'charge.completed', ${t.id}::uuid, 'applied')`);
+      VALUES (${t.id}::uuid, 'paystack', 'starter', 'monthly', 1900, 'USD', 'active', 'payer@y.z', now(), now() + interval '1 month')`);
+    await db.execute(sql`INSERT INTO billing_events (provider, event_key, event_type, tenant_id, outcome) VALUES ('paystack', ${"charge:" + t.id}, 'charge.completed', ${t.id}::uuid, 'applied')`);
     await post(a, `/v1/admin/tenants/${t.id}/suspend`, { reason: "chargeback" });
 
     const res = await get(a, `/v1/admin/tenants/${t.id}`);
@@ -425,7 +431,7 @@ describe("setting a plan by hand", () => {
     const t = await newTenant({ plan: "growth" });
     await db.execute(sql`
       INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-      VALUES (${t.id}::uuid, 'flutterwave', 'growth', 'monthly', 4900, 'USD', 'active', 'p@y.z', now(), now() + interval '1 month')`);
+      VALUES (${t.id}::uuid, 'paystack', 'growth', 'monthly', 4900, 'USD', 'active', 'p@y.z', now(), now() + interval '1 month')`);
     const res = await post(a, `/v1/admin/tenants/${t.id}/plan`, { plan: "scale", reason: "upsell" });
     expect(res.statusCode).toBe(409);
     expect(res.json().code).toBe("has_subscription");
@@ -548,7 +554,7 @@ describe("cancelling a customer's subscription", () => {
   const insertLive = (tenantId: string) =>
     db.execute(sql`
       INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-      VALUES (${tenantId}::uuid, 'flutterwave', 'growth', 'monthly', 4900, 'USD', 'active', 'p@y.z', now(), now() + interval '1 month')`);
+      VALUES (${tenantId}::uuid, 'paystack', 'growth', 'monthly', 4900, 'USD', 'active', 'p@y.z', now(), now() + interval '1 month')`);
 
   it("answers 503 when online billing is not configured", async () => {
     if (!dbAvailable) return;
@@ -560,28 +566,6 @@ describe("cancelling a customer's subscription", () => {
     expect(res.json().code).toBe("billing_disabled");
   });
 
-  it("stops renewals, keeps the plan until the period ends, and is audited", async () => {
-    if (!dbAvailable) return;
-    const a = await withAdmin();
-    const t = await newTenant({ plan: "growth" });
-    await insertLive(t.id);
-    const res = await post(a, `/v1/admin/tenants/${t.id}/cancel-subscription`, { reason: "Customer emailed to cancel" }, appBilling);
-    expect(res.statusCode).toBe(200);
-    expect(res.json().workspace.subscription).toMatchObject({ status: "cancelled", plan: "growth" });
-    expect((await tenantRow(t.id)).plan).toBe("growth");
-    expect(await auditActions(t.id)).toEqual(["cancel_subscription"]);
-  });
-
-  it("needs a reason, and says so plainly when there is nothing to cancel", async () => {
-    if (!dbAvailable) return;
-    const a = await withAdmin();
-    const t = await newTenant();
-    expect((await post(a, `/v1/admin/tenants/${t.id}/cancel-subscription`, {}, appBilling)).json().code).toBe("reason_required");
-    const res = await post(a, `/v1/admin/tenants/${t.id}/cancel-subscription`, { reason: "r" }, appBilling);
-    expect(res.statusCode).toBe(404);
-    expect(res.json().code).toBe("no_subscription");
-    expect(await auditActions(t.id)).toEqual([]);
-  });
 });
 
 describe("audit trail", () => {

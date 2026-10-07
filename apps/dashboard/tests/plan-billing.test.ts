@@ -4,7 +4,7 @@
  * the payment page, and the date helpers behind them. Pure functions.
  */
 import { describe, it, expect } from "vitest";
-import { billingReturnNotice, daysUntil, formatDay, planNeedsAttention, planNotice, storedPlanName } from "../src/plan.js";
+import { billingReturnNotice, daysUntil, formatDay, formatMoney, planNeedsAttention, planNotice, storedPlanName } from "../src/plan.js";
 import type { BillingSubscription, PlanCatalogEntry, PlanInfo, PlanMeter } from "../src/api.js";
 
 const DAY = 86_400_000;
@@ -174,7 +174,7 @@ describe("storedPlanName", () => {
 });
 
 describe("billingReturnNotice", () => {
-  it("has wording for each state Flutterwave can send the customer back with", () => {
+  it("has wording for each state Paystack can send the customer back with", () => {
     expect(billingReturnNotice("success")).toMatchObject({ tone: "success", message: "Payment confirmed. Your plan is active." });
     expect(billingReturnNotice("pending")!.message).toContain("confirming your payment");
     expect(billingReturnNotice("failed")!.message).toContain("you have not been charged");
@@ -215,5 +215,19 @@ describe("date helpers", () => {
     expect(daysUntil("2026-10-04T12:00:01Z", now)).toBe(1);
     expect(daysUntil("2026-10-04T12:00:00Z", now)).toBe(0);
     expect(daysUntil("2026-09-01T00:00:00Z", now)).toBe(0);
+  });
+});
+
+describe("formatMoney", () => {
+  it("shows whole units with the local symbol", () => {
+    expect(formatMoney(49, "USD")).toBe("$49");
+    expect(formatMoney(760, "GHS")).toBe("GH₵760");
+    expect(formatMoney(7595, "GHS")).toBe("GH₵7,595");
+  });
+
+  it("falls back to the code, and never throws, for a currency the browser does not know", () => {
+    expect(() => formatMoney(760, "NOT-A-CURRENCY")).not.toThrow();
+    expect(formatMoney(760, "NOT-A-CURRENCY")).toBe("760 NOT-A-CURRENCY");
+    expect(formatMoney(760, "")).toBe("760 ");
   });
 });

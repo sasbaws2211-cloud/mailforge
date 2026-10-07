@@ -68,12 +68,12 @@ services:
       - MAILFORGE_MANAGED_RESEND_BASE_URL=${MAILFORGE_MANAGED_RESEND_BASE_URL:-}
       # Public site URL used for the "Sent with Mailforge" credit link (falls back to BASE_URL).
       - MAILFORGE_SITE_URL=${MAILFORGE_SITE_URL:-}
-      # Billing (Flutterwave). Online payment is on only when BOTH the secret key and the
-      # webhook secret hash are set. See guide/BILLING.md.
-      - FLUTTERWAVE_SECRET_KEY=${FLUTTERWAVE_SECRET_KEY:-}
-      - FLUTTERWAVE_WEBHOOK_HASH=${FLUTTERWAVE_WEBHOOK_HASH:-}
-      - FLUTTERWAVE_CURRENCY=${FLUTTERWAVE_CURRENCY:-USD}
-      - FLUTTERWAVE_BASE_URL=${FLUTTERWAVE_BASE_URL:-}
+      # Billing (Paystack). Online payment is on when the secret key is set (Paystack signs
+      # webhooks with the same key). See guide/BILLING.md.
+      - PAYSTACK_SECRET_KEY=${PAYSTACK_SECRET_KEY:-}
+      - PAYSTACK_CURRENCY=${PAYSTACK_CURRENCY:-USD}
+      - PAYSTACK_USD_RATE=${PAYSTACK_USD_RATE:-}
+      - PAYSTACK_BASE_URL=${PAYSTACK_BASE_URL:-}
       # Operators of the service: comma-separated emails that get the Admin console.
       # Leave empty on self-hosted installs. See guide/ADMIN.md.
       - MAILFORGE_PLATFORM_ADMINS=${MAILFORGE_PLATFORM_ADMINS:-}
@@ -85,6 +85,9 @@ services:
       # Passkeys for the admin console: off | optional (default) | enforced. RP_ID is the site name
       # passkeys are bound to (default: the host of MAILFORGE_ADMIN_URL). See guide/ADMIN.md.
       - MAILFORGE_ADMIN_PASSKEYS=${MAILFORGE_ADMIN_PASSKEYS:-}
+      # Set to true (or the number of proxies in front, e.g. 1) when running behind Render, nginx, etc.,
+      # so per-IP limits see each visitor's real address. Leave unset when directly exposed.
+      - MAILFORGE_TRUST_PROXY=${MAILFORGE_TRUST_PROXY:-}
       - MAILFORGE_ADMIN_RP_ID=${MAILFORGE_ADMIN_RP_ID:-}
       # Days between a workspace owner asking to delete and permanent erasure (1 to 90).
       - MAILFORGE_DELETION_GRACE_DAYS=${MAILFORGE_DELETION_GRACE_DAYS:-7}

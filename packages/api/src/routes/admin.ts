@@ -40,7 +40,7 @@ import { adminAuditLog, managedSending, subscriptions, tenants } from "@mailforg
 import { purgeWorkspace } from "@mailforge/db/purge";
 import type { Db } from "../plugins/db.js";
 import type { BillingRuntime } from "../billing/config.js";
-import { BillingError, cancelSubscriptionForTenant } from "../billing/service.js";
+import { BillingError, cancelSubscriptionForTenant, subscriptionUsd } from "../billing/service.js";
 import { loadUsage } from "../plan/usage.js";
 import { isPlatformAdmin } from "../admin/platform-admins.js";
 import type { PlatformAdminActor } from "../types.js";
@@ -258,11 +258,8 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
         FROM tenants`),
       db.execute<Record<string, string>>(sql`
         SELECT count(*) FILTER (WHERE status = 'active')::text AS active,
-               count(*) FILTER (WHERE status = 'cancelled' AND current_period_end > ${t}::timestamptz)::text AS cancelling,
-               COALESCE(sum(CASE WHEN status = 'active'
-                                 THEN CASE interval WHEN 'yearly' THEN amount_cents / 12.0 ELSE amount_cents END
-                            END), 0)::bigint::text AS mrr_cents
-        FROM subscriptions WHERE currency = 'USD'`),
+               count(*) FILTER (WHERE status = 'cancelled' AND current_period_end > ${t}::timestamptz)::text AS cancelling
+        FROM subscriptions`),
       db.execute<Record<string, string>>(sql`
         SELECT (SELECT count(*) FROM contacts)::text AS contacts,
                (SELECT count(*) FROM lifecycle_messages WHERE status = 'sent' AND sent_at >= ${monthStart}::timestamptz)::text AS emails_this_month`),
@@ -276,6 +273,15 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
                                   AND trial_ends_at <= ${t}::timestamptz + interval '3 days')::text AS trials_ending
         FROM tenants`),
     ]);
+    // Monthly recurring revenue in US dollars, whatever currency each subscriber is charged in:
+    // a USD subscription counts what it pays, any other is worth the plan's USD list price.
+    const mrrRows = await db.execute<{ plan: string; interval: string; currency: string; n: string; cents: string }>(sql`
+      SELECT plan, interval, currency, count(*)::text AS n, COALESCE(sum(amount_cents), 0)::bigint::text AS cents
+      FROM subscriptions WHERE status = 'active' GROUP BY plan, interval, currency`);
+    const mrrUsd = mrrRows.rows.reduce((total, r) => {
+      const perYearOrMonth = r.currency.toUpperCase() === "USD" ? Number(r.cents) / 100 : Number(r.n) * subscriptionUsd({ plan: r.plan, interval: r.interval, currency: r.currency, amountCents: 0 });
+      return total + (r.interval === "yearly" ? perYearOrMonth / 12 : perYearOrMonth);
+    }, 0);
     const c = counts.rows[0] ?? {};
     const s = subs.rows[0] ?? {};
     const u = usage.rows[0] ?? {};
@@ -299,7 +305,7 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
       revenue: {
         currency: "USD",
         // Active subscriptions only, yearly plans counted as a twelfth. Cancelled ones are not renewing.
-        mrr_usd: n(s.mrr_cents) / 100,
+        mrr_usd: Math.round(mrrUsd * 100) / 100,
         active_subscriptions: n(s.active),
         cancelling_subscriptions: n(s.cancelling),
       },
@@ -462,7 +468,9 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
       subscriptions: subs.rows.map((s) => ({
         plan: s.plan,
         interval: s.interval,
-        amount_usd: Number(s.amount_cents) / 100,
+        amount_usd: subscriptionUsd({ plan: String(s.plan), interval: String(s.interval), currency: String(s.currency), amountCents: Number(s.amount_cents) }),
+        // What the subscriber is actually charged each period, in `currency` major units.
+        charged_amount: Number(s.amount_cents) / 100,
         currency: s.currency,
         status: s.status,
         payer_email: s.customer_email,

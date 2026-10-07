@@ -18,7 +18,7 @@ file says so at the top.
 
 1. The workspace is switched off at once: dashboard, sending and the ingest API stop.
    The owner (and only the owner) can still download an export or **cancel the deletion**.
-2. An active subscription is cancelled with Flutterwave first. If that fails, nothing is
+2. An active subscription is cancelled with Paystack first. If that fails, nothing is
    scheduled and the owner sees why.
 3. After the grace period (7 days by default) the worker erases everything. It runs on
    the hourly background tick, so erasure happens within about an hour of the date.

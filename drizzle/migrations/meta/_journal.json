@@ -232,6 +232,13 @@
       "when": 1791152387003,
       "tag": "0032_whole_the_call",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1791311470130,
+      "tag": "0033_paystack_default",
+      "breakpoints": true
     }
   ]
 }

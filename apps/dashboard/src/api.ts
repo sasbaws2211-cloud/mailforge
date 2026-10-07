@@ -1661,6 +1661,9 @@ export interface PlanCatalogEntry {
   tagline: string;
   price_monthly_usd: number;
   price_annual_usd: number;
+  /** What a checkout really charges, in the charge currency's major units. Null when that is USD or billing is off. */
+  charge_monthly: number | null;
+  charge_annual: number | null;
   limits: { contacts: number | null; emails_per_month: number | null; seats: number | null; ai_tokens_per_month: number | null };
   features: string[];
   recommended: boolean;
@@ -1673,6 +1676,9 @@ export interface BillingSubscription {
   plan: string;
   interval: BillingInterval;
   amount_usd: number;
+  /** What is really charged each period, in `currency` major units. */
+  charged_amount: number;
+  currency: string;
   /** active: renewing. cancelling: cancelled, works until current_period_end. ended: over. */
   status: "active" | "cancelling" | "ended";
   current_period_end: string;
@@ -1685,7 +1691,7 @@ export interface PlanInfo {
   /** False on self-hosted installs: nothing is limited and the UI should say nothing. */
   enforced: boolean;
   /** Whether the customer can pay online here, and their subscription if they have one. */
-  billing: { enabled: boolean; currency: string; subscription: BillingSubscription | null };
+  billing: { enabled: boolean; currency: string; usd_rate: number; subscription: BillingSubscription | null };
   /** current | overdue (inside the grace period) | lapsed (now on Free) | none (no billing date). */
   payment: { status: PaymentStatus; paid_through: string | null; grace_ends_at: string | null };
   plan: { id: string; name: string; tagline: string };
@@ -1712,8 +1718,17 @@ export async function fetchPlan(): Promise<PlanInfo> {
   return res.json() as Promise<PlanInfo>;
 }
 
-/** POST /v1/billing/checkout - start a payment. Returns the hosted checkout URL to send the customer to. */
-export async function startBillingCheckout(plan: string, interval: BillingInterval): Promise<{ url: string }> {
+export interface BillingCheckoutStart {
+  /** The hosted checkout page: the fallback when the popup cannot be used. */
+  url: string;
+  /** Our reference for this payment, polled until it is done. */
+  reference: string;
+  /** Opens the same payment in Paystack's inline popup. Null when Paystack sent none. */
+  access_code: string | null;
+}
+
+/** POST /v1/billing/checkout - start a payment. Returns what the popup (or the hosted page) needs. */
+export async function startBillingCheckout(plan: string, interval: BillingInterval): Promise<BillingCheckoutStart> {
   const res = await apiFetch("/v1/billing/checkout", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1723,7 +1738,14 @@ export async function startBillingCheckout(plan: string, interval: BillingInterv
     const err = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(err.error ?? `Could not start checkout (${res.status})`);
   }
-  return res.json() as Promise<{ url: string }>;
+  return res.json() as Promise<BillingCheckoutStart>;
+}
+
+/** GET /v1/billing/checkouts/:reference - where one of this workspace's payments stands. The server checks with Paystack. */
+export async function fetchCheckoutStatus(reference: string): Promise<{ status: "pending" | "paid" | "failed" | "cancelled"; plan: string; interval: BillingInterval }> {
+  const res = await apiFetch(`/v1/billing/checkouts/${encodeURIComponent(reference)}`);
+  if (!res.ok) throw new Error(`Could not check the payment (${res.status})`);
+  return res.json() as Promise<{ status: "pending" | "paid" | "failed" | "cancelled"; plan: string; interval: BillingInterval }>;
 }
 
 /** POST /v1/billing/cancel - stop future charges; the plan keeps working until the period ends. */

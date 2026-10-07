@@ -16,6 +16,7 @@
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
+import { trustProxyFromEnv } from "./trust-proxy.js";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -149,8 +150,8 @@ export interface BuildAppOptions {
    */
   publicSite?: boolean;
   /**
-   * Billing (Flutterwave). By default read from FLUTTERWAVE_SECRET_KEY and
-   * FLUTTERWAVE_WEBHOOK_HASH; billing is on only when both are set. Tests pass a
+   * Billing (Paystack). By default read from PAYSTACK_SECRET_KEY;
+   * billing is on only when it is set. Tests pass a
    * client pointing at a fake provider here instead.
    */
   billing?: Partial<BillingRuntime>;
@@ -191,6 +192,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   const app = Fastify({
     logger,
+    // Behind a proxy (Render and similar) the client address comes from X-Forwarded-For; see trust-proxy.ts.
+    trustProxy: trustProxyFromEnv(process.env.MAILFORGE_TRUST_PROXY),
     // Destroy keep-alive connections immediately when app.close() is called.
     //
     // Without this, any open keep-alive connection (for example the one held by
@@ -280,7 +283,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     await app.register(marketingRoutes, { siteUrl: baseUrl });
   }
 
-  // Billing (Flutterwave): the public webhook and the post-payment return page. Only
+  // Billing (Paystack): the public webhook and the post-payment return page. Only
   // registered when billing is configured; with it off there is nothing to receive.
   const billingRuntime = resolveBillingRuntime(opts.billing);
   if (opts.db && billingRuntime.enabled) {

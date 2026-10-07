@@ -7,7 +7,7 @@
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
-import { GOAL_INFO, ONBOARDING_GOALS, PLANS, PLAN_IDS, TRIAL_DAYS, TRIAL_PLAN, type OnboardingGoal, type PlanId, managedSendingConfigFromEnv } from "@mailforge/core";
+import { GOAL_INFO, ONBOARDING_GOALS, PLANS, PLAN_IDS, TRIAL_DAYS, TRIAL_PLAN, chargeAmountMinor, type OnboardingGoal, type PlanId, managedSendingConfigFromEnv } from "@mailforge/core";
 import { esc, renderPage, SITE_NAME, type SiteContext } from "./layout.js";
 
 const TRIAL_NOTE = `${TRIAL_DAYS} days of ${PLANS[TRIAL_PLAN].name}. No credit card.`;
@@ -204,13 +204,32 @@ function usd(n: number): string {
   return `$${n.toLocaleString("en-US")}`;
 }
 
+/** A whole-unit amount with the currency's own symbol ("GH₵760"); the code after it if the symbol is unknown. */
+export function localMoney(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency, currencyDisplay: "narrowSymbol", maximumFractionDigits: 0 }).format(amount);
+  } catch {
+    return `${amount.toLocaleString("en-US")} ${currency}`;
+  }
+}
+
 export function pricingPage(ctx: SiteContext): string {
+  // What a checkout really charges, when that is not US dollars: the same rounding the server uses.
+  const local = (usdPrice: number): string | null =>
+    ctx.chargeCurrency && ctx.usdRate ? localMoney(chargeAmountMinor(usdPrice, ctx.chargeCurrency, ctx.usdRate) / 100, ctx.chargeCurrency) : null;
   const cards = PLAN_IDS.map((id) => {
     const p = PLANS[id];
     const paid = p.priceMonthlyUsd > 0;
+    const localMonthly = paid ? local(p.priceMonthlyUsd) : null;
+    const localAnnual = paid ? local(p.priceAnnualUsd) : null;
     const price = paid
       ? `<div class="price" data-monthly="${usd(p.priceMonthlyUsd)}" data-annual="${usd(p.priceAnnualMonthlyUsd)}"><span class="amt">${usd(p.priceMonthlyUsd)}</span><small> / month</small></div>
-         <div class="billed" data-monthly="Billed monthly" data-annual="${usd(p.priceAnnualUsd)} billed yearly">Billed monthly</div>`
+         <div class="billed" data-monthly="Billed monthly" data-annual="${usd(p.priceAnnualUsd)} billed yearly">Billed monthly</div>${
+           localMonthly && localAnnual
+             ? `
+         <div class="billed" data-monthly="Charged as ${esc(localMonthly)} a month" data-annual="Charged as ${esc(localAnnual)} a year">Charged as ${esc(localMonthly)} a month</div>`
+             : ""
+         }`
       : `<div class="price"><span class="amt">$0</span><small> / month</small></div><div class="billed">Free forever</div>`;
     const cta =
       id === "free"
@@ -241,7 +260,7 @@ ${cta}
     </div>
   </div>
   <div class="plans">${cards}</div>
-  <p class="note">Prices are in US dollars. Need more than 50,000 contacts, a security review or an invoice? <a href="mailto:${esc(ctx.supportEmail)}">Talk to us</a>.</p>
+  <p class="note">${ctx.chargeCurrency && ctx.usdRate ? `Prices are listed in US dollars and charged in ${esc(ctx.chargeCurrency)} at a fixed exchange rate, shown under each price.` : "Prices are in US dollars."} Need more than 50,000 contacts, a security review or an invoice? <a href="mailto:${esc(ctx.supportEmail)}">Talk to us</a>.</p>
 </div></section>
 <section class="band"><div class="wrap">
   <div class="center"><h2>Pricing questions</h2></div>

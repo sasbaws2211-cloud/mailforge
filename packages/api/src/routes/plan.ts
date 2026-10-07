@@ -18,11 +18,12 @@ import {
   startOfNextMonthUtc,
   usageFraction,
   type LimitKind,
+  isPaidPlanId,
 } from "@mailforge/core";
 import type { Db } from "../plugins/db.js";
 import { loadEntitlements, loadUsage } from "../plan/usage.js";
 import type { BillingRuntime } from "../billing/config.js";
-import { subscriptionSummary } from "../billing/service.js";
+import { chargeCents, subscriptionSummary } from "../billing/service.js";
 import { loadAiStatus } from "../ai/resolver.js";
 
 export type MeterState = "unlimited" | "ok" | "near" | "at_limit" | "over";
@@ -57,6 +58,8 @@ const planRoutes: FastifyPluginAsync<{ billing?: BillingRuntime }> = async (app,
       seats: usage.seats,
       ai: ai.allowance.used,
     };
+    const chargeAmount = (id: string, interval: "monthly" | "yearly"): number | null =>
+      !billing?.enabled || billing.currency === "USD" || !isPaidPlanId(id) ? null : chargeCents(id, interval, billing.currency, billing.usdRate) / 100;
     const meter = (kind: LimitKind) => {
       const limit = limitFor(ent, kind);
       return { used: used[kind], limit, state: meterState(limit, used[kind]) };
@@ -73,11 +76,16 @@ const planRoutes: FastifyPluginAsync<{ billing?: BillingRuntime }> = async (app,
       billing: {
         enabled: billing?.enabled === true,
         currency: billing?.currency ?? "USD",
+        // Units of the charge currency per 1 USD; 1 when charging in USD.
+        usd_rate: billing?.usdRate ?? 1,
         subscription: subscription
           ? {
               plan: subscription.plan,
               interval: subscription.interval,
               amount_usd: subscription.amountUsd,
+              // What is really charged, in `currency` major units (same as amount_usd when that is USD).
+              charged_amount: subscription.chargedAmount,
+              currency: subscription.currency,
               status: subscription.status,
               current_period_end: subscription.currentPeriodEnd.toISOString(),
               cancel_at_period_end: subscription.cancelAtPeriodEnd,
@@ -113,6 +121,10 @@ const planRoutes: FastifyPluginAsync<{ billing?: BillingRuntime }> = async (app,
           tagline: p.tagline,
           price_monthly_usd: p.priceMonthlyUsd,
           price_annual_usd: p.priceAnnualUsd,
+          // The amount a checkout will really charge, in the charge currency's major units. Null when
+          // that is USD (the price above is the charge) or online billing is off.
+          charge_monthly: chargeAmount(id, "monthly"),
+          charge_annual: chargeAmount(id, "yearly"),
           limits: {
             contacts: p.limits.contacts,
             emails_per_month: p.limits.emailsPerMonth,

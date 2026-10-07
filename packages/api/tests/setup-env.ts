@@ -14,8 +14,11 @@ for (const key of Object.keys(process.env)) {
 }
 delete process.env.MAILFORGE_PUBLIC_SITE;
 delete process.env.MAILFORGE_ENFORCE_PLANS;
+// Operator identity shown on the public legal pages; a deployed .env sets real values.
+delete process.env.MAILFORGE_SUPPORT_EMAIL;
+delete process.env.MAILFORGE_LEGAL_NAME;
 for (const key of Object.keys(process.env)) {
-  if (key.startsWith("FLUTTERWAVE_")) delete process.env[key];
+  if (key.startsWith("PAYSTACK_")) delete process.env[key];
 }
 
 // SMTP destination rules are read from the environment; tests that need them set them.

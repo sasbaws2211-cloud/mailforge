@@ -112,6 +112,8 @@ export interface AdminTenantDetail {
     plan: string;
     interval: string;
     amount_usd: number;
+    /** What the subscriber is actually charged each period, in `currency` major units. */
+    charged_amount: number;
     currency: string;
     status: string;
     payer_email: string;

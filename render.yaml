@@ -1,0 +1,88 @@
+# Render Blueprint for Mailforge: one web service (Docker) plus one Postgres database.
+#
+# How to use: push this repo to GitHub, then in Render choose New > Blueprint, pick the repo, and
+# fill in the variables marked "sync: false" when asked. Full walkthrough: guide/RENDER.md.
+#
+# NOT yet run against Render. Check the plan names below against what Render offers today
+# (the dashboard lists them) and fix any validation message Render shows when you create the Blueprint.
+services:
+  - type: web
+    name: mailforge
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile
+    dockerContext: .
+    # Always-on instance, not Free: Mailforge runs its scheduler and email queue inside the web
+    # process, and a Free service goes to sleep, which stops flows from sending.
+    plan: starter
+    region: oregon
+    healthCheckPath: /health
+    # Exactly one instance: the scheduler has no multi-instance lock (see guide/DEPLOYMENT.md).
+    numInstances: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      # Render's private connection string for the database below (no SSL setup, no pooler).
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mailforge-db
+          property: connectionString
+      # Applies pending database migrations when the service starts.
+      - key: MAILFORGE_MIGRATE_ON_BOOT
+        value: "true"
+      - key: MAILFORGE_SERVE_DASHBOARD
+        value: "true"
+      # Render sits in front of the service; without this every visitor looks like one IP and the
+      # per-IP signup limit would apply to all visitors together.
+      - key: MAILFORGE_TRUST_PROXY
+        value: "true"
+      # Generated once by Render. BACK THESE TWO UP (Render dashboard > Environment) and never change
+      # them: the first protects stored credentials, the second every unsubscribe link already sent.
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: UNSUBSCRIBE_SIGNING_KEY
+        generateValue: true
+      # The public address, with no trailing slash, for example https://app.example.com
+      - key: BASE_URL
+        sync: false
+      - key: DASHBOARD_URL
+        sync: false
+      - key: MAILFORGE_SITE_URL
+        sync: false
+      # Hosted-service switches.
+      - key: MAILFORGE_PUBLIC_SITE
+        value: "true"
+      - key: MAILFORGE_ENFORCE_PLANS
+        value: "true"
+      - key: MAILFORGE_SUPPORT_EMAIL
+        sync: false
+      - key: MAILFORGE_LEGAL_NAME
+        sync: false
+      - key: MAILFORGE_PLATFORM_ADMINS
+        sync: false
+      # Platform email (sign-in links, welcome emails, alerts).
+      - key: PLATFORM_FROM_EMAIL
+        sync: false
+      - key: PLATFORM_FROM_NAME
+        value: Mailforge
+      - key: PLATFORM_RESEND_API_KEY
+        sync: false
+      # Billing (Paystack). Start with your sk_test_ key; switch to sk_live_ only after a full test.
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYSTACK_CURRENCY
+        value: GHS
+      - key: PAYSTACK_USD_RATE
+        sync: false
+
+databases:
+  - name: mailforge-db
+    databaseName: mailforge
+    user: mailforge
+    plan: basic-256mb
+    region: oregon
+    # Mailforge needs the pgvector extension; Render Postgres supports it and the first migration enables it.
+    postgresMajorVersion: "16"
+    # Private network only: nothing outside Render can connect.
+    ipAllowList: []

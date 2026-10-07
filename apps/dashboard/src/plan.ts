@@ -3,15 +3,18 @@
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cancelBillingSubscription,
+  fetchCheckoutStatus,
   fetchPlan,
   startBillingCheckout,
   type BillingInterval,
   type PlanInfo,
   type PlanMeterState,
 } from "./api.js";
+import { loadPaystackInline, pollCheckoutUntilDone, type PaystackPopConstructor } from "./paystack-popup.js";
 
 export const PLAN_QUERY_KEY = ["plan"] as const;
 
@@ -28,14 +31,115 @@ export function usePlan(opts: { pollMs?: number } = {}) {
   });
 }
 
-/** Start a payment, then send the browser to the provider's hosted checkout page. */
-export function useStartCheckout() {
-  return useMutation({
-    mutationFn: ({ plan, interval }: { plan: string; interval: BillingInterval }) => startBillingCheckout(plan, interval),
-    onSuccess: ({ url }) => {
-      window.location.assign(url);
+/**
+ * Where an in-page payment stands.
+ *   starting  asking the server to set the payment up
+ *   popup     Paystack's popup is open (or was just closed) and we are watching for the result
+ *   paid | failed  the server confirmed it with Paystack
+ *   closed    the customer closed the popup without paying
+ *   timeout   no answer for a long while; the webhook or a refresh will still catch up
+ */
+export type CheckoutPhase = "idle" | "starting" | "popup" | "paid" | "failed" | "closed" | "timeout";
+
+/** After the popup is closed, keep looking this long in case the payment went through just before. */
+export const CLOSE_GRACE_MS = 8_000;
+
+/** What to tell the customer for each phase of an in-page payment (null while there is nothing to say). */
+export function checkoutPhaseNotice(phase: CheckoutPhase): { tone: "success" | "warning" | "info"; message: string } | null {
+  switch (phase) {
+    case "popup":
+      return { tone: "info", message: "Complete the payment in the Paystack window. This page updates by itself as soon as it goes through." };
+    case "paid":
+      return billingReturnNotice("success");
+    case "failed":
+      return billingReturnNotice("failed");
+    case "closed":
+      return billingReturnNotice("cancelled");
+    case "timeout":
+      return billingReturnNotice("pending");
+    default:
+      return null;
+  }
+}
+
+/**
+ * Pay inside the page: ask the server to set the payment up, open Paystack's popup, and poll the
+ * server until it says the payment is done, then refresh the plan so the UI changes by itself.
+ * If the popup script cannot be loaded the browser is sent to the hosted checkout page instead
+ * (the old redirect flow, which the server still supports).
+ */
+export function useCheckoutFlow() {
+  const qc = useQueryClient();
+  const [phase, setPhase] = useState<CheckoutPhase>("idle");
+  const stopped = useRef(false);
+  useEffect(() => {
+    stopped.current = false;
+    return () => {
+      stopped.current = true;
+    };
+  }, []);
+
+  const start = useCallback(
+    async ({ plan, interval }: { plan: string; interval: BillingInterval }): Promise<void> => {
+      setPhase("starting");
+      let started;
+      try {
+        started = await startBillingCheckout(plan, interval);
+      } catch (err) {
+        setPhase("idle");
+        throw err;
+      }
+
+      let Pop: PaystackPopConstructor | null = null;
+      if (started.access_code) {
+        try {
+          Pop = await loadPaystackInline();
+        } catch {
+          Pop = null;
+        }
+      }
+      if (!Pop || !started.access_code) {
+        window.location.assign(started.url);
+        return;
+      }
+
+      setPhase("popup");
+      let closedAt: number | null = null;
+      try {
+        new Pop().resumeTransaction(started.access_code, {
+          onCancel: () => {
+            closedAt = Date.now();
+          },
+          onError: () => {
+            closedAt = Date.now();
+          },
+          // onSuccess is deliberately not trusted: the poll below asks the server, which asks Paystack.
+        });
+      } catch {
+        window.location.assign(started.url);
+        return;
+      }
+
+      const outcome = await pollCheckoutUntilDone(() => fetchCheckoutStatus(started.reference), {
+        shouldStop: () => stopped.current || (closedAt !== null && Date.now() - closedAt > CLOSE_GRACE_MS),
+      });
+      if (stopped.current) return;
+      if (outcome === "paid") {
+        await qc.invalidateQueries({ queryKey: PLAN_QUERY_KEY });
+        setPhase("paid");
+      } else if (outcome === "failed") {
+        setPhase("failed");
+      } else if (outcome === "timeout") {
+        setPhase("timeout");
+      } else {
+        setPhase("closed"); // cancelled, or the popup was closed and nothing arrived
+      }
     },
-  });
+    [qc],
+  );
+
+  const reset = useCallback(() => setPhase("idle"), []);
+  return { phase, start, reset, busy: phase === "starting" || phase === "popup" };
 }
 
 /** Cancel the subscription (plan works until the paid period ends), then refresh the plan. */
@@ -64,7 +168,20 @@ export function daysUntil(iso: string, now: Date = new Date()): number {
   return Math.max(0, Math.ceil((new Date(iso).getTime() - now.getTime()) / 86_400_000));
 }
 
-/** What the customer is told when Flutterwave sends them back to the dashboard. */
+/**
+ * An amount in a currency, whole units, with the local symbol where there is one ("GH₵760",
+ * "$49"). Falls back to "760 XYZ" for a code the browser does not know, so a typo in the
+ * currency setting never throws on the plan page.
+ */
+export function formatMoney(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency, currencyDisplay: "narrowSymbol", maximumFractionDigits: 0 }).format(amount);
+  } catch {
+    return `${amount.toLocaleString("en-US")} ${currency}`;
+  }
+}
+
+/** What the customer is told when Paystack sends them back to the dashboard. */
 export type BillingReturn = "success" | "failed" | "cancelled" | "pending" | "unknown";
 
 export function billingReturnNotice(state: string | null): { tone: "success" | "warning" | "info"; message: string } | null {
