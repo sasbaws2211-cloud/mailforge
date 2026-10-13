@@ -5,10 +5,10 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import type { FastifyReply } from "fastify";
-import { adminSessions } from "@mailforge/db/schema";
+import { adminSessions } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 
-export const ADMIN_SESSION_COOKIE = "mailforge_admin_session";
+export const ADMIN_SESSION_COOKIE = "loomail_admin_session";
 export const SESSION_HOURS = 8;
 
 export type SignInMethod = "email" | "passkey";

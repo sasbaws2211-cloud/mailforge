@@ -22,8 +22,17 @@ import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   addBillingPeriod,
+  ADDONS,
   BILLING_INTERVALS,
+  addonCheckoutPlan,
+  addonPriceUsd,
+  addonUnits,
   chargeAmountMinor,
+  isAddonKind,
+  isValidPackCount,
+  parseAddonCheckoutPlan,
+  startOfMonthUtc,
+  type AddonKind,
   entitlementsFor,
   isBillingInterval,
   isPaidPlanId,
@@ -32,14 +41,17 @@ import {
   type BillingInterval,
   type PaidPlanId,
   type PaymentStatus,
-} from "@mailforge/core";
+} from "@loomail/core";
+import { encrypt as encryptSecret, parseEncryptionKey } from "@loomail/adapters";
 import {
+  addonAutoRenewals,
+  addonPurchases,
   billingCheckouts,
   billingEvents,
   billingProviderPlans,
   subscriptions,
   tenants,
-} from "@mailforge/db/schema";
+} from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import { PaystackError, type PaystackClient, type PaystackTransaction } from "./paystack.js";
 
@@ -107,7 +119,7 @@ export async function ensureProviderPlan(
     if (existing) return existing.id;
 
     const created = await ps.createPlan({
-      name: `Mailforge ${PLANS[args.plan].name} (${args.interval})`,
+      name: `Loomail ${PLANS[args.plan].name} (${args.interval})`,
       amountCents,
       interval: args.interval,
       currency: args.currency,
@@ -201,6 +213,85 @@ export async function startCheckout(
         checkout_id: checkout!.id,
         workspace: input.workspaceName,
         description: `${PLANS[input.plan].name} plan, billed ${input.interval}`,
+      },
+    });
+    await db.update(billingCheckouts).set({ checkoutUrl: url }).where(eq(billingCheckouts.id, checkout!.id));
+    return { url, txRef, accessCode };
+  } catch (err) {
+    await db.update(billingCheckouts).set({ status: "failed" }).where(eq(billingCheckouts.id, checkout!.id));
+    throw providerFailure(err);
+  }
+}
+
+export interface StartAddonCheckoutInput {
+  tenantId: string;
+  userId: string;
+  email: string;
+  workspaceName: string;
+  kind: AddonKind;
+  packs: number;
+  /** Renew this top-up every month on the same card. */
+  repeat?: boolean;
+}
+
+/** Most packs a repeating top-up may be: a guard against a typo becoming a monthly bill. */
+export const MAX_REPEAT_PACKS = 10;
+
+/**
+ * Start a one-off payment for extra profiles, emails or AI credits. Same checkout record and
+ * popup as a plan, but no provider plan (it is charged once, not renewed). The units are added
+ * when the payment is verified, by applyInitialPayment.
+ */
+export async function startAddonCheckout(
+  db: Db,
+  ps: PaystackClient,
+  cfg: BillingConfig,
+  input: StartAddonCheckoutInput,
+): Promise<{ url: string; txRef: string; accessCode: string | null }> {
+  if (!isAddonKind(input.kind) || !isValidPackCount(input.packs)) {
+    throw new BillingError("invalid_plan", "Choose what to add and how many packs.", 400);
+  }
+  if (input.repeat && input.packs > MAX_REPEAT_PACKS) {
+    throw new BillingError("invalid_plan", `A top-up that repeats every month can be up to ${MAX_REPEAT_PACKS} packs.`, 400);
+  }
+  const usd = addonPriceUsd(input.kind, input.packs);
+  const amountCents = chargeAmountMinor(usd, cfg.currency, cfg.usdRate);
+  const txRef = `mfa_${input.tenantId.slice(0, 8)}_${randomBytes(9).toString("hex")}`;
+  const description = `${ADDONS[input.kind].label}: ${addonUnits(input.kind, input.packs).toLocaleString("en-US")}`;
+  const [checkout] = await db
+    .insert(billingCheckouts)
+    .values({
+      tenantId: input.tenantId,
+      userId: input.userId,
+      txRef,
+      plan: addonCheckoutPlan(input.kind),
+      // Reused as "how many packs": the checkout table has no other free column and the
+      // value is only ever read back by applyAddonPayment.
+      interval: `x${input.packs}`,
+      amountCents,
+      currency: cfg.currency,
+      providerPlanId: null,
+      customerEmail: input.email,
+      status: "pending",
+      repeatMonthly: input.repeat === true,
+    })
+    .returning({ id: billingCheckouts.id });
+
+  try {
+    const { url, accessCode } = await ps.initializeTransaction({
+      reference: txRef,
+      amount: amountCents,
+      currency: cfg.currency,
+      email: input.email,
+      callbackUrl: cfg.returnUrl,
+      cancelUrl: `${cfg.returnUrl}?status=cancelled&reference=${encodeURIComponent(txRef)}`,
+      metadata: {
+        tenant_id: input.tenantId,
+        addon: input.kind,
+        packs: input.packs,
+        checkout_id: checkout!.id,
+        workspace: input.workspaceName,
+        description,
       },
     });
     await db.update(billingCheckouts).set({ checkoutUrl: url }).where(eq(billingCheckouts.id, checkout!.id));
@@ -405,6 +496,10 @@ async function applyInitialPayment(
     return { outcome: "ignored", reason: "checkout already paid", tenantId: checkout.tenantId };
   }
 
+  // 2b. A top-up: add the units for this calendar month; the plan and subscription are untouched.
+  const addonKind = parseAddonCheckoutPlan(checkout.plan);
+  if (addonKind) return applyAddonPayment(db, tx, checkout, addonKind, key, now);
+
   // 3. Apply, atomically with the event record.
   const interval = checkout.interval as BillingInterval;
   const periodEnd = addBillingPeriod(now, interval);
@@ -472,6 +567,101 @@ async function applyInitialPayment(
   if (holder.replaced) await cancelAtProvider(ps, holder.replaced);
 
   return { outcome: "applied_initial", tenantId: checkout.tenantId };
+}
+
+/**
+ * Keep the card from a paid "repeat" top-up so it can be renewed. Quietly does nothing when the
+ * provider did not return a reusable card or no encryption key is set: the top-up itself is
+ * already applied and the customer simply buys again next month.
+ */
+async function saveAutoRenewal(
+  db: Db,
+  a: { tenantId: string; kind: AddonKind; packs: number; tx: PaystackTransaction; payerEmail: string; period: Date },
+): Promise<void> {
+  const auth = a.tx.authorization;
+  const keyEnv = process.env.ENCRYPTION_KEY;
+  if (!auth || auth.reusable !== true || !auth.authorization_code || !keyEnv) return;
+  let enc: string;
+  try {
+    enc = encryptSecret(JSON.stringify({ code: auth.authorization_code }), parseEncryptionKey(keyEnv));
+  } catch {
+    return;
+  }
+  await db
+    .insert(addonAutoRenewals)
+    .values({
+      tenantId: a.tenantId,
+      kind: a.kind,
+      packs: a.packs,
+      authorizationEnc: enc,
+      payerEmail: a.payerEmail,
+      cardBrand: auth.brand ?? auth.card_type ?? null,
+      cardLast4: auth.last4 ?? null,
+      enabled: true,
+      lastPeriod: a.period,
+      failCount: 0,
+    })
+    .onConflictDoUpdate({
+      target: [addonAutoRenewals.tenantId, addonAutoRenewals.kind],
+      set: {
+        packs: a.packs,
+        authorizationEnc: enc,
+        payerEmail: a.payerEmail,
+        cardBrand: auth.brand ?? auth.card_type ?? null,
+        cardLast4: auth.last4 ?? null,
+        enabled: true,
+        lastPeriod: a.period,
+        failCount: 0,
+        lastError: null,
+        updatedAt: new Date(),
+      },
+    });
+}
+
+async function applyAddonPayment(
+  db: Db,
+  tx: PaystackTransaction,
+  checkout: Checkout,
+  kind: AddonKind,
+  key: string,
+  now: Date,
+): Promise<ApplyResult> {
+  const packs = Number(checkout.interval.replace(/^x/, ""));
+  if (!isValidPackCount(packs)) {
+    await recordEvent(db, { key, type: "charge.completed", tenantId: checkout.tenantId, outcome: "rejected: top-up has no valid pack count", payload: txSummary(tx) });
+    return { outcome: "rejected", reason: "invalid top-up", tenantId: checkout.tenantId };
+  }
+  const result = await db.transaction(async (t) => {
+    const fresh = await recordEvent(t, { key, type: "charge.completed", tenantId: checkout.tenantId, outcome: "applied: top-up", payload: txSummary(tx) });
+    if (!fresh) return "duplicate" as const;
+    await t.insert(addonPurchases).values({
+      tenantId: checkout.tenantId,
+      checkoutId: checkout.id,
+      kind,
+      packs,
+      units: addonUnits(kind, packs),
+      amountCents: checkout.amountCents,
+      currency: checkout.currency,
+      periodStart: startOfMonthUtc(now),
+    });
+    await t
+      .update(billingCheckouts)
+      .set({ status: "paid", providerTransactionId: String(tx.id), completedAt: now })
+      .where(eq(billingCheckouts.id, checkout.id));
+    // "Repeat every month": remember the card (encrypted) so next month's top-up can be charged.
+    if (checkout.repeatMonthly) {
+      await saveAutoRenewal(t as unknown as Db, {
+        tenantId: checkout.tenantId,
+        kind,
+        packs,
+        tx,
+        payerEmail: tx.customer?.email?.trim() || checkout.customerEmail,
+        period: startOfMonthUtc(now),
+      });
+    }
+    return "applied" as const;
+  });
+  return result === "duplicate" ? { outcome: "duplicate", tenantId: checkout.tenantId } : { outcome: "applied_initial", tenantId: checkout.tenantId };
 }
 
 /** Find our new subscription's id at the provider, so it can be cancelled later. */
@@ -732,7 +922,7 @@ export interface SubscriptionSummary {
   status: "active" | "cancelling" | "ended";
   currentPeriodEnd: Date;
   cancelAtPeriodEnd: boolean;
-  /** current | overdue | lapsed | none (see paymentStatus in @mailforge/core). */
+  /** current | overdue | lapsed | none (see paymentStatus in @loomail/core). */
   paymentStatus: PaymentStatus;
 }
 

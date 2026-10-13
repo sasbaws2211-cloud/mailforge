@@ -24,7 +24,7 @@ const TRANSPORT_PROVIDERS: ReadonlyArray<{ value: string; label: string; note?: 
 
 export default function TransportSettings() {
   const { transport, sending, isLoading } = useSetupState();
-  // When the service offers Mailforge Sending, connecting your own provider is the optional path.
+  // When the service offers Loomail Sending, connecting your own provider is the optional path.
   const managedOffered = sending?.available === true;
   const put = usePutTransport();
   const [open, setOpen] = useState(false);
@@ -96,7 +96,7 @@ export default function TransportSettings() {
     <ManagedSendingSettings />
     <Section
       title={managedOffered ? "Your own email provider" : "Email transport"}
-      description={managedOffered ? "Optional. Connect your own Resend account or SMTP server instead of using Mailforge Sending. If you do, it is used and Mailforge Sending waits." : undefined}
+      description={managedOffered ? "Optional. Connect your own Resend account or SMTP server instead of using Loomail Sending. If you do, it is used and Loomail Sending waits." : undefined}
       configured={transport !== null ? true : managedOffered ? null : false}
       actions={
         !formVisible && transport ? (

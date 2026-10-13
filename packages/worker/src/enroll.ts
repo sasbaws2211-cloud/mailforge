@@ -23,14 +23,14 @@ import {
   flows,
   flowMemberships,
   suppressions,
-} from "@mailforge/db/schema";
+} from "@loomail/db/schema";
 import {
   sortByPriority,
   isReentryAllowed,
   contactEnrollmentLockKey,
   type EnrollableFlow,
   type PriorMembership,
-} from "@mailforge/core";
+} from "@loomail/core";
 
 // ---------------------------------------------------------------------------
 // Types

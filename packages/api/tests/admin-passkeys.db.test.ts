@@ -10,7 +10,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@mailforge/adapters";
+import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@loomail/adapters";
 import { buildAdminApp, ADMIN_SESSION_COOKIE } from "../src/index.js";
 import { passkeyModeFromEnv } from "../src/admin/passkeys.js";
 import { VirtualAuthenticator, type Faults } from "./helpers/virtual-authenticator.js";
@@ -112,7 +112,7 @@ beforeAll(async () => {
     return;
   }
   await cleanup();
-  process.env.MAILFORGE_PLATFORM_ADMINS = `${OPS}, ${OTHER}`;
+  process.env.LOOMAIL_PLATFORM_ADMINS = `${OPS}, ${OTHER}`;
   const base = { logger: false as const, db: db as never, adminUrl: ADMIN_URL, loginTransports: [{ adapter: loginBox, fromEmail: "no-reply@platform.example", fromName: null }], loginLimits: HOST_LIMIT };
   optional = await buildAdminApp({ ...base, passkeys: { mode: "optional" } });
   enforced = await buildAdminApp({ ...base, passkeys: { mode: "enforced" } });
@@ -128,14 +128,14 @@ afterEach(async () => {
   if (dbAvailable) await cleanup();
 });
 afterAll(async () => {
-  delete process.env.MAILFORGE_PLATFORM_ADMINS;
+  delete process.env.LOOMAIL_PLATFORM_ADMINS;
   for (const a of [optional, enforced, off, https, strict]) if (a) await a.close();
   await pool?.end();
 });
 
 // ===========================================================================
 describe("configuration", () => {
-  it("MAILFORGE_ADMIN_PASSKEYS defaults to optional and accepts only the three modes", () => {
+  it("LOOMAIL_ADMIN_PASSKEYS defaults to optional and accepts only the three modes", () => {
     expect(passkeyModeFromEnv(undefined)).toBe("optional");
     expect(passkeyModeFromEnv("")).toBe("optional");
     expect(passkeyModeFromEnv(" Enforced ")).toBe("enforced");
@@ -487,12 +487,12 @@ describe("signing in with a passkey", () => {
     it("an administrator taken off the list: their passkey stops working", async () => {
       if (!dbAvailable) return;
       const { auth } = await withPasskey(OTHER);
-      const saved = process.env.MAILFORGE_PLATFORM_ADMINS;
-      process.env.MAILFORGE_PLATFORM_ADMINS = OPS;
+      const saved = process.env.LOOMAIL_PLATFORM_ADMINS;
+      process.env.LOOMAIL_PLATFORM_ADMINS = OPS;
       try {
         expect((await passkeyLogin(optional, auth)).verify.statusCode).toBe(400);
       } finally {
-        process.env.MAILFORGE_PLATFORM_ADMINS = saved;
+        process.env.LOOMAIL_PLATFORM_ADMINS = saved;
       }
       expect((await passkeyLogin(optional, auth)).verify.statusCode).toBe(200);
     });

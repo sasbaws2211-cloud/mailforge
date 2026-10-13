@@ -4,7 +4,7 @@
  * All transactional emails (login link, invite, email-change verification)
  * go through the branded shell, just like lifecycle emails. This module
  * provides body-content builders for each transactional type; the caller
- * wraps the result in the shell via @mailforge/core email-shell.
+ * wraps the result in the shell via @loomail/core email-shell.
  *
  * These emails are TRANSACTIONAL - they do not carry compliance footers
  * (no List-Unsubscribe, no postal address) because they are direct
@@ -13,7 +13,7 @@
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
-import { BUSINESS_MODEL_TEMPLATES, GOAL_INFO, ONBOARDING_GOALS, wrapInShell, wrapInTextShell, type BrandSettings, type OnboardingGoal } from "@mailforge/core";
+import { BUSINESS_MODEL_TEMPLATES, GOAL_INFO, ONBOARDING_GOALS, wrapInShell, wrapInTextShell, type BrandSettings, type OnboardingGoal } from "@loomail/core";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -46,7 +46,7 @@ export function buildLoginEmail(
 ): { html: string; text: string } {
   const bodyHtml = [
     `<p style="margin:0 0 16px 0;">You requested a login link. Click below to sign in:</p>`,
-    `<p style="margin:0 0 24px 0;"><a href="${escapeHtmlAttr(loginUrl)}" style="${BUTTON_STYLE}">Sign in to Mailforge</a></p>`,
+    `<p style="margin:0 0 24px 0;"><a href="${escapeHtmlAttr(loginUrl)}" style="${BUTTON_STYLE}">Sign in to Loomail</a></p>`,
     `<p style="margin:0 0 8px 0;font-size:13px;color:#585d68;">Or copy this URL:<br/><span style="word-break:break-all;">${escapeHtml(loginUrl)}</span></p>`,
     `<p style="margin:0;font-size:13px;color:#585d68;">This link expires in ${expiryMinutes} minutes and can only be used once.</p>`,
   ].join("\n");
@@ -90,14 +90,14 @@ export function buildInviteEmail(
   const inviterLabel = inviterName || "A team member";
 
   const bodyHtml = [
-    `<p style="margin:0 0 16px 0;">${escapeHtml(inviterLabel)} has invited you to join <strong>${escapeHtml(brandName)}</strong> on Mailforge.</p>`,
+    `<p style="margin:0 0 16px 0;">${escapeHtml(inviterLabel)} has invited you to join <strong>${escapeHtml(brandName)}</strong> on Loomail.</p>`,
     `<p style="margin:0 0 24px 0;"><a href="${escapeHtmlAttr(inviteUrl)}" style="${BUTTON_STYLE}">Accept invitation</a></p>`,
     `<p style="margin:0 0 8px 0;font-size:13px;color:#585d68;">Or copy this URL:<br/><span style="word-break:break-all;">${escapeHtml(inviteUrl)}</span></p>`,
     `<p style="margin:0;font-size:13px;color:#585d68;">This invitation expires in ${expiryDays} days.</p>`,
   ].join("\n");
 
   const bodyText = [
-    `${inviterLabel} has invited you to join ${brandName} on Mailforge.`,
+    `${inviterLabel} has invited you to join ${brandName} on Loomail.`,
     "",
     "Accept the invitation by opening this URL:",
     "",
@@ -166,7 +166,7 @@ export function goalWelcome(goal: OnboardingGoal | null | undefined): { intro: s
 /** The three things that get a new workspace to its first email, in the order to do them. */
 const WELCOME_STEPS: ReadonlyArray<[title: string, why: string]> = [
   ["Add your business address", "It is required in every marketing email's footer, so sending stays switched off until it is set."],
-  ["Choose how email is sent", "Use Mailforge Sending with your own domain, or connect Resend, SES or SMTP."],
+  ["Choose how email is sent", "Use Loomail Sending with your own domain, or connect Resend, SES or SMTP."],
   ["Turn on the Welcome flow and send an event", "Three ready-made emails that start when someone signs up. No AI setup needed."],
 ];
 
@@ -212,7 +212,7 @@ export function buildWelcomeEmail(input: WelcomeEmailInput): { html: string; tex
   ].join("\n");
 
   return {
-    subject: `Welcome to Mailforge: your first email in 20 minutes`,
+    subject: `Welcome to Loomail: your first email in 20 minutes`,
     html: wrapInShell({ bodyHtml, brand: input.brand, tenantName: input.tenantName, complianceFooterHtml: "" }),
     text: wrapInTextShell({ bodyText, brand: input.brand, tenantName: input.tenantName, complianceFooterText: "" }),
   };
@@ -334,4 +334,81 @@ export function buildEmailChangeEmail(
   const subject = `Confirm your new email address`;
 
   return { html, text, subject };
+}
+
+// ---------------------------------------------------------------------------
+// Trial reminders and the test email
+// ---------------------------------------------------------------------------
+
+export interface TrialEmailInput extends TransactionalEmailInput {
+  /** "ending": the trial has a couple of days left. "ended": it ran out and the workspace is paused. */
+  kind: "ending" | "ended";
+  daysLeft: number;
+  /** Absolute link to Settings, Plan, where the subscription is started. */
+  planUrl: string;
+  supportEmail: string | null;
+}
+
+export function buildTrialEmail(input: TrialEmailInput): { html: string; text: string; subject: string } {
+  const name = input.brand.brand_name || input.tenantName;
+  const days = `${input.daysLeft} day${input.daysLeft === 1 ? "" : "s"}`;
+  const subject =
+    input.kind === "ending"
+      ? `Your Loomail trial ends in ${days}`
+      : `Your Loomail trial has ended: ${name} is paused`;
+  const lead =
+    input.kind === "ending"
+      ? `The free trial for ${name} ends in ${days}. Subscribe to Essential to keep your flows sending without a break.`
+      : `The free trial for ${name} has ended, so sending and new customer profiles are paused. Nothing has been deleted: your contacts, flows and history are safe, and everything resumes the moment you subscribe.`;
+  const detail = "Essential is $100 a month: 6,000 customer profiles, 1,000,000 emails a month, the AI flow builder, unlimited team members and priority support. Cancel any time.";
+  const cta = input.kind === "ending" ? "Keep my flows running" : "Subscribe and resume sending";
+
+  const bodyHtml = [
+    `<p style="margin:0 0 16px 0;">${escapeHtml(lead)}</p>`,
+    `<p style="margin:0 0 24px 0;font-size:14px;color:#585d68;">${escapeHtml(detail)}</p>`,
+    `<p style="margin:0 0 24px 0;"><a href="${escapeHtmlAttr(input.planUrl)}" style="${BUTTON_STYLE}">${escapeHtml(cta)}</a></p>`,
+    input.supportEmail
+      ? `<p style="margin:0;font-size:13px;color:#585d68;">Questions, or need more time? Reply to <a href="mailto:${escapeHtmlAttr(input.supportEmail)}">${escapeHtml(input.supportEmail)}</a> and a person will help.</p>`
+      : "",
+  ]
+    .filter((x) => x !== "")
+    .join("\n");
+
+  const bodyText = [
+    lead,
+    "",
+    detail,
+    "",
+    `${cta}: ${input.planUrl}`,
+    ...(input.supportEmail ? ["", `Questions, or need more time? Write to ${input.supportEmail} and a person will help.`] : []),
+  ].join("\n");
+
+  return {
+    subject,
+    html: wrapInShell({ bodyHtml, brand: input.brand, tenantName: input.tenantName, complianceFooterHtml: "" }),
+    text: wrapInTextShell({ bodyText, brand: input.brand, tenantName: input.tenantName, complianceFooterText: "" }),
+  };
+}
+
+export interface TestEmailInput extends TransactionalEmailInput {
+  continueUrl: string;
+}
+
+/** A sample message, so a new customer sees how Loomail email arrives before any sender is set up. */
+export function buildTestEmail(input: TestEmailInput): { html: string; text: string; subject: string } {
+  const name = input.brand.brand_name || input.tenantName;
+  const subject = `Test email from Loomail: this is how your messages arrive`;
+  const lead = `This is a test email for ${name}. It came from the Loomail platform sender, so you can see how a message looks in your inbox before you connect your own sending domain.`;
+  const next = "Your real emails will come from your own domain once you connect a sender. That is the last setup step.";
+  const bodyHtml = [
+    `<p style="margin:0 0 16px 0;">${escapeHtml(lead)}</p>`,
+    `<p style="margin:0 0 24px 0;font-size:14px;color:#585d68;">${escapeHtml(next)}</p>`,
+    `<p style="margin:0;"><a href="${escapeHtmlAttr(input.continueUrl)}" style="${BUTTON_STYLE}">Back to setup</a></p>`,
+  ].join("\n");
+  const bodyText = [lead, "", next, "", `Back to setup: ${input.continueUrl}`].join("\n");
+  return {
+    subject,
+    html: wrapInShell({ bodyHtml, brand: input.brand, tenantName: input.tenantName, complianceFooterHtml: "" }),
+    text: wrapInTextShell({ bodyText, brand: input.brand, tenantName: input.tenantName, complianceFooterText: "" }),
+  };
 }

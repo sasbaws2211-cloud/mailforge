@@ -31,7 +31,7 @@ describe("describeSender", () => {
   it("on the shared address: says who it is from, where replies go, the daily cap, and to add a domain", () => {
     const s = describeSender(view());
     expect(s.tone).toBe("info");
-    expect(s.headline).toMatch(/shared Mailforge address/);
+    expect(s.headline).toMatch(/shared Loomail address/);
     expect(s.detail).toContain("Acme");
     expect(s.detail).toContain("owner@acme-test.dev");
     expect(s.detail).toContain("100 emails a day");
@@ -51,8 +51,8 @@ describe("describeSender", () => {
 
   it("not offered, off, on standby behind their own provider, and needing a domain each have their own plain message", () => {
     expect(describeSender({ available: false, uses: "nothing", shared: { offered: false, daily_limit: null }, managed: null }).headline).toBe("Not available");
-    expect(describeSender(view({ uses: "nothing", managed: null })).headline).toBe("Mailforge Sending is off");
-    expect(describeSender(view({ managed: { enabled: false } })).headline).toBe("Mailforge Sending is off");
+    expect(describeSender(view({ uses: "nothing", managed: null })).headline).toBe("Loomail Sending is off");
+    expect(describeSender(view({ managed: { enabled: false } })).headline).toBe("Loomail Sending is off");
     expect(describeSender(view({ uses: "own_transport" })).headline).toMatch(/own email provider/);
     const needs = describeSender(view({ uses: "nothing", managed: { sender: null, needs_domain: true } }));
     expect(needs).toMatchObject({ tone: "warning", headline: "Add your domain to start sending" });
@@ -114,7 +114,7 @@ describe("DNS record helpers", () => {
 });
 
 describe("sendingIsActive", () => {
-  it("is true only when mail really goes out through Mailforge Sending", () => {
+  it("is true only when mail really goes out through Loomail Sending", () => {
     expect(sendingIsActive(view())).toBe(true);
     expect(sendingIsActive(view({ uses: "own_transport" }))).toBe(false);
     expect(sendingIsActive(view({ uses: "nothing" }))).toBe(false);

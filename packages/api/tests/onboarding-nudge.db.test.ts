@@ -9,8 +9,8 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
-import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@mailforge/adapters";
-import { tenantTablesInDeleteOrder } from "@mailforge/db/purge";
+import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@loomail/adapters";
+import { tenantTablesInDeleteOrder } from "@loomail/db/purge";
 import { sweepOnboardingNudges } from "../src/onboarding/nudge.js";
 import { buildNudgeEmail } from "../src/transactional-email.js";
 
@@ -28,7 +28,7 @@ class Outbox implements TransportAdapter {
   }
 }
 const outbox = new Outbox();
-const transport = { adapter: outbox, fromEmail: "no-reply@platform.example", fromName: "Mailforge" };
+const transport = { adapter: outbox, fromEmail: "no-reply@platform.example", fromName: "Loomail" };
 const NOW = new Date("2026-10-10T12:00:00Z");
 const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000).toISOString();
 
@@ -108,7 +108,7 @@ beforeEach(() => {
   outbox.mode = "ok";
 });
 afterEach(async () => {
-  delete process.env.MAILFORGE_MANAGED_SHARED_FROM;
+  delete process.env.LOOMAIL_MANAGED_SHARED_FROM;
   if (dbAvailable) await cleanup();
 });
 afterAll(async () => {
@@ -126,8 +126,8 @@ describe("who gets a nudge", () => {
     const m = sentTo(t.email);
     expect(m).toHaveLength(1);
     expect(m[0]!.from).toBe("no-reply@platform.example");
-    expect(m[0]!.bodyText).toContain("Add your business address");
-    expect(m[0]!.bodyText).toContain("https://app.example.com/settings/postal");
+    expect(m[0]!.bodyText).toContain("Turn on your first flow");
+    expect(m[0]!.bodyText).toContain("https://app.example.com/flows#ready-made");
     const o = await stored(t.id);
     expect(o.nudge_count).toBe(1);
     expect(o.last_nudge_at).toBe(NOW.toISOString());
@@ -166,7 +166,7 @@ describe("who gets a nudge", () => {
 
   it_("never one whose steps are all done even if completed_at was not recorded yet", async () => {
     const t = await newTenant({ postal: true });
-    process.env.MAILFORGE_MANAGED_SHARED_FROM = "hello@shared.example";
+    process.env.LOOMAIL_MANAGED_SHARED_FROM = "hello@shared.example";
     await db.execute(sql`INSERT INTO managed_sending (tenant_id, enabled) VALUES (${t.id}::uuid, true)`);
     const [f] = await q<{ id: string }>(sql`INSERT INTO flows (tenant_id, name, trigger_type, trigger_config, steps, status) VALUES (${t.id}::uuid, 'F', 'event', '{}'::jsonb, '[]'::jsonb, 'active')`.append(sql` RETURNING id`));
     const [c] = await q<{ id: string }>(sql`INSERT INTO contacts (tenant_id, external_id, email, lifecycle_state) VALUES (${t.id}::uuid, 'c', 'c@p.example', 'engaged') RETURNING id`);
@@ -266,7 +266,7 @@ describe("how many, and how often", () => {
 
   it_("points at the step that is actually next", async () => {
     const t = await newTenant({ postal: true });
-    process.env.MAILFORGE_MANAGED_SHARED_FROM = "hello@shared.example";
+    process.env.LOOMAIL_MANAGED_SHARED_FROM = "hello@shared.example";
     await db.execute(sql`INSERT INTO managed_sending (tenant_id, enabled) VALUES (${t.id}::uuid, true)`);
     await sweep();
     const m = sentTo(t.email)[0]!;

@@ -1,10 +1,10 @@
 /**
- * @mailforge/core - Pure logic, no I/O.
+ * @loomail/core - Pure logic, no I/O.
  * Contains domain types, state machines, and business rules.
  *
  * Mirror side: PUBLIC (packages/core is mirrored).
  */
-export const MAILFORGE_CORE_VERSION = "0.0.0";
+export const LOOMAIL_CORE_VERSION = "0.0.0";
 
 /**
  * Maximum hours of clock skew tolerated between a client-supplied event
@@ -169,11 +169,35 @@ export {
 } from "./library-flows.js";
 
 export {
+  renderTemplate,
+  escapeTemplateHtml,
+  SUPPORTED_VARIABLE_PREFIXES,
+  type TemplateContext,
+  type TemplateRenderOutcome,
+  type RenderResult,
+  type RenderError,
+} from "./template-renderer.js";
+
+export {
+  flowHealth,
+  BOUNCE_ATTENTION_RATE,
+  COMPLAINT_ATTENTION_RATE,
+  MIN_SENDS_FOR_RATES,
+  type FlowHealth,
+  type FlowHealthState,
+  type FlowHealthInput,
+} from "./flow/health.js";
+
+export { LIBRARY_CATALOG, libraryEntry, recommendedLibraryFlow, type LibraryCatalogEntry } from "./library-catalog.js";
+
+export {
   PLAN_IDS,
   PLANS,
   TRIAL_PLAN,
   TRIAL_PLAN_VALUE,
   TRIAL_DAYS,
+  TRIAL_MAX_DAYS,
+  rebasedTrialEnd,
   isPlanId,
   isPaidPlanId,
   isBillingInterval,
@@ -188,6 +212,17 @@ export {
   effectivePlan,
   trialDaysLeft,
   trialEndDate,
+  ADDONS,
+  ADDON_KINDS,
+  MAX_ADDON_PACKS,
+  isAddonKind,
+  isValidPackCount,
+  addonPriceUsd,
+  addonUnits,
+  addonCheckoutPlan,
+  parseAddonCheckoutPlan,
+  type AddonKind,
+  type AddonDef,
   type BillingInterval,
   type PaidPlanId,
   type PaymentStatus,
@@ -269,6 +304,7 @@ export {
   poweredByFor,
   PlanLimitError,
   type Entitlements,
+  type AddonTotals,
   type LimitKind,
 } from "./entitlements.js";
 

@@ -1,5 +1,5 @@
 {
-  "name": "@mailforge/worker",
+  "name": "@loomail/worker",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,10 +15,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mailforge/adapters": "workspace:*",
-    "@mailforge/brain-oss": "workspace:*",
-    "@mailforge/core": "workspace:*",
-    "@mailforge/db": "workspace:*",
+    "@loomail/adapters": "workspace:*",
+    "@loomail/brain-oss": "workspace:*",
+    "@loomail/core": "workspace:*",
+    "@loomail/db": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "marked": "^18.0.7",
     "pg-boss": "^12.26.2"

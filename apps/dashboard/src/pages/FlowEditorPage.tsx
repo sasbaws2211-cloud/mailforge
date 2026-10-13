@@ -7,7 +7,7 @@
  * Two distinct editing experiences:
  *   1. Prompt-defined flows (source: "manual" | "brain_suggested") -
  *      the prompt is the primary surface. The user writes what the flow
- *      should do, Mailforge compiles it into a plan, and the brain drafts
+ *      should do, Loomail compiles it into a plan, and the brain drafts
  *      each email per contact at send time.
  *   2. Library flows (source: "library") - pre-built flows with fixed
  *      email copy in templates. No prompt, no LLM needed. The editor
@@ -47,6 +47,7 @@
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */
+import { StepTestSend } from "../components/step-test-send.js";
 import React, { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import {
@@ -691,9 +692,12 @@ function renderPlanExitCondition(cond: unknown): React.ReactNode {
 function CompiledPlanPreview({
   plan,
   onEditTemplate,
+  flowId,
 }: {
   plan: UnknownRecord;
   onEditTemplate?: (slug: string) => void;
+  /** When given, steps with fixed copy get a "Send test to me" button. */
+  flowId?: string;
 }) {
   const trigger = plan.trigger as UnknownRecord | undefined;
   const steps = Array.isArray(plan.steps) ? (plan.steps as UnknownRecord[]) : [];
@@ -776,6 +780,12 @@ function CompiledPlanPreview({
                         ) : (
                           <>template <code className="font-mono text-[13px]">{step.template_ref}</code></>
                         )
+                      )}
+                      {typeof step.template_ref === "string" && flowId && typeof step.order === "number" && (
+                        <>
+                          {" · "}
+                          <StepTestSend flowId={flowId} order={step.order} />
+                        </>
                       )}
                       {typeof step.template_ref === "string" && typeof step.kb_ref === "string" && " · "}
                       {typeof step.kb_ref === "string" && (
@@ -1030,7 +1040,7 @@ export default function FlowEditorPage() {
   const isFixedContentFlow = existingFlow?.content_mode === "fixed_content" && !isLibraryFlow;
 
   // Whether an LLM is configured (for AI draft button)
-  // AI is available when the workspace has its own key or can use Mailforge AI.
+  // AI is available when the workspace has its own key or can use Loomail AI.
   const hasLlm =
     llmQuery.data !== undefined && (llmQuery.data.llm !== null || (llmQuery.data.ai?.source ?? "none") !== "none");
 
@@ -1298,6 +1308,7 @@ export default function FlowEditorPage() {
                 <CompiledPlanPreview
                   plan={existingFlow.compiled_plan as UnknownRecord}
                   onEditTemplate={(slug) => setEditingTemplate(slug)}
+                  flowId={existingFlow.id}
                 />
               </div>
             )}
@@ -1485,7 +1496,7 @@ export default function FlowEditorPage() {
       <div>
         {!isNew && <Label htmlFor="prompt-source">Prompt</Label>}
         <p className="mb-3 text-[14px] leading-relaxed text-muted-foreground">
-          Describe what this flow should do, in your own words. Mailforge
+          Describe what this flow should do, in your own words. Loomail
           compiles it into a deterministic plan you review before anything is
           sent. The AI then drafts each email for each contact individually.
         </p>
@@ -1627,6 +1638,7 @@ export default function FlowEditorPage() {
           <CompiledPlanPreview
             plan={existingFlow.compiled_plan as UnknownRecord}
             onEditTemplate={(slug) => setEditingTemplate(slug)}
+            flowId={existingFlow.id}
           />
         </div>
       )}

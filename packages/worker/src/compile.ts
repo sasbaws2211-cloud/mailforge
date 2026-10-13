@@ -18,12 +18,12 @@
  */
 import { eq, and } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { flows, templates, kbEntries } from "@mailforge/db/schema";
+import { flows, templates, kbEntries } from "@loomail/db/schema";
 import {
   compile,
   type CompilePromptContext,
-} from "@mailforge/brain-oss";
-import type { CompileJobData } from "@mailforge/core";
+} from "@loomail/brain-oss";
+import type { CompileJobData } from "@loomail/core";
 import { resolveTenantProvider } from "./provider-resolver.js";
 
 // ---------------------------------------------------------------------------

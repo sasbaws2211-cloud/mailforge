@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
-import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
+import { encrypt, parseEncryptionKey } from "@loomail/adapters";
 import { buildTenantTransportResolver } from "../src/transport-resolver.js";
 import { managedDailyLimit, resolveManagedTransport } from "../src/managed-sending.js";
 import { makeDrainRunner } from "./drain-test-utils.js";
@@ -21,7 +21,7 @@ if (!TEST_DB_URL) throw new Error("[managed-sending.test] DATABASE_URL is not se
 const ENC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const SIGNING_KEY = "test-unsubscribe-signing-key-do-not-use";
 const SHARED = "notifications@mail.platform.test";
-const MANAGED_ENV = ["MAILFORGE_MANAGED_RESEND_API_KEY", "MAILFORGE_MANAGED_RESEND_BASE_URL", "MAILFORGE_MANAGED_SHARED_FROM", "MAILFORGE_MANAGED_SHARED_DAILY_LIMIT", "MAILFORGE_MANAGED_SENDING"];
+const MANAGED_ENV = ["LOOMAIL_MANAGED_RESEND_API_KEY", "LOOMAIL_MANAGED_RESEND_BASE_URL", "LOOMAIL_MANAGED_SHARED_FROM", "LOOMAIL_MANAGED_SHARED_DAILY_LIMIT", "LOOMAIL_MANAGED_SENDING"];
 
 let pool: pg.Pool;
 let lockClient: pg.PoolClient | undefined;
@@ -73,10 +73,10 @@ afterAll(async () => {
 });
 
 function offer(extra: Record<string, string> = {}) {
-  process.env.MAILFORGE_MANAGED_RESEND_API_KEY = fake.apiKey;
-  process.env.MAILFORGE_MANAGED_RESEND_BASE_URL = fake.baseUrl;
-  process.env.MAILFORGE_MANAGED_SHARED_FROM = SHARED;
-  process.env.MAILFORGE_MANAGED_SHARED_DAILY_LIMIT = "100";
+  process.env.LOOMAIL_MANAGED_RESEND_API_KEY = fake.apiKey;
+  process.env.LOOMAIL_MANAGED_RESEND_BASE_URL = fake.baseUrl;
+  process.env.LOOMAIL_MANAGED_SHARED_FROM = SHARED;
+  process.env.LOOMAIL_MANAGED_SHARED_DAILY_LIMIT = "100";
   for (const [k, v] of Object.entries(extra)) process.env[k] = v;
 }
 
@@ -125,7 +125,7 @@ describe("resolveManagedTransport", () => {
     expect(await resolveManagedTransport(db as never, t)).toBeNull(); // no row
     await managed(t, { enabled: false });
     expect(await resolveManagedTransport(db as never, t)).toBeNull(); // turned off
-    process.env.MAILFORGE_MANAGED_SENDING = "false";
+    process.env.LOOMAIL_MANAGED_SENDING = "false";
     await managed(t);
     expect(await resolveManagedTransport(db as never, t)).toBeNull(); // operator switched managed sending off
   });
@@ -136,7 +136,7 @@ describe("resolveManagedTransport", () => {
     await managed(t, { paused_at: new Date() });
     expect(await resolveManagedTransport(db as never, t)).toBeNull();
     await managed(t, { domain: "mail.acme-test.dev", domain_status: "pending" });
-    delete process.env.MAILFORGE_MANAGED_SHARED_FROM;
+    delete process.env.LOOMAIL_MANAGED_SHARED_FROM;
     expect(await resolveManagedTransport(db as never, t)).toBeNull();
   });
 
@@ -155,7 +155,7 @@ describe("resolveManagedTransport", () => {
     offer();
     const t = await newTenant("Acme Analytics", { brand: { brand_name: "Acme Brand", reply_to: "support@acme-test.dev" } });
     await managed(t, { domain: "mail.acme-test.dev", domain_status: "verified", from_local: "news" });
-    const created = await (await import("@mailforge/adapters")).createResendDomainsClient({ apiKey: fake.apiKey, baseUrl: fake.baseUrl }).createDomain("mail.acme-test.dev");
+    const created = await (await import("@loomail/adapters")).createResendDomainsClient({ apiKey: fake.apiKey, baseUrl: fake.baseUrl }).createDomain("mail.acme-test.dev");
     if (!created.ok) throw new Error("fake create failed");
     fake.setStatus("mail.acme-test.dev", "verified");
     const adapter = (await resolveManagedTransport(db as never, t))!;
@@ -223,7 +223,7 @@ describe("the transport resolver the drain uses", () => {
 
 describe("managedDailyLimit", () => {
   it("caps only the shared address, at the operator's figure", async () => {
-    offer({ MAILFORGE_MANAGED_SHARED_DAILY_LIMIT: "7" });
+    offer({ LOOMAIL_MANAGED_SHARED_DAILY_LIMIT: "7" });
     const t = await newTenant();
     await managed(t);
     expect(await managedDailyLimit(db as never, t)).toBe(7);
@@ -290,7 +290,7 @@ describe("the real drain sending through managed sending", () => {
   });
 
   it("holds the rest of the day's mail at the shared address's daily cap, queued for tomorrow, never failed", async () => {
-    offer({ MAILFORGE_MANAGED_SHARED_DAILY_LIMIT: "2" });
+    offer({ LOOMAIL_MANAGED_SHARED_DAILY_LIMIT: "2" });
     const t = await newTenant();
     await managed(t);
     const ids = await approved(t, 3);
@@ -305,9 +305,9 @@ describe("the real drain sending through managed sending", () => {
   });
 
   it("a workspace on its own verified domain has no such cap", async () => {
-    offer({ MAILFORGE_MANAGED_SHARED_DAILY_LIMIT: "1" });
+    offer({ LOOMAIL_MANAGED_SHARED_DAILY_LIMIT: "1" });
     const t = await newTenant();
-    const created = await (await import("@mailforge/adapters")).createResendDomainsClient({ apiKey: fake.apiKey, baseUrl: fake.baseUrl }).createDomain("mail.acme-test.dev");
+    const created = await (await import("@loomail/adapters")).createResendDomainsClient({ apiKey: fake.apiKey, baseUrl: fake.baseUrl }).createDomain("mail.acme-test.dev");
     if (!created.ok) throw new Error("fake create failed");
     fake.setStatus("mail.acme-test.dev", "verified");
     await managed(t, { domain: "mail.acme-test.dev", domain_status: "verified" });
@@ -329,7 +329,7 @@ describe("the real drain sending through managed sending", () => {
 
   it("when the OPERATOR's account has a problem the customer's mail waits and is retried, not failed", async () => {
     offer();
-    process.env.MAILFORGE_MANAGED_RESEND_API_KEY = "re_wrong_key"; // the operator's key is wrong: Resend answers 401
+    process.env.LOOMAIL_MANAGED_RESEND_API_KEY = "re_wrong_key"; // the operator's key is wrong: Resend answers 401
     const t = await newTenant();
     await managed(t);
     const ids = await approved(t, 1);

@@ -97,7 +97,7 @@ function ActionPanel({
   );
 }
 
-/** Give this workspace its own monthly Mailforge AI token allowance instead of the plan's. */
+/** Give this workspace its own monthly Loomail AI token allowance instead of the plan's. */
 function AllowancePanel({ d }: { d: AdminTenantDetail }) {
   const [mode, setMode] = useState<"number" | "unlimited" | "plan">("number");
   const [tokens, setTokens] = useState("");
@@ -107,7 +107,7 @@ function AllowancePanel({ d }: { d: AdminTenantDetail }) {
     <ActionPanel
       workspaceId={d.workspace.id}
       title="AI allowance"
-      description="Overrides the plan's monthly Mailforge AI token allowance for this workspace only. Only matters on a hosted service that enforces plans. Use it for design partners, goodwill after an outage, or to rein in a heavy user."
+      description="Overrides the plan's monthly Loomail AI token allowance for this workspace only. Only matters on a hosted service that enforces plans. Use it for design partners, goodwill after an outage, or to rein in a heavy user."
       buttonLabel="Set allowance"
       extra={{
         valid: mode !== "number" || validNumber,
@@ -177,7 +177,7 @@ function Actions({ d }: { d: AdminTenantDetail }) {
           valid: plan.length > 0,
           node: (
             <Select value={plan} onChange={(e) => setPlan(e.target.value)} aria-label="Plan">
-              {["free", "starter", "growth", "scale"].map((p) => (
+              {["free", "essential"].map((p) => (
                 <option key={p} value={p}>
                   {planLabel(p)}
                 </option>
@@ -192,7 +192,7 @@ function Actions({ d }: { d: AdminTenantDetail }) {
       <ActionPanel
         workspaceId={w.id}
         title="Give a trial"
-        description="Starts a Growth trial that ends this many days from now (it does not add to a running trial)."
+        description="Starts an Essential trial that ends this many days from now (it does not add to a running trial)."
         buttonLabel="Start trial"
         disabledReason={subNote}
         extra={{
@@ -370,7 +370,7 @@ export default function AdminTenantPage() {
           </SummaryItem>
           <SummaryItem label="Flows">{nf(d.activity.flows)}</SummaryItem>
           <SummaryItem label="Email transport">
-            {d.activity.has_email_transport ? "Own provider connected" : d.sending?.enabled && !d.sending.paused ? "Mailforge Sending" : d.sending?.paused ? "Mailforge Sending (paused)" : "Not set up"}
+            {d.activity.has_email_transport ? "Own provider connected" : d.sending?.enabled && !d.sending.paused ? "Loomail Sending" : d.sending?.paused ? "Loomail Sending (paused)" : "Not set up"}
           </SummaryItem>
           <SummaryItem label="Last email sent">{ago(d.activity.last_email_sent_at)}</SummaryItem>
         </SummaryList>
@@ -400,8 +400,8 @@ export default function AdminTenantPage() {
         configured={null}
       >
         <SummaryList>
-          <SummaryItem label="Using">{d.ai.source === "byok" ? "Its own key" : "Mailforge AI"}</SummaryItem>
-          <SummaryItem label="Mailforge AI tokens">
+          <SummaryItem label="Using">{d.ai.source === "byok" ? "Its own key" : "Loomail AI"}</SummaryItem>
+          <SummaryItem label="Loomail AI tokens">
             {nf(d.ai.platform_tokens_this_month)}
             {d.ai.allowance_tokens !== null && ` of ${nf(d.ai.allowance_tokens)}`}
           </SummaryItem>

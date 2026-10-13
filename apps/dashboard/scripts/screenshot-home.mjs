@@ -377,7 +377,7 @@ for (const scheme of ["light", "dark"]) {
 
   // Clear any localStorage dismissal so we land in operational mode
   await page.goto(`${BASE}/home`, { waitUntil: "domcontentloaded" });
-  await page.evaluate(() => localStorage.removeItem("mailforge-home-setup-dismissed"));
+  await page.evaluate(() => localStorage.removeItem("loomail-home-setup-dismissed"));
 
   stubAll(context, {
     diagnostics: diagnosticsAllPresent,

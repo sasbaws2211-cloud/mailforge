@@ -33,18 +33,18 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
-import { tenants, kbEntries } from "@mailforge/db/schema";
+import { tenants, kbEntries } from "@loomail/db/schema";
 import { applyBudgetTruncation } from "../src/context-budget.js";
-import type { DraftPromptContext } from "@mailforge/brain-oss";
+import type { DraftPromptContext } from "@loomail/brain-oss";
 
 // ---------------------------------------------------------------------------
-// Mock: fetch (no network) and @mailforge/adapters
+// Mock: fetch (no network) and @loomail/adapters
 // ---------------------------------------------------------------------------
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-vi.mock("@mailforge/adapters", () => ({
+vi.mock("@loomail/adapters", () => ({
   decrypt: vi.fn(() =>
     JSON.stringify({ apiKey: "sk-test", baseUrl: "https://api.test/v1", model: "gpt-4o" }),
   ),
@@ -67,8 +67,8 @@ if (!TEST_DB_URL) {
     `[context-kb.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://loomail:loomail@localhost:5432/loomail\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://loomail:loomail@localhost:5433/loomail'\n`),
   );
 }
 

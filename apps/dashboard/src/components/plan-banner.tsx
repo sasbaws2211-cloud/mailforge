@@ -12,10 +12,12 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, Info, X } from "lucide-react";
-import { planNotice, usePlan, type PlanNotice } from "../plan.js";
+import { planNotice, useCheckoutFlow, usePlan, type PlanNotice } from "../plan.js";
+import { useMe } from "../auth.js";
+import { Button } from "./ui/button.js";
 import { cn } from "../lib/utils.js";
 
-const STORAGE_KEY = "mailforge-plan-notice-dismissed";
+const STORAGE_KEY = "loomail-plan-notice-dismissed";
 
 function readDismissed(): string | null {
   try {
@@ -39,8 +41,24 @@ const TONE_ICON: Record<PlanNotice["tone"], string> = {
 
 export function PlanBanner() {
   const { data } = usePlan();
+  const { data: me } = useMe();
+  const flow = useCheckoutFlow();
   const [dismissed, setDismissed] = useState<string | null>(readDismissed);
+  const [error, setError] = useState<string | null>(null);
   const notice = planNotice(data);
+  const isOwner = me?.user.role === "owner";
+  const canPay = isOwner && data?.billing.enabled === true;
+
+  async function act(n: PlanNotice) {
+    if (!n.action || n.action.kind === "plans") return;
+    setError(null);
+    try {
+      if (n.action.kind === "subscribe") await flow.start({ plan: "essential", interval: "monthly" });
+      else await flow.start({ addon: { kind: n.action.addon, packs: 1 } });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start the payment.");
+    }
+  }
 
   if (!notice) return null;
   if (notice.dismissible && dismissed === notice.id) return null;
@@ -65,9 +83,20 @@ export function PlanBanner() {
       <Icon size={16} className={cn("mt-0.5 shrink-0", TONE_ICON[notice.tone])} aria-hidden="true" />
       <p className="flex-1 text-[14px] leading-relaxed text-foreground">
         {notice.message}{" "}
-        <Link to="/settings/plan" className="font-medium text-accent-text underline-offset-4 hover:underline">
-          View plans
-        </Link>
+        {notice.action && notice.action.kind !== "plans" && canPay ? (
+          <Button size="sm" className="ml-1 align-middle" disabled={flow.busy} onClick={() => void act(notice)}>
+            {flow.busy
+              ? "Opening checkout..."
+              : notice.action.kind === "subscribe"
+                ? "Subscribe to Essential"
+                : notice.action.label}
+          </Button>
+        ) : (
+          <Link to="/settings/plan" className="font-medium text-accent-text underline-offset-4 hover:underline">
+            {notice.action?.kind === "subscribe" ? "Subscribe to Essential" : notice.action?.kind === "addon" ? "Add more usage" : "View plan"}
+          </Link>
+        )}
+        {error && <span className="ml-2 text-danger">{error}</span>}
       </p>
       {notice.dismissible && (
         <button

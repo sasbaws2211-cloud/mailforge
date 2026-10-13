@@ -20,7 +20,7 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { sql } from "drizzle-orm";
-import { parseGoal, trialDaysLeft } from "@mailforge/core";
+import { parseGoal, trialDaysLeft } from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 import { getPlatformTransport, type PlatformTransport } from "../platform-mailer.js";
 import { buildWelcomeEmail, type TransactionalEmailInput } from "../transactional-email.js";
@@ -82,7 +82,7 @@ export async function sendWelcomeEmailOnce(
       tenantName: tenant.name,
       dashboardUrl: opts.dashboardUrl,
       trialDaysLeft: trialEndsAt ? trialDaysLeft(trialEndsAt, now) : null,
-      supportEmail: process.env.MAILFORGE_SUPPORT_EMAIL?.trim() || null,
+      supportEmail: process.env.LOOMAIL_SUPPORT_EMAIL?.trim() || null,
       goal: parseGoal(((tenant.settings ?? {}).signup as { goal?: unknown } | undefined)?.goal),
     });
 

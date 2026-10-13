@@ -15,12 +15,12 @@ import {
 describe("managedSendingConfigFromEnv", () => {
   it("is off without the operator's Resend key", () => {
     expect(managedSendingConfigFromEnv({}).enabled).toBe(false);
-    expect(managedSendingConfigFromEnv({ MAILFORGE_MANAGED_RESEND_API_KEY: "  " }).enabled).toBe(false);
+    expect(managedSendingConfigFromEnv({ LOOMAIL_MANAGED_RESEND_API_KEY: "  " }).enabled).toBe(false);
   });
 
   it("is on with a key, and can be switched off without removing it", () => {
-    expect(managedSendingConfigFromEnv({ MAILFORGE_MANAGED_RESEND_API_KEY: "re_x" })).toMatchObject({ enabled: true, apiKey: "re_x" });
-    expect(managedSendingConfigFromEnv({ MAILFORGE_MANAGED_RESEND_API_KEY: "re_x", MAILFORGE_MANAGED_SENDING: "false" }).enabled).toBe(false);
+    expect(managedSendingConfigFromEnv({ LOOMAIL_MANAGED_RESEND_API_KEY: "re_x" })).toMatchObject({ enabled: true, apiKey: "re_x" });
+    expect(managedSendingConfigFromEnv({ LOOMAIL_MANAGED_RESEND_API_KEY: "re_x", LOOMAIL_MANAGED_SENDING: "false" }).enabled).toBe(false);
   });
 
   it("never uses the platform's account-email key for customer mail", () => {
@@ -29,13 +29,13 @@ describe("managedSendingConfigFromEnv", () => {
 
   it("reads the shared sender (lower-cased, must look like an address), the daily cap and the base URL", () => {
     const c = managedSendingConfigFromEnv({
-      MAILFORGE_MANAGED_RESEND_API_KEY: "re_x",
-      MAILFORGE_MANAGED_SHARED_FROM: " Notifications@Mail.Platform.Test ",
-      MAILFORGE_MANAGED_SHARED_DAILY_LIMIT: "250",
-      MAILFORGE_MANAGED_RESEND_BASE_URL: "http://127.0.0.1:4030/",
+      LOOMAIL_MANAGED_RESEND_API_KEY: "re_x",
+      LOOMAIL_MANAGED_SHARED_FROM: " Notifications@Mail.Platform.Test ",
+      LOOMAIL_MANAGED_SHARED_DAILY_LIMIT: "250",
+      LOOMAIL_MANAGED_RESEND_BASE_URL: "http://127.0.0.1:4030/",
     });
     expect(c).toMatchObject({ sharedFrom: "notifications@mail.platform.test", sharedDailyLimit: 250, baseUrl: "http://127.0.0.1:4030" });
-    const d = managedSendingConfigFromEnv({ MAILFORGE_MANAGED_RESEND_API_KEY: "re_x", MAILFORGE_MANAGED_SHARED_FROM: "not an address", MAILFORGE_MANAGED_SHARED_DAILY_LIMIT: "-4" });
+    const d = managedSendingConfigFromEnv({ LOOMAIL_MANAGED_RESEND_API_KEY: "re_x", LOOMAIL_MANAGED_SHARED_FROM: "not an address", LOOMAIL_MANAGED_SHARED_DAILY_LIMIT: "-4" });
     expect(d).toMatchObject({ sharedFrom: null, sharedDailyLimit: DEFAULT_SHARED_DAILY_LIMIT, baseUrl: RESEND_API_BASE });
   });
 });

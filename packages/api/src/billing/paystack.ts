@@ -62,6 +62,26 @@ export interface PaystackTransaction {
   /** The plan the charge was made under. An empty object (or null) when there is none. */
   plan?: { plan_code?: string } | null;
   metadata?: Record<string, unknown> | string | null;
+  /** The card used, when the provider returns one. Only a `reusable` one can be charged again. */
+  authorization?: {
+    authorization_code?: string;
+    reusable?: boolean;
+    last4?: string;
+    brand?: string;
+    card_type?: string;
+  } | null;
+}
+
+export interface ChargeAuthorizationInput {
+  /** The payer's email, the same one the authorization was created with. */
+  email: string;
+  /** Minor units. */
+  amount: number;
+  currency: string;
+  authorizationCode: string;
+  /** Our unique reference. Paystack refuses a reference it has seen, so a retry cannot double charge. */
+  reference: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface PaystackSubscription {
@@ -81,7 +101,8 @@ export interface InitializeTransactionInput {
   callbackUrl: string;
   /** Where Paystack sends the customer if they close the payment page. */
   cancelUrl: string;
-  planCode: string;
+  /** Omit for a one-off payment (a top-up): it is then charged `amount` once, with no renewal. */
+  planCode?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -93,6 +114,8 @@ export interface PaystackClient {
    */
   initializeTransaction(input: InitializeTransactionInput): Promise<{ url: string; accessCode: string | null }>;
   verifyTransaction(reference: string): Promise<PaystackTransaction>;
+  /** Charge a saved card (a reusable authorization) without the customer being present. */
+  chargeAuthorization(input: ChargeAuthorizationInput): Promise<PaystackTransaction>;
   /** All of an email's subscriptions, newest first. Empty when the customer is unknown. */
   listSubscriptions(email: string): Promise<PaystackSubscription[]>;
   /** Stop future charges. Looks up the email token Paystack requires. */
@@ -203,6 +226,17 @@ export function createPaystackClient(cfg: PaystackConfig): PaystackClient {
 
     verifyTransaction(reference) {
       return call<PaystackTransaction>("GET", `/transaction/verify/${encodeURIComponent(reference)}`);
+    },
+
+    chargeAuthorization(input) {
+      return call<PaystackTransaction>("POST", "/transaction/charge_authorization", {
+        email: input.email,
+        amount: input.amount,
+        currency: input.currency,
+        authorization_code: input.authorizationCode,
+        reference: input.reference,
+        metadata: input.metadata ?? {},
+      });
     },
 
     async listSubscriptions(email) {

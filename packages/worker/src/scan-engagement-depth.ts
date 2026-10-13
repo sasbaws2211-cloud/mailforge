@@ -22,7 +22,7 @@
  */
 import { eq, and, sql, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { contacts, tenants } from "@mailforge/db/schema";
+import { contacts, tenants } from "@loomail/db/schema";
 import {
   resolveLifecycleConfig,
   computeMinCohortSize,
@@ -30,7 +30,7 @@ import {
   assignEngagementDepth,
   type LifecycleConfig,
   type EngagementDepth,
-} from "@mailforge/core";
+} from "@loomail/core";
 
 // ---------------------------------------------------------------------------
 // Constants

@@ -19,11 +19,11 @@
  *   - only the usual mail submission ports are allowed.
  *
  * The operator can exempt hosts they trust (for example a mail relay on their
- * own network) with MAILFORGE_SMTP_ALLOWED_HOSTS. Exempt hosts skip both checks.
+ * own network) with LOOMAIL_SMTP_ALLOWED_HOSTS. Exempt hosts skip both checks.
  *
  * On by default for a hosted service (public site or plan enforcement on) and
  * off for a self-hosted install, where a local relay is normal.
- * MAILFORGE_RESTRICT_SMTP_HOSTS=true|false overrides either way.
+ * LOOMAIL_RESTRICT_SMTP_HOSTS=true|false overrides either way.
  *
  * Mirror side: PUBLIC (packages/adapters is mirrored).
  */
@@ -55,15 +55,15 @@ function flag(v: string | undefined): boolean | null {
 
 /** The policy for this process, from environment variables. */
 export function smtpHostPolicyFromEnv(env: Record<string, string | undefined> = process.env): SmtpHostPolicy {
-  const explicit = flag(env.MAILFORGE_RESTRICT_SMTP_HOSTS);
-  const hosted = env.MAILFORGE_PUBLIC_SITE === "true" || env.MAILFORGE_ENFORCE_PLANS === "true";
-  const ports = (env.MAILFORGE_SMTP_ALLOWED_PORTS ?? "")
+  const explicit = flag(env.LOOMAIL_RESTRICT_SMTP_HOSTS);
+  const hosted = env.LOOMAIL_PUBLIC_SITE === "true" || env.LOOMAIL_ENFORCE_PLANS === "true";
+  const ports = (env.LOOMAIL_SMTP_ALLOWED_PORTS ?? "")
     .split(",")
     .map((p) => Number(p.trim()))
     .filter((p) => Number.isInteger(p) && p >= 1 && p <= 65535);
   return {
     restrict: explicit ?? hosted,
-    allowedHosts: (env.MAILFORGE_SMTP_ALLOWED_HOSTS ?? "")
+    allowedHosts: (env.LOOMAIL_SMTP_ALLOWED_HOSTS ?? "")
       .split(",")
       .map((h) => normalizeHost(h))
       .filter((h) => h !== ""),

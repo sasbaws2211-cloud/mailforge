@@ -41,8 +41,8 @@ import {
   BUSINESS_MODEL_TEMPLATE_LIST,
   BUSINESS_MODEL_IDS,
   type BusinessModelId,
-} from "@mailforge/core";
-import { tenants, flows } from "@mailforge/db/schema";
+} from "@loomail/core";
+import { tenants, flows } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 
 // ---------------------------------------------------------------------------

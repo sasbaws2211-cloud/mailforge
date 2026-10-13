@@ -20,6 +20,7 @@
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */
+import { Link } from "react-router-dom";
 import React, { useEffect, useMemo, useState } from "react";
 import { Inbox } from "lucide-react";
 import {
@@ -32,7 +33,7 @@ import {
   useRetryMessage,
   removeFromQueue,
 } from "../messages.js";
-import { useFlows } from "../flows.js";
+import { useFlows, useUpdateFlow } from "../flows.js";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Message, MessageActionError } from "../api.js";
 import { Badge } from "../components/ui/badge.js";
@@ -48,6 +49,34 @@ function formatDate(iso: string): string {
     month: "short",
     day: "numeric",
   });
+}
+
+/**
+ * "Trust this flow": once the drafts are good, send this flow's emails automatically instead of
+ * queueing each for review. One click; reversible any time from the flow editor.
+ */
+function TrustFlowCard({ flowId, flowName }: { flowId: string; flowName: string }) {
+  const update = useUpdateFlow(flowId);
+  if (update.isSuccess) {
+    return (
+      <p role="status" className="mt-4 rounded-md border border-success bg-success-soft px-3.5 py-2.5 text-[14px] text-foreground">
+        Done. "{flowName}" now sends automatically. You can switch review back on in the flow editor.
+      </p>
+    );
+  }
+  return (
+    <div className="mt-4 rounded-md border border-border bg-card px-4 py-3">
+      <p className="text-[14px] text-foreground">
+        Happy with how "{flowName}" writes? Send its emails automatically from now on, with no review queue.
+      </p>
+      <div className="mt-2 flex items-center gap-3">
+        <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => update.mutate({ approval_mode: "auto" })}>
+          {update.isPending ? "Saving..." : "Send this flow automatically"}
+        </Button>
+        {update.isError && <span className="text-[13px] text-danger">Could not save. Please try again.</span>}
+      </div>
+    </div>
+  );
 }
 
 function shortId(id: string): string {
@@ -411,7 +440,14 @@ export default function ApprovalsPage() {
         <EmptyState
           icon={Inbox}
           title="Nothing is waiting for review"
-          description="When a flow with approval mode &quot;require&quot; produces a draft, it lands here: the queue on the left, the email preview on the right."
+          description="Emails from flows set to manual review land here, with a preview, so you can approve or reject each one before it sends. Ready-made flows send on their own, so you only see drafts from flows you ask to review."
+          action={
+            <Link to="/flows#ready-made">
+              <Button size="sm" variant="outline">
+                See ready-made flows
+              </Button>
+            </Link>
+          }
         />
       )}
 
@@ -540,6 +576,8 @@ export default function ApprovalsPage() {
                   {notice}
                 </p>
               )}
+
+              <TrustFlowCard key={selected.flow_id} flowId={selected.flow_id} flowName={flowNames.get(selected.flow_id) ?? "this flow"} />
 
               <div className="mt-6 flex items-center gap-3 border-t border-border pt-5">
                 <Button onClick={handleApprove} disabled={actionPending}>

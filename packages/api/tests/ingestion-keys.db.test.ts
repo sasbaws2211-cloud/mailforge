@@ -17,7 +17,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
 import { buildApp, SESSION_COOKIE_NAME } from "../src/index.js";
-import { tenants, users, sessions, apiKeys } from "@mailforge/db/schema";
+import { tenants, users, sessions, apiKeys } from "@loomail/db/schema";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) {

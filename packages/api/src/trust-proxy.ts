@@ -6,10 +6,10 @@
  * (signups, admin sign-in) would apply to all visitors together. With it, the real client address
  * is taken from the header the proxy adds.
  *
- *   MAILFORGE_TRUST_PROXY unset, "", "false" or "0"   do not trust (the default: the header is ignored,
+ *   LOOMAIL_TRUST_PROXY unset, "", "false" or "0"   do not trust (the default: the header is ignored,
  *                                                     so a client cannot pick its own address)
- *   MAILFORGE_TRUST_PROXY=true                         trust every hop in the header
- *   MAILFORGE_TRUST_PROXY=<n> (1 to 10)                trust exactly the last n proxies; the most
+ *   LOOMAIL_TRUST_PROXY=true                         trust every hop in the header
+ *   LOOMAIL_TRUST_PROXY=<n> (1 to 10)                trust exactly the last n proxies; the most
  *                                                      precise setting when you know how many sit in front
  *
  * Anything else is read as "do not trust": a typo must never silently turn on header trust.

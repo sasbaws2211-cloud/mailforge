@@ -3,7 +3,7 @@
  *
  * Loads a tenant's plan row and its current usage, and offers the two checks
  * the API enforces: adding a contact and adding a team member. The rules live
- * in @mailforge/core (entitlements.ts); this file only fetches the numbers.
+ * in @loomail/core (entitlements.ts); this file only fetches the numbers.
  *
  * When plan enforcement is off (the default) the checks return before touching
  * the database, so self-hosted installs pay nothing for any of this.
@@ -16,8 +16,9 @@ import {
   entitlementsFor,
   plansEnforced,
   startOfMonthUtc,
+  type AddonTotals,
   type Entitlements,
-} from "@mailforge/core";
+} from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 
 export interface Usage {
@@ -31,7 +32,23 @@ export interface Usage {
   pendingInvites: number;
 }
 
-/** The tenant's entitlements right now (cheap: one row). */
+/** Prepaid top-ups bought this calendar month (UTC), summed per limit. */
+export async function loadAddonTotals(db: Db, tenantId: string, now: Date): Promise<AddonTotals> {
+  const r = await db.execute<{ kind: string; units: string }>(sql`
+    SELECT kind, COALESCE(sum(units), 0)::text AS units FROM addon_purchases
+    WHERE tenant_id = ${tenantId}::uuid AND period_start = ${startOfMonthUtc(now).toISOString()}::timestamptz
+    GROUP BY kind`);
+  const out: AddonTotals = {};
+  for (const row of r.rows) {
+    const n = Number(row.units);
+    if (row.kind === "profiles") out.contacts = n;
+    else if (row.kind === "emails") out.emailsPerMonth = n;
+    else if (row.kind === "ai") out.aiTokensPerMonth = n;
+  }
+  return out;
+}
+
+/** The tenant's entitlements right now (cheap: one row, plus this month's top-ups). */
 export async function loadEntitlements(db: Db, tenantId: string, now: Date = new Date()): Promise<Entitlements> {
   const r = await db.execute<{
     plan: string | null;
@@ -40,11 +57,14 @@ export async function loadEntitlements(db: Db, tenantId: string, now: Date = new
     ai_allowance_override: number | null;
   }>(sql`SELECT plan, trial_ends_at, plan_paid_through, ai_allowance_override FROM tenants WHERE id = ${tenantId}::uuid LIMIT 1`);
   const row = r.rows[0];
+  // Only a workspace whose plan is enforced needs the top-ups; skip the query otherwise.
+  const addons = plansEnforced() ? await loadAddonTotals(db, tenantId, now) : undefined;
   return entitlementsFor({
     plan: row?.plan ?? null,
     trialEndsAt: row?.trial_ends_at ? new Date(row.trial_ends_at) : null,
     paidThrough: row?.plan_paid_through ? new Date(row.plan_paid_through) : null,
     aiTokensOverride: row?.ai_allowance_override ?? null,
+    addons,
     now,
   });
 }
@@ -55,7 +75,8 @@ async function count(db: Db, query: ReturnType<typeof sql>): Promise<number> {
 }
 
 export function countContacts(db: Db, tenantId: string): Promise<number> {
-  return count(db, sql`SELECT count(*)::text AS n FROM contacts WHERE tenant_id = ${tenantId}::uuid`);
+  // Demo contacts (see onboarding/demo-data.ts) never count against the plan.
+  return count(db, sql`SELECT count(*)::text AS n FROM contacts WHERE tenant_id = ${tenantId}::uuid AND left(external_id, 5) <> 'demo_'`);
 }
 
 /** Lifecycle emails sent this calendar month (UTC). Account emails are not counted. */

@@ -34,13 +34,13 @@ import {
   flows,
   flowMemberships,
   suppressions,
-} from "@mailforge/db/schema";
+} from "@loomail/db/schema";
 import {
   THROTTLE_DEFAULTS,
   evaluateThrottleGate,
   type ThrottleGateInput,
-} from "@mailforge/core";
-import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
+} from "@loomail/core";
+import { encrypt, parseEncryptionKey } from "@loomail/adapters";
 
 // ---------------------------------------------------------------------------
 // DB setup
@@ -53,8 +53,8 @@ if (!TEST_DB_URL) {
     `[resend-webhook.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://loomail:loomail@localhost:5432/loomail\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://loomail:loomail@localhost:5433/loomail'\n`),
   );
 }
 

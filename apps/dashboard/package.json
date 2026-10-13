@@ -1,5 +1,5 @@
 {
-  "name": "@mailforge/dashboard",
+  "name": "@loomail/dashboard",
   "version": "0.0.0",
   "private": true,
   "type": "module",

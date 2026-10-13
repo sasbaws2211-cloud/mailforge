@@ -19,9 +19,9 @@ import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
-import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
-import { purgeWorkspace } from "@mailforge/db/purge";
-import { createResendDomainsClient } from "@mailforge/adapters";
+import { encrypt, parseEncryptionKey } from "@loomail/adapters";
+import { purgeWorkspace } from "@loomail/db/purge";
+import { createResendDomainsClient } from "@loomail/adapters";
 import { sweepDomainCleanup } from "../src/sending/domains.js";
 import { resolveManagedAdapter } from "../src/sending/context.js";
 import { openWorkspaceExport } from "../src/account/export.js";
@@ -32,7 +32,7 @@ if (!TEST_DB_URL) throw new Error("[managed-sending.test] DATABASE_URL is not se
 
 const ENC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const SHARED = "notifications@mail.platform.test";
-const MANAGED_ENV = ["MAILFORGE_MANAGED_RESEND_API_KEY", "MAILFORGE_MANAGED_RESEND_WEBHOOK_SECRET", "MAILFORGE_MANAGED_SHARED_FROM", "MAILFORGE_MANAGED_SHARED_DAILY_LIMIT", "MAILFORGE_MANAGED_RESEND_BASE_URL", "MAILFORGE_MANAGED_SENDING"];
+const MANAGED_ENV = ["LOOMAIL_MANAGED_RESEND_API_KEY", "LOOMAIL_MANAGED_RESEND_WEBHOOK_SECRET", "LOOMAIL_MANAGED_SHARED_FROM", "LOOMAIL_MANAGED_SHARED_DAILY_LIMIT", "LOOMAIL_MANAGED_RESEND_BASE_URL", "LOOMAIL_MANAGED_SENDING"];
 
 let pool: pg.Pool;
 let lockClient: pg.PoolClient | undefined;
@@ -65,11 +65,11 @@ beforeAll(async () => {
 });
 
 function offer(extra: Record<string, string> = {}) {
-  process.env.MAILFORGE_MANAGED_RESEND_API_KEY = fake.apiKey;
-  process.env.MAILFORGE_MANAGED_RESEND_BASE_URL = fake.baseUrl;
-  process.env.MAILFORGE_MANAGED_RESEND_WEBHOOK_SECRET = fake.webhookSecret;
-  process.env.MAILFORGE_MANAGED_SHARED_FROM = SHARED;
-  process.env.MAILFORGE_MANAGED_SHARED_DAILY_LIMIT = "100";
+  process.env.LOOMAIL_MANAGED_RESEND_API_KEY = fake.apiKey;
+  process.env.LOOMAIL_MANAGED_RESEND_BASE_URL = fake.baseUrl;
+  process.env.LOOMAIL_MANAGED_RESEND_WEBHOOK_SECRET = fake.webhookSecret;
+  process.env.LOOMAIL_MANAGED_SHARED_FROM = SHARED;
+  process.env.LOOMAIL_MANAGED_SHARED_DAILY_LIMIT = "100";
   for (const [k, v] of Object.entries(extra)) process.env[k] = v;
 }
 
@@ -163,7 +163,7 @@ describe("when the operator does not offer managed sending", () => {
   });
 
   it("a key alone is not enough if the operator switched it off", async () => {
-    offer({ MAILFORGE_MANAGED_SENDING: "false" });
+    offer({ LOOMAIL_MANAGED_SENDING: "false" });
     const t = await newTenant();
     expect((await get(t)).json().available).toBe(false);
   });
@@ -204,7 +204,7 @@ describe("turning it on", () => {
 
   it("with no shared address offered, it cannot send until a domain is verified, and says so", async () => {
     offer();
-    delete process.env.MAILFORGE_MANAGED_SHARED_FROM;
+    delete process.env.LOOMAIL_MANAGED_SHARED_FROM;
     const t = await newTenant();
     const e = (await enable(t)).json();
     expect(e.uses).toBe("nothing");
@@ -271,10 +271,10 @@ describe("adding a sending domain", () => {
 
   it("the operator's own domains cannot be claimed (including the host the app is served from)", async () => {
     offer();
-    process.env.BASE_URL = "https://app.mailforge-service.test";
+    process.env.BASE_URL = "https://app.loomail-service.test";
     const t = await newTenant();
-    for (const d of ["mailforge-service.test", "app.mailforge-service.test", "x.mailforge-service.test"]) {
-      expect((await setDomain(t, d)).statusCode, d).toBe(d === "mailforge-service.test" || d.endsWith(".mailforge-service.test") ? 400 : 200);
+    for (const d of ["loomail-service.test", "app.loomail-service.test", "x.loomail-service.test"]) {
+      expect((await setDomain(t, d)).statusCode, d).toBe(d === "loomail-service.test" || d.endsWith(".loomail-service.test") ? 400 : 200);
     }
   });
 
@@ -337,7 +337,7 @@ describe("adding a sending domain", () => {
     expect(r.statusCode).toBe(502);
     expect(r.json().code).toBe("sending_unavailable");
     fake.setDown(false);
-    process.env.MAILFORGE_MANAGED_RESEND_API_KEY = "re_wrong_key";
+    process.env.LOOMAIL_MANAGED_RESEND_API_KEY = "re_wrong_key";
     r = await setDomain(t, "mail.acme-test.dev");
     expect(r.statusCode).toBe(502);
     expect(r.body).not.toMatch(/re_wrong_key|re_fake|127\.0\.0\.1|resend/i);
@@ -523,7 +523,7 @@ describe("the test email", () => {
     const t = await newTenant();
     const r = await call("POST", "/v1/settings/test-email", t.session, { to: "person@example.org" });
     expect(r.statusCode).toBe(400);
-    expect(r.json().error).toMatch(/Mailforge Sending/);
+    expect(r.json().error).toMatch(/Loomail Sending/);
     expect(fake.emails).toHaveLength(0);
   });
 
@@ -625,10 +625,10 @@ describe("the shared webhook (/webhooks/resend-platform)", () => {
     await enable(t);
     await sentMessage(t, "re-y", "a@example.org");
     const signed = fake.signedWebhook({ type: "email.complained", data: { email_id: "re-y" } });
-    delete process.env.MAILFORGE_MANAGED_RESEND_WEBHOOK_SECRET;
+    delete process.env.LOOMAIL_MANAGED_RESEND_WEBHOOK_SECRET;
     expect((await post(signed)).statusCode).toBe(400);
     offer();
-    process.env.MAILFORGE_MANAGED_SENDING = "false";
+    process.env.LOOMAIL_MANAGED_SENDING = "false";
     expect((await post(signed)).statusCode).toBe(400);
     expect(await suppressed(t)).toHaveLength(0);
   });

@@ -8,9 +8,8 @@ import { chargeAmountMinor, parseUsdRate, planPriceUsd, PLANS, MAX_USD_RATE } fr
 describe("chargeAmountMinor", () => {
   it("in USD it is the exact price in cents, for every plan and interval", () => {
     expect(chargeAmountMinor(49, "USD", 1)).toBe(4900);
-    expect(chargeAmountMinor(planPriceUsd("starter", "monthly"), "USD", 1)).toBe(1900);
-    expect(chargeAmountMinor(planPriceUsd("growth", "yearly"), "USD", 1)).toBe(49000);
-    expect(chargeAmountMinor(planPriceUsd("scale", "yearly"), "USD", 1)).toBe(129000);
+    expect(chargeAmountMinor(planPriceUsd("essential", "monthly"), "USD", 1)).toBe(10000);
+    expect(chargeAmountMinor(planPriceUsd("essential", "yearly"), "USD", 1)).toBe(100000);
   });
 
   it("the currency code is not case sensitive, and a USD charge ignores whatever rate is passed", () => {
@@ -34,7 +33,7 @@ describe("chargeAmountMinor", () => {
   });
 
   it("always charges whole units: the minor amount is a multiple of 100", () => {
-    for (const plan of ["starter", "growth", "scale"] as const) {
+    for (const plan of ["essential"] as const) {
       for (const interval of ["monthly", "yearly"] as const) {
         for (const rate of [9.87, 10.3, 11.11, 12.5, 15.5, 16.01, 1650.7]) {
           const minor = chargeAmountMinor(planPriceUsd(plan, interval), "GHS", rate);
@@ -49,11 +48,10 @@ describe("chargeAmountMinor", () => {
   });
 
   it("a yearly price converts as a whole, not as twelve rounded months", () => {
-    // Growth yearly is $490 and monthly $49: at 15.5, 12 rounded months (12 x 760 = 9120) would be
-    // dearer than the single yearly figure (7595 -> 7595).
-    const yearly = chargeAmountMinor(PLANS.growth.priceAnnualUsd, "GHS", 15.5);
-    expect(yearly).toBe(759500);
-    expect(yearly).toBeLessThan(12 * chargeAmountMinor(PLANS.growth.priceMonthlyUsd, "GHS", 15.5));
+    // Essential yearly is $1,000 and monthly $100: at 15.5 the year is GHS 15,500 and 12 months is GHS 18,600.
+    const yearly = chargeAmountMinor(PLANS.essential.priceAnnualUsd, "GHS", 15.5);
+    expect(yearly).toBe(1550000);
+    expect(yearly).toBeLessThan(12 * chargeAmountMinor(PLANS.essential.priceMonthlyUsd, "GHS", 15.5));
   });
 });
 

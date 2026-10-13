@@ -123,7 +123,7 @@ export const AI_BUDGET_KEY = "ai_budget_usd";
 export interface AiBudgetStatus {
   /** The monthly budget in US dollars, or null when none is set. */
   budgetUsd: number | null;
-  /** What Mailforge AI has cost this calendar month so far (0 when no budget is set and spend was not asked for). */
+  /** What Loomail AI has cost this calendar month so far (0 when no budget is set and spend was not asked for). */
   spentUsd: number;
 }
 

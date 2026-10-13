@@ -53,8 +53,8 @@ import {
   assess,
   type DecidePromptContext,
   type DraftPromptContext,
-} from "@mailforge/brain-oss";
-import { brandLinkStyle } from "@mailforge/core";
+} from "@loomail/brain-oss";
+import { brandLinkStyle } from "@loomail/core";
 import { resolveTenantProvider } from "./provider-resolver.js";
 import { tenantsOutOfAiAllowance } from "./ai-gate.js";
 import { assembleContext } from "./context-assembler.js";
@@ -213,7 +213,7 @@ export async function processContentTick(
     resolvedTenantIds = tenantRows.rows.map((r) => r.tenant_id);
   }
 
-  // Step 1b: Workspaces on Mailforge AI whose monthly token allowance is spent
+  // Step 1b: Workspaces on Loomail AI whose monthly token allowance is spent
   // are left alone: their messages stay queued, untouched, and resume when the
   // month rolls over, the plan is upgraded or the customer adds their own key.
   // (Does nothing unless plan enforcement is on.)
@@ -390,7 +390,7 @@ export async function processOneContentMessage(
     } catch {
       // Budget estimation unavailable (buildDraftMessages/buildDecideMessages
       // not loaded). Use the un-truncated contexts as-is. This path is hit
-      // only in test environments where @mailforge/brain-oss is mocked.
+      // only in test environments where @loomail/brain-oss is mocked.
     }
 
     // 4. Call decide()

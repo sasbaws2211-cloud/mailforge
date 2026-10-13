@@ -56,7 +56,7 @@ beforeAll(async () => {
     return;
   }
   await cleanup();
-  process.env.MAILFORGE_PLATFORM_ADMINS = ADMIN_EMAIL;
+  process.env.LOOMAIL_PLATFORM_ADMINS = ADMIN_EMAIL;
   app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000", dashboardUrl: "http://localhost:3000", noticeTransports: [transport] });
 });
 
@@ -68,7 +68,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  delete process.env.MAILFORGE_PLATFORM_ADMINS;
+  delete process.env.LOOMAIL_PLATFORM_ADMINS;
   if (app) await app.close();
   if (lockClient) {
     await lockClient.query("SELECT pg_advisory_unlock(7770001)");
@@ -141,7 +141,7 @@ async function traffic(t: Tenant, o: { sent: number; hard?: number; complaints?:
 const sending = async (t: Tenant) => (await q<{ paused_at: Date | null; paused_reason: string | null; paused_by: string | null; warned_at: Date | null }>(sql`SELECT paused_at, paused_reason, paused_by, warned_at FROM managed_sending WHERE tenant_id = ${t.id}::uuid`))[0]!;
 const audit = (t: Tenant) => q<{ action: string; actor_email: string; detail: Record<string, unknown> }>(sql`SELECT action, actor_email, detail FROM admin_audit_log WHERE tenant_id = ${t.id}::uuid ORDER BY created_at, id`);
 const NOW = () => new Date();
-import { senderHealth as senderHealthOf } from "@mailforge/core";
+import { senderHealth as senderHealthOf } from "@loomail/core";
 
 // ---------------------------------------------------------------------------
 
@@ -260,13 +260,13 @@ describe("automatic pause", () => {
     await traffic(t, { sent: 1000, complaints: 5 });
     await checkSenderHealth(db as never, NOW(), opts);
     const { resolveManagedAdapter } = await import("../src/sending/context.js");
-    process.env.MAILFORGE_MANAGED_RESEND_API_KEY = "re_x";
-    process.env.MAILFORGE_MANAGED_SHARED_FROM = "n@mail.platform.test";
+    process.env.LOOMAIL_MANAGED_RESEND_API_KEY = "re_x";
+    process.env.LOOMAIL_MANAGED_SHARED_FROM = "n@mail.platform.test";
     try {
       expect(await resolveManagedAdapter(db as never, t.id)).toBeNull();
     } finally {
-      delete process.env.MAILFORGE_MANAGED_RESEND_API_KEY;
-      delete process.env.MAILFORGE_MANAGED_SHARED_FROM;
+      delete process.env.LOOMAIL_MANAGED_RESEND_API_KEY;
+      delete process.env.LOOMAIL_MANAGED_SHARED_FROM;
     }
   });
 });

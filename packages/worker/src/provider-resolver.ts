@@ -3,23 +3,23 @@
  * metering and failover, down to one ready-to-call LlmProvider.
  *
  * Lives in packages/worker because it touches the database and the crypto
- * envelope (@mailforge/adapters decrypt). brain-oss must not gain any
+ * envelope (@loomail/adapters decrypt). brain-oss must not gain any
  * knowledge of tenants, llm_configs, or encryption; it receives an
  * already-constructed LlmProvider as a parameter.
  *
- * Which provider serves a workspace (rule lives in @mailforge/db/llm):
+ * Which provider serves a workspace (rule lives in @loomail/db/llm):
  *   the workspace's own key if it has one, otherwise the operator's providers
- *   (Mailforge AI): primary, then fallback. Calls on the operator's provider
+ *   (Loomail AI): primary, then fallback. Calls on the operator's provider
  *   are counted against the plan's monthly AI allowance; calls on the
  *   customer's own key are recorded but never capped.
  *
  * Mirror side: PUBLIC (packages/worker is mirrored).
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { AI_UNAVAILABLE_MESSAGE, aiAllowanceMessage, aiAllowanceSpent, NO_AI_PROVIDER_MESSAGE, type LlmFeature, type LlmSource } from "@mailforge/core";
-import { loadLlmCandidates, recordLlmUsage } from "@mailforge/db/llm";
-import { decrypt, parseEncryptionKey } from "@mailforge/adapters";
-import { buildProviderFromCandidates, type LlmProvider } from "@mailforge/brain-oss";
+import { AI_UNAVAILABLE_MESSAGE, aiAllowanceMessage, aiAllowanceSpent, NO_AI_PROVIDER_MESSAGE, type LlmFeature, type LlmSource } from "@loomail/core";
+import { loadLlmCandidates, recordLlmUsage } from "@loomail/db/llm";
+import { decrypt, parseEncryptionKey } from "@loomail/adapters";
+import { buildProviderFromCandidates, type LlmProvider } from "@loomail/brain-oss";
 import { aiAllowanceFor, aiBudgetReached } from "./ai-gate.js";
 
 // ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ export interface ProviderResolutionFailure {
   ok: false;
   reason: string;
   /**
-   * "allowance": the workspace's Mailforge AI tokens for the month are used up.
+   * "allowance": the workspace's Loomail AI tokens for the month are used up.
    * "budget": the operator's monthly dollar budget is used up.
    * Neither is a fault: work should wait, not fail.
    */

@@ -11,14 +11,14 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@mailforge/adapters";
-import { tenantTablesInDeleteOrder } from "@mailforge/db/purge";
+import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@loomail/adapters";
+import { tenantTablesInDeleteOrder } from "@loomail/db/purge";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
 import { sendWelcomeEmailOnce } from "../src/onboarding/welcome.js";
 import { markOnboardingCompleted } from "../src/onboarding/state.js";
 import { buildWelcomeEmail, goalWelcome } from "../src/transactional-email.js";
-import { BUSINESS_MODEL_TEMPLATES, ONBOARDING_GOALS } from "@mailforge/core";
+import { BUSINESS_MODEL_TEMPLATES, ONBOARDING_GOALS } from "@loomail/core";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) throw new Error("[onboarding.test] DATABASE_URL is not set.");
@@ -34,7 +34,7 @@ class Outbox implements TransportAdapter {
   }
 }
 const outbox = new Outbox();
-const platform = () => ({ adapter: outbox, fromEmail: "no-reply@platform.example", fromName: "Mailforge" });
+const platform = () => ({ adapter: outbox, fromEmail: "no-reply@platform.example", fromName: "Loomail" });
 
 let pool: pg.Pool;
 let db: ReturnType<typeof drizzle>;
@@ -118,8 +118,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  delete process.env.MAILFORGE_ENFORCE_PLANS;
-  delete process.env.MAILFORGE_MANAGED_SHARED_FROM;
+  delete process.env.LOOMAIL_ENFORCE_PLANS;
+  delete process.env.LOOMAIL_MANAGED_SHARED_FROM;
   if (dbAvailable) await cleanup();
 });
 
@@ -138,13 +138,13 @@ describe("GET /v1/onboarding", () => {
     expect(r.statusCode).toBe(401);
   });
 
-  it_("starts a new workspace with one step done and the address next", async () => {
+  it_("starts a new workspace with one step done and the flow next", async () => {
     const t = await newTenant();
     const r = await get(t);
     expect(r.statusCode).toBe(200);
     const b = r.json();
     expect(doneIds(b)).toEqual(["workspace"]);
-    expect(b.next).toBe("address");
+    expect(b.next).toBe("flow");
     expect(b.done).toBe(1);
     expect(b.total).toBe(6);
     expect(b.complete).toBe(false);
@@ -156,7 +156,7 @@ describe("GET /v1/onboarding", () => {
   it_("reports hosted only when plans are enforced", async () => {
     const t = await newTenant();
     expect((await get(t)).json().hosted).toBe(false);
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     expect((await get(t)).json().hosted).toBe(true);
   });
 
@@ -167,7 +167,7 @@ describe("GET /v1/onboarding", () => {
     await db.execute(sql`UPDATE tenants SET settings = settings || '{"postal_address":"1 Main St, Accra"}'::jsonb WHERE id = ${t.id}::uuid`);
     const b = (await get(t)).json();
     expect(doneIds(b)).toEqual(["workspace", "address"]);
-    expect(b.next).toBe("sender");
+    expect(b.next).toBe("flow");
   });
 
   it_("counts an own transport as a sender, but not an inactive one", async () => {
@@ -178,16 +178,16 @@ describe("GET /v1/onboarding", () => {
     expect(doneIds((await get(t)).json())).toContain("sender");
   });
 
-  it_("counts Mailforge Sending as a sender only while switched on AND able to send", async () => {
+  it_("counts Loomail Sending as a sender only while switched on AND able to send", async () => {
     const t = await newTenant();
-    process.env.MAILFORGE_MANAGED_SHARED_FROM = "hello@shared.example";
+    process.env.LOOMAIL_MANAGED_SHARED_FROM = "hello@shared.example";
     await db.execute(sql`INSERT INTO managed_sending (tenant_id, enabled) VALUES (${t.id}::uuid, false)`);
     expect(doneIds((await get(t)).json())).not.toContain("sender");
     await db.execute(sql`UPDATE managed_sending SET enabled = true WHERE tenant_id = ${t.id}::uuid`);
     expect(doneIds((await get(t)).json())).toContain("sender");
   });
 
-  it_("does not count Mailforge Sending that has nowhere to send from (no shared address, no verified domain)", async () => {
+  it_("does not count Loomail Sending that has nowhere to send from (no shared address, no verified domain)", async () => {
     const t = await newTenant();
     await db.execute(sql`INSERT INTO managed_sending (tenant_id, enabled) VALUES (${t.id}::uuid, true)`);
     expect(doneIds((await get(t)).json())).not.toContain("sender");
@@ -239,8 +239,8 @@ describe("GET /v1/onboarding", () => {
 
   it_("records the completion date once, when hosted, and keeps it", async () => {
     const t = await newTenant();
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
-    process.env.MAILFORGE_MANAGED_SHARED_FROM = "hello@shared.example";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_MANAGED_SHARED_FROM = "hello@shared.example";
     await db.execute(sql`UPDATE tenants SET settings = settings || '{"postal_address":"x"}'::jsonb WHERE id = ${t.id}::uuid`);
     await db.execute(sql`INSERT INTO managed_sending (tenant_id, enabled) VALUES (${t.id}::uuid, true)`);
     await addActivity(t, { event: true, sent: true });
@@ -255,7 +255,7 @@ describe("GET /v1/onboarding", () => {
 
   it_("does not record a completion date on a self-hosted install", async () => {
     const t = await newTenant();
-    process.env.MAILFORGE_MANAGED_SHARED_FROM = "hello@shared.example";
+    process.env.LOOMAIL_MANAGED_SHARED_FROM = "hello@shared.example";
     await db.execute(sql`UPDATE tenants SET settings = settings || '{"postal_address":"x"}'::jsonb WHERE id = ${t.id}::uuid`);
     await db.execute(sql`INSERT INTO managed_sending (tenant_id, enabled) VALUES (${t.id}::uuid, true)`);
     await addActivity(t, { event: true, sent: true });
@@ -283,16 +283,16 @@ describe("waiting email warning", () => {
     expect(await info(t)).toEqual({ n: 1, why: "no_sender" });
   });
 
-  it_("says a domain is needed when Mailforge Sending is on with nowhere to send from", async () => {
+  it_("says a domain is needed when Loomail Sending is on with nowhere to send from", async () => {
     const t = await newTenant();
     await queue(t);
     await db.execute(sql`INSERT INTO managed_sending (tenant_id, enabled) VALUES (${t.id}::uuid, true)`);
     expect(await info(t)).toEqual({ n: 1, why: "needs_domain" });
   });
 
-  it_("says paused when Mailforge Sending is paused", async () => {
+  it_("says paused when Loomail Sending is paused", async () => {
     const t = await newTenant();
-    process.env.MAILFORGE_MANAGED_SHARED_FROM = "hello@shared.example";
+    process.env.LOOMAIL_MANAGED_SHARED_FROM = "hello@shared.example";
     await db.execute(sql`UPDATE tenants SET settings = settings || '{"postal_address":"x"}'::jsonb WHERE id = ${t.id}::uuid`);
     await queue(t);
     await db.execute(sql`INSERT INTO managed_sending (tenant_id, enabled, paused_at, paused_reason, paused_by) VALUES (${t.id}::uuid, true, now(), 'x', 'auto')`);
@@ -390,7 +390,7 @@ describe("welcome email", () => {
     const m = outbox.sent[0]!;
     expect(m.to).toBe(t.email);
     expect(m.from).toBe("no-reply@platform.example");
-    expect(m.subject).toMatch(/^Welcome to Mailforge/);
+    expect(m.subject).toMatch(/^Welcome to Loomail/);
     expect(m.bodyHtml).toContain("https://app.example.com");
     expect(m.bodyText).toContain("https://app.example.com");
     expect((await stored(t.id))?.welcome_sent_at).toBeTruthy();
@@ -616,7 +616,7 @@ describe("POST /v1/onboarding/sample-event", () => {
 
   it_("answers 402 at the contact limit instead of adding a contact", async () => {
     const t = await newTenant();
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await db.execute(sql`UPDATE tenants SET plan = 'free', trial_ends_at = NULL WHERE id = ${t.id}::uuid`);
     await db.execute(sql`INSERT INTO contacts (tenant_id, external_id, lifecycle_state) SELECT ${t.id}::uuid, 'bulk-' || g, 'engaged' FROM generate_series(1, 500) g`);
     const r = await sample(t);
@@ -677,7 +677,7 @@ describe("goal-specific welcome email", () => {
       for (const s of ["business address", "how email is sent", "Welcome flow"]) expect(m.text, `${goal}`).toContain(s);
       expect(m.html).toContain("Open your workspace");
       expect(m.text).toContain("help@example.com");
-      expect(m.subject).toBe("Welcome to Mailforge: your first email in 20 minutes");
+      expect(m.subject).toBe("Welcome to Loomail: your first email in 20 minutes");
     }
   });
 

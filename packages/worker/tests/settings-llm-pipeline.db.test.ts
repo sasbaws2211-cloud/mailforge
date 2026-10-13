@@ -2,8 +2,8 @@
  * Integration tests for the LLM settings-to-resolver pipeline.
  *
  * These tests verify that an LLM configuration written through the
- * shared write path (same encrypt() + parseEncryptionKey() from @mailforge/adapters
- * that both PUT /v1/settings/llm and the mailforge CLI use) is correctly
+ * shared write path (same encrypt() + parseEncryptionKey() from @loomail/adapters
+ * that both PUT /v1/settings/llm and the loomail CLI use) is correctly
  * resolved by resolveTenantProvider() and resolveEmbeddingProvider().
  *
  * Coverage:
@@ -18,9 +18,9 @@
  *
  * The "shared write path" tested here:
  *   encrypt(JSON.stringify(creds), parseEncryptionKey(keyEnv)) -> store in llm_configs
- * This is exactly what PUT /v1/settings/llm does and what mailforge.mjs does.
+ * This is exactly what PUT /v1/settings/llm does and what loomail.mjs does.
  * Both the API endpoint tests (settings-llm.db.test.ts) and this file exercise the
- * same encrypt/decrypt functions from @mailforge/adapters rather than each having
+ * same encrypt/decrypt functions from @loomail/adapters rather than each having
  * a separate copy of the logic.
  *
  * Requires local Postgres (docker compose up postgres).
@@ -32,8 +32,8 @@ import { eq, and, sql } from "drizzle-orm";
 import {
   tenants,
   llmConfigs,
-} from "@mailforge/db/schema";
-import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
+} from "@loomail/db/schema";
+import { encrypt, parseEncryptionKey } from "@loomail/adapters";
 import { resolveTenantProvider } from "../src/provider-resolver.js";
 import { resolveEmbeddingProvider } from "../src/embedding-client.js";
 
@@ -48,8 +48,8 @@ if (!TEST_DB_URL) {
     `[settings-llm-pipeline.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://loomail:loomail@localhost:5432/loomail\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://loomail:loomail@localhost:5433/loomail'\n`),
   );
 }
 
@@ -119,7 +119,7 @@ async function cleanup() {
 // Shared write path helper
 //
 // Writes an LLM config using the same encrypt() + parseEncryptionKey() from
-// @mailforge/adapters that both the HTTP endpoint and the CLI use.
+// @loomail/adapters that both the HTTP endpoint and the CLI use.
 // This is the "shared write path" the tests verify.
 // ---------------------------------------------------------------------------
 

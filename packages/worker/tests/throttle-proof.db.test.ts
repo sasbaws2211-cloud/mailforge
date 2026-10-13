@@ -16,7 +16,7 @@ import {
   flowMemberships,
   lifecycleMessages,
   transportConfigs,
-} from "@mailforge/db/schema";
+} from "@loomail/db/schema";
 import { makeDrainRunner } from "./drain-test-utils.js";
 import type { TransportAdapter, TransportSendResult, TransportSendParams } from "../src/transport.js";
 

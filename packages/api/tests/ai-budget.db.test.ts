@@ -1,6 +1,6 @@
 /**
- * Integration tests for the monthly dollar budget on Mailforge AI: setting it in
- * the admin console, pausing Mailforge AI when it is used up (own-key workspaces
+ * Integration tests for the monthly dollar budget on Loomail AI: setting it in
+ * the admin console, pausing Loomail AI when it is used up (own-key workspaces
  * carry on), and the two alert emails (80 percent, and used up).
  *
  * Needs a reachable Postgres via DATABASE_URL. Tenants have slugs starting with
@@ -17,7 +17,7 @@ import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
-import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
+import { encrypt, parseEncryptionKey } from "@loomail/adapters";
 import { AI_BUDGET_PAUSED_KEY, buildAiBudgetEmail, buildAiResumedEmail, checkAiBudgetAlert } from "../src/ai/alerts.js";
 import type { PlatformTransport } from "../src/platform-mailer.js";
 
@@ -71,7 +71,7 @@ beforeAll(async () => {
     return;
   }
   await cleanup();
-  process.env.MAILFORGE_PLATFORM_ADMINS = ADMIN_EMAIL;
+  process.env.LOOMAIL_PLATFORM_ADMINS = ADMIN_EMAIL;
   app = await buildApp({
     logger: false,
     db,
@@ -86,14 +86,14 @@ beforeAll(async () => {
 
 afterEach(async () => {
   if (!dbAvailable) return;
-  delete process.env.MAILFORGE_ENFORCE_PLANS;
+  delete process.env.LOOMAIL_ENFORCE_PLANS;
   stubCalls = 0;
   enqueued.length = 0;
   await cleanup();
 });
 
 afterAll(async () => {
-  delete process.env.MAILFORGE_PLATFORM_ADMINS;
+  delete process.env.LOOMAIL_PLATFORM_ADMINS;
   if (savedKey !== undefined) process.env.ENCRYPTION_KEY = savedKey;
   else delete process.env.ENCRYPTION_KEY;
   if (app) await app.close();
@@ -208,7 +208,7 @@ describe("setting the budget (admin console)", () => {
 });
 
 describe("when the budget is used up", () => {
-  it("Mailforge AI pauses: drafting and compiling answer 503 with a message that mentions no money, and the provider is not called", async () => {
+  it("Loomail AI pauses: drafting and compiling answer 503 with a message that mentions no money, and the provider is not called", async () => {
     const admin = await newAdmin();
     const c = await newTenant();
     await setPlatform(admin);
@@ -289,7 +289,7 @@ describe("when the budget is used up", () => {
     await spend(c, 1);
     await db.execute(sql`UPDATE tenants SET ai_allowance_override = -1 WHERE id = ${c.id}::uuid`); // "no cap" does not beat the budget
     expect((await draft(c)).statusCode).toBe(503);
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     expect((await draft(c)).statusCode).toBe(503);
   });
 });
@@ -344,13 +344,13 @@ describe("budget alert emails", () => {
     expect((await checkAiBudgetAlert(db as never, new Date(NOW.getTime() + 3_600_000), opts)).sent).toBe(0);
   });
 
-  it("says Mailforge AI is paused when the budget is reached, once, and that also retires the 80 percent warning", async () => {
+  it("says Loomail AI is paused when the budget is reached, once, and that also retires the 80 percent warning", async () => {
     const admin = await newAdmin();
     const c = await newTenant();
     await setBudget(admin, 100);
     await spend(c, 100);
     expect(await checkAiBudgetAlert(db as never, NOW, opts)).toMatchObject({ state: "reached", sent: 2 });
-    expect(sent[0]!.subject).toMatch(/Mailforge AI is paused/);
+    expect(sent[0]!.subject).toMatch(/Loomail AI is paused/);
     expect(sent[0]!.bodyText).toMatch(/Nothing is lost/);
     expect(sent[0]!.bodyText).toMatch(/not affected/);
     sent.length = 0;
@@ -378,7 +378,7 @@ describe("budget alert emails", () => {
     sent.length = 0;
     await setBudget(admin, 200); // spent $100 of $200: 50 percent: no threshold, but the pause is over
     expect(await checkAiBudgetAlert(db as never, NOW, opts)).toMatchObject({ state: "ok", resumed: true, sent: 2 });
-    expect(sent.map((m) => m.subject)).toEqual(["Mailforge AI is back on", "Mailforge AI is back on"]);
+    expect(sent.map((m) => m.subject)).toEqual(["Loomail AI is back on", "Loomail AI is back on"]);
     sent.length = 0;
     await spend(c, 65); // $165 of $200: 82 percent
     expect(await checkAiBudgetAlert(db as never, NOW, opts)).toMatchObject({ state: "near", sent: 2 });
@@ -413,14 +413,14 @@ describe("budget alert emails", () => {
 
   it("the email text is escaped and shows the dollars the way a person reads them", () => {
     const m = buildAiBudgetEmail("reached", 1234.5, 1300.123, "https://x.test/admin/ai?a=1&b=<2>", "November 1");
-    expect(m.subject).toBe("Mailforge AI is paused: your $1,234.50 monthly budget is used up");
+    expect(m.subject).toBe("Loomail AI is paused: your $1,234.50 monthly budget is used up");
     expect(m.text).toContain("$1,300.12");
     expect(m.html).toContain("&lt;2&gt;");
     expect(m.html).not.toContain("<2>");
   });
 });
 
-describe("the Mailforge AI is back on email", () => {
+describe("the Loomail AI is back on email", () => {
   const sent: Array<{ to: string; subject: string; bodyText: string; bodyHtml: string }> = [];
   let failSends = false;
   const transport: PlatformTransport = {
@@ -438,7 +438,7 @@ describe("the Mailforge AI is back on email", () => {
   const NOW = new Date();
   const check = (o = opts, at = NOW) => checkAiBudgetAlert(db as never, at, o);
   const paused = () => q<{ active: boolean }>(sql`SELECT active FROM platform_alert_state WHERE key = ${AI_BUDGET_PAUSED_KEY}`).then((r) => r[0]?.active ?? null);
-  const backOn = () => sent.filter((m) => m.subject === "Mailforge AI is back on");
+  const backOn = () => sent.filter((m) => m.subject === "Loomail AI is back on");
 
   afterEach(() => {
     sent.length = 0;
@@ -558,12 +558,12 @@ describe("the Mailforge AI is back on email", () => {
     await setBudget(admin, 120); // $100 of $120 is 83 percent
     const r = await check();
     expect(r).toMatchObject({ state: "near", resumed: true, sent: 4 });
-    expect(sent.map((m) => m.subject).filter((v, i, a) => a.indexOf(v) === i)).toEqual(["Mailforge AI is back on", expect.stringMatching(/83% of your \$120\.00/)]);
+    expect(sent.map((m) => m.subject).filter((v, i, a) => a.indexOf(v) === i)).toEqual(["Loomail AI is back on", expect.stringMatching(/83% of your \$120\.00/)]);
   });
 
   it("the email text is escaped and carries no secrets", () => {
     const m = buildAiResumedEmail("raised", 1234.5, 99.999, "https://x.test/admin/ai?a=1&b=<2>");
-    expect(m.subject).toBe("Mailforge AI is back on");
+    expect(m.subject).toBe("Loomail AI is back on");
     expect(m.text).toContain("$1,234.50");
     expect(m.html).toContain("&lt;2&gt;");
     expect(m.html).not.toContain("<2>");

@@ -7,7 +7,7 @@
  * the "last updated" date when you change them.
  *
  * Operator-specific values (legal entity, support address) come from
- * SiteContext, which reads MAILFORGE_LEGAL_NAME and MAILFORGE_SUPPORT_EMAIL.
+ * SiteContext, which reads LOOMAIL_LEGAL_NAME and LOOMAIL_SUPPORT_EMAIL.
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
@@ -58,7 +58,7 @@ export function termsPage(ctx: SiteContext): string {
       ],
       [
         "Plans, trials and payment",
-        `<p>A new workspace starts with a free trial of a paid plan, with no card required. When the trial ends the workspace moves to the Free plan unless you choose a paid plan. Paid plans are billed in advance, monthly or yearly, at the price shown on our pricing page when you subscribe. We will tell you before we change prices, and a change applies from your next billing period. You can cancel at any time and your plan stays active until the end of the period you paid for.</p>`,
+        `<p>A new workspace starts with a free trial of a paid plan, with no card required. When the trial ends the workspace is paused until you subscribe to the Essential plan. The plan is billed in advance, monthly, at the price shown on our pricing page when you subscribe. We will tell you before we change prices, and a change applies from your next billing period. You can cancel at any time and your plan stays active until the end of the period you paid for.</p>`,
       ],
       [
         "Availability and changes",

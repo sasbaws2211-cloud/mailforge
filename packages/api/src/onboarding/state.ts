@@ -2,7 +2,7 @@
  * Onboarding data for a workspace: the facts that say how far along it is, and the
  * small amount of state stored per workspace (tenants.settings.onboarding).
  *
- * The rules that turn facts into steps live in @mailforge/core (onboarding.ts).
+ * The rules that turn facts into steps live in @loomail/core (onboarding.ts).
  * This file only reads the database, and writes with jsonb merges so a change here
  * can never overwrite settings another request saved at the same moment.
  *
@@ -21,7 +21,7 @@ import {
   type OnboardingFacts,
   type OnboardingProgress,
   type OnboardingState,
-} from "@mailforge/core";
+} from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 
 interface FactsRow extends Record<string, unknown> {
@@ -85,7 +85,7 @@ export async function loadOnboarding(db: Db, tenantId: string): Promise<Onboardi
 
   const facts: OnboardingFacts = {
     hasPostalAddress: (row.postal ?? "").trim() !== "",
-    // "Can mail go out": a transport of their own, or Mailforge Sending with somewhere to send from.
+    // "Can mail go out": a transport of their own, or Loomail Sending with somewhere to send from.
     hasSender: row.own_transport === true || row.managed_usable === true,
     hasActiveFlow: row.active_flow === true,
     hasEvents: row.has_events === true,

@@ -1,5 +1,5 @@
 /**
- * Tests for @mailforge/worker: createBoss factory and startWorker registration pattern.
+ * Tests for @loomail/worker: createBoss factory and startWorker registration pattern.
  *
  * Covers the queues defined in tasks 5 and 11 (SCAN, COMPILE). Pattern tests confirm:
  * - createBoss returns a usable instance without throwing
@@ -9,8 +9,8 @@
  * - fromDrizzle is re-exported for transactional job enqueue in API routes
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { QUEUE } from "@mailforge/core";
-import { MAILFORGE_WORKER_VERSION, startWorker, createBoss, fromDrizzle } from "../src/index.js";
+import { QUEUE } from "@loomail/core";
+import { LOOMAIL_WORKER_VERSION, startWorker, createBoss, fromDrizzle } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // pg-boss mock
@@ -157,9 +157,9 @@ vi.mock("../src/embed-kb.js", () => ({
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("@mailforge/worker - version", () => {
+describe("@loomail/worker - version", () => {
   it("exports version", () => {
-    expect(MAILFORGE_WORKER_VERSION).toBe("0.0.0");
+    expect(LOOMAIL_WORKER_VERSION).toBe("0.0.0");
   });
 });
 
@@ -245,7 +245,7 @@ describe("failure path", () => {
 });
 
 describe("fromDrizzle re-export", () => {
-  it("fromDrizzle is a function exported from @mailforge/worker", () => {
+  it("fromDrizzle is a function exported from @loomail/worker", () => {
     expect(typeof fromDrizzle).toBe("function");
   });
 });

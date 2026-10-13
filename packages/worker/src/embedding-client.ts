@@ -14,9 +14,9 @@
  * Mirror side: PUBLIC (packages/worker is mirrored).
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { estimateTokens, type LlmSource } from "@mailforge/core";
-import { loadLlmCandidates, recordLlmUsage } from "@mailforge/db/llm";
-import { decrypt, parseEncryptionKey } from "@mailforge/adapters";
+import { estimateTokens, type LlmSource } from "@loomail/core";
+import { loadLlmCandidates, recordLlmUsage } from "@loomail/db/llm";
+import { decrypt, parseEncryptionKey } from "@loomail/adapters";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,7 +66,7 @@ export interface EmbeddingProviderResolved {
   apiKey: string;
   baseUrl: string;
   embeddingModel: string;
-  /** Whose key and endpoint: the customer's own, or the operator's (Mailforge AI). */
+  /** Whose key and endpoint: the customer's own, or the operator's (Loomail AI). */
   source: LlmSource;
   /** Provider label, for the usage record. */
   provider: string;
@@ -166,7 +166,7 @@ export async function resolveEmbeddingProvider(
 /**
  * Record one embedding call in the usage log. Providers return no token count
  * on this path, so it is estimated from the text. Counted toward the month's
- * Mailforge AI tokens like any other call, but never blocked by the allowance:
+ * Loomail AI tokens like any other call, but never blocked by the allowance:
  * embeddings cost a fraction of chat and a refused one would mark a knowledge
  * base entry as failed.
  */

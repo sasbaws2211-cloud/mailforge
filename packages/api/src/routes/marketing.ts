@@ -1,7 +1,7 @@
 /**
  * Public site routes: landing, pricing, legal, signup, robots.txt, sitemap.xml.
  *
- * Registered only when the public site is switched on (MAILFORGE_PUBLIC_SITE),
+ * Registered only when the public site is switched on (LOOMAIL_PUBLIC_SITE),
  * so self-hosted installs keep their current behavior: "/" is the dashboard.
  *
  * "/" serves the landing page to visitors without a session cookie and hands
@@ -17,8 +17,8 @@
  */
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply } from "fastify";
 import { eq, sql } from "drizzle-orm";
-import { managedSending, tenants, users } from "@mailforge/db/schema";
-import { TRIAL_PLAN_VALUE, trialEndDate, PLAN_IDS, managedSendingConfigFromEnv, parseGoal, parseUsdRate } from "@mailforge/core";
+import { managedSending, tenants, users } from "@loomail/db/schema";
+import { TRIAL_PLAN_VALUE, trialEndDate, managedSendingConfigFromEnv, parseGoal, parseUsdRate } from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 import { SESSION_COOKIE_NAME } from "./auth.js";
 import { SITE_NAME, type SiteContext } from "../marketing/layout.js";
@@ -26,6 +26,8 @@ import { homePage, pricingPage, signupPage, signupSentPage } from "../marketing/
 import { privacyPage, termsPage } from "../marketing/legal.js";
 import {
   createLimiter,
+  isPlausibleEmail,
+  normalizeEmail,
   slugify,
   slugWithSuffix,
   validateSignup,
@@ -63,8 +65,8 @@ function siteContext(siteUrl: string): SiteContext {
   const charge = chargeCurrencyFromEnv();
   return {
     siteUrl,
-    supportEmail: process.env.MAILFORGE_SUPPORT_EMAIL?.trim() || `support@${host}`,
-    legalName: process.env.MAILFORGE_LEGAL_NAME?.trim() || SITE_NAME,
+    supportEmail: process.env.LOOMAIL_SUPPORT_EMAIL?.trim() || `support@${host}`,
+    legalName: process.env.LOOMAIL_LEGAL_NAME?.trim() || SITE_NAME,
     chargeCurrency: charge?.currency ?? null,
     usdRate: charge?.rate ?? null,
   };
@@ -74,9 +76,9 @@ function html(reply: FastifyReply, status: number, body: string, cache = "no-sto
   return reply.status(status).header("Content-Type", "text/html; charset=utf-8").header("Cache-Control", cache).send(body);
 }
 
-/** Whether new workspaces get Mailforge Sending switched on at signup. Read per signup, so config changes apply at once. */
+/** Whether new workspaces get Loomail Sending switched on at signup. Read per signup, so config changes apply at once. */
 function autoEnableSending(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env.MAILFORGE_SIGNUP_AUTO_SENDING === "false") return false;
+  if (env.LOOMAIL_SIGNUP_AUTO_SENDING === "false") return false;
   const cfg = managedSendingConfigFromEnv(env);
   return cfg.enabled && cfg.sharedFrom !== null;
 }
@@ -114,9 +116,9 @@ async function createWorkspace(db: Db, input: SignupInput): Promise<{ created: b
 
     await tx.insert(users).values({ tenantId: tenant!.id, email: input.email, role: "owner" });
 
-    // Mailforge Sending on from the start, so the first email needs no setup of their own. Only when it
+    // Loomail Sending on from the start, so the first email needs no setup of their own. Only when it
     // would really send: the operator offers it AND has a shared address (without one it would wait for a
-    // verified domain and the workspace would look set up when it is not). MAILFORGE_SIGNUP_AUTO_SENDING=false opts out.
+    // verified domain and the workspace would look set up when it is not). LOOMAIL_SIGNUP_AUTO_SENDING=false opts out.
     if (autoEnableSending()) await tx.insert(managedSending).values({ tenantId: tenant!.id }).onConflictDoNothing();
 
     return { created: true, tenantId: tenant!.id };
@@ -141,6 +143,10 @@ const marketingRoutes: FastifyPluginAsync<MarketingRouteOptions> = async (app, o
   const ctx = siteContext(opts.siteUrl);
   const ipLimiter = createLimiter({ windowMs: 3_600_000, max: IP_PER_HOUR });
   const emailLimiter = createLimiter({ windowMs: 3_600_000, max: EMAIL_PER_HOUR });
+  // Resending the sign-in link: one every 30 seconds and five an hour per address, and a cap per IP.
+  const resendGapLimiter = createLimiter({ windowMs: 30_000, max: 1 });
+  const resendHourLimiter = createLimiter({ windowMs: 3_600_000, max: 5 });
+  const resendIpLimiter = createLimiter({ windowMs: 3_600_000, max: 20 });
 
   // Scoped form parser (HTML forms post application/x-www-form-urlencoded).
   app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_req, body, done) => {
@@ -199,10 +205,38 @@ const marketingRoutes: FastifyPluginAsync<MarketingRouteOptions> = async (app, o
 
   // --- Signup ------------------------------------------------------------------
   app.get<{ Querystring: { plan?: string; goal?: string } }>("/signup", async (request, reply) => {
-    const plan = (PLAN_IDS as readonly string[]).includes(request.query.plan ?? "")
-      ? (request.query.plan as (typeof PLAN_IDS)[number])
+    const plan = request.query.plan === "essential"
+      ? ("essential" as const)
       : undefined;
     return html(reply, 200, signupPage(ctx, { plan, goal: parseGoal(request.query.goal) }));
+  });
+
+  // Send the sign-in link again, for someone sitting on the "check your email" page. It only ever
+  // goes to the address given, answers the same whether or not that address has a workspace, and
+  // is rate limited per address and per IP so it cannot be used to flood anyone's inbox.
+  app.post("/signup/resend", async (request, reply) => {
+    const db: Db | undefined = request.server.db;
+    const b = (request.body && typeof request.body === "object" ? request.body : {}) as Record<string, unknown>;
+    const raw = typeof b.email === "string" ? b.email : "";
+    if (!isPlausibleEmail(raw)) return html(reply, 400, signupPage(ctx, { error: "Enter a valid email address." }));
+    const email = normalizeEmail(raw);
+    if (!db) return html(reply, 503, signupSentPage(ctx, email, { notice: "Sign-in is temporarily unavailable. Please try again in a moment." }));
+
+    const gap = resendGapLimiter.hit(email);
+    const hour = resendHourLimiter.hit(email);
+    const ip = resendIpLimiter.hit(request.ip);
+    if (!gap.allowed || !hour.allowed || !ip.allowed) {
+      const wait = Math.max(gap.allowed ? 0 : gap.retryAfterSec, hour.allowed ? 0 : hour.retryAfterSec, ip.allowed ? 0 : ip.retryAfterSec);
+      reply.header("Retry-After", String(wait));
+      const msg =
+        wait <= 60
+          ? `Please wait ${wait} second${wait === 1 ? "" : "s"} before asking for another link.`
+          : `Too many requests. Please try again in about ${Math.ceil(wait / 60)} minutes.`;
+      return html(reply, 429, signupSentPage(ctx, email, { notice: msg }));
+    }
+
+    await sendSignInLink(request.server, email);
+    return html(reply, 200, signupSentPage(ctx, email, { resent: true }));
   });
 
   app.post("/signup", async (request, reply) => {
@@ -229,7 +263,7 @@ const marketingRoutes: FastifyPluginAsync<MarketingRouteOptions> = async (app, o
               error: parsed.message,
               workspace: typeof b.workspace === "string" ? b.workspace : "",
               email: typeof b.email === "string" ? b.email : "",
-              plan: (PLAN_IDS as readonly string[]).includes(String(b.plan)) ? (b.plan as (typeof PLAN_IDS)[number]) : undefined,
+              plan: b.plan === "essential" ? ("essential" as const) : undefined,
               goal: parseGoal(b.goal),
             }),
           );

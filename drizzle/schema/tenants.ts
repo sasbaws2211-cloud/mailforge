@@ -4,7 +4,7 @@ export const tenants = pgTable("tenants", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
   slug: text("slug").unique().notNull(),
-  plan: text("plan").default("free"), // trial|free|starter|growth|scale (see @mailforge/core plans)
+  plan: text("plan").default("free"), // trial|free|starter|growth|scale (see @loomail/core plans)
   /** End of the signup trial. Set only for tenants created through public signup. */
   trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
   /**
@@ -30,7 +30,7 @@ export const tenants = pgTable("tenants", {
   /** Email of whoever asked (the owner, or the platform admin acting for them). */
   deletionRequestedBy: text("deletion_requested_by"),
   /**
-   * Set by a platform admin to give this workspace its own monthly Mailforge AI token
+   * Set by a platform admin to give this workspace its own monthly Loomail AI token
    * allowance instead of the plan's. Null = use the plan's. A negative number = no cap.
    * Only has an effect when plan enforcement is on.
    */

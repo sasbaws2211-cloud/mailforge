@@ -1,5 +1,5 @@
 /**
- * MAILFORGE_ADMIN_PORT decides whether the admin console runs as its own listener, so a
+ * LOOMAIL_ADMIN_PORT decides whether the admin console runs as its own listener, so a
  * wrong value must stop the server rather than be guessed at.
  */
 import { describe, it, expect } from "vitest";

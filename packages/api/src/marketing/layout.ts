@@ -9,7 +9,7 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 
-export const SITE_NAME = "Mailforge";
+export const SITE_NAME = "Loomail";
 
 /** Escape text for HTML content and double-quoted attribute positions. */
 export function esc(s: string): string {
@@ -21,7 +21,7 @@ export function esc(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-/** Mailforge envelope mark, painted with currentColor. */
+/** Loomail envelope mark, painted with currentColor. */
 export const MARK_SVG =
   '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
   '<path d="M5 5 H19 A3 3 0 0 1 22 8 V16 A3 3 0 0 1 19 19 H5 A3 3 0 0 1 2 16 V8 A3 3 0 0 1 5 5 Z ' +
@@ -113,11 +113,22 @@ h3{font-size:1.1rem;letter-spacing:-.01em}
 .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:24px}
 .card p{margin:8px 0 0;color:var(--muted)}
+.cards.two{grid-template-columns:repeat(2,1fr)}
+.uc-meta{margin:16px 0 0;padding-top:14px;border-top:1px solid var(--line);display:grid;gap:8px;font-size:.88rem}
+.uc-meta div{display:flex;gap:10px}
+.uc-meta dt{flex:0 0 7.5rem;color:var(--muted)}
+.uc-meta dd{margin:0;color:var(--ink);font-weight:600}
 .card .ico{width:38px;height:38px;border-radius:10px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:800;margin-bottom:14px}
 .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px;counter-reset:s}
 .step{position:relative;padding:24px;border-left:3px solid var(--accent);background:var(--surface);border-radius:0 16px 16px 0;border-top:1px solid var(--line);border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
 .step:before{counter-increment:s;content:counter(s);display:block;font-weight:800;color:var(--accent);font-size:1.4rem;margin-bottom:6px}
 .step p{margin:8px 0 0;color:var(--muted)}
+.how{display:grid;grid-template-columns:1.35fr 1fr;gap:40px;align-items:center;margin-top:40px}
+.how .steps{grid-template-columns:1fr;margin-top:0}
+.shots{position:relative;padding:0 0 0 0;aspect-ratio:1.28/1}
+.shots img{position:absolute;width:82%;height:auto;border-radius:14px;border:1px solid var(--line);box-shadow:var(--shadow);background:var(--surface)}
+.shots .back{top:0;left:0}
+.shots .front{bottom:0;right:0}
 .band{background:var(--surface);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 /* pricing */
 .toggle{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:4px;background:var(--surface);margin-top:26px}
@@ -125,6 +136,9 @@ h3{font-size:1.1rem;letter-spacing:-.01em}
 .toggle button[aria-pressed=true]{background:var(--accent);color:var(--accent-fg)}
 .save{font-size:.78rem;font-weight:700;color:var(--ok);margin-left:6px}
 .plans{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:36px;align-items:stretch}
+.plans.single{grid-template-columns:minmax(0,460px);justify-content:center}
+.plans.single .plan-card{padding:32px}
+.plans.single .price{font-size:3rem}
 .plan-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:24px;display:flex;flex-direction:column}
 .plan-card.rec{border:2px solid var(--accent);box-shadow:var(--shadow);position:relative}
 .badge{position:absolute;top:-12px;left:20px;background:var(--accent);color:var(--accent-fg);font-size:.72rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;border-radius:999px;padding:3px 10px}
@@ -176,12 +190,12 @@ footer{border-top:1px solid var(--line);padding:40px 0;color:var(--muted);font-s
 footer .cols{display:flex;flex-wrap:wrap;gap:24px 48px;justify-content:space-between}
 footer a{color:var(--muted);text-decoration:none}footer a:hover{color:var(--ink)}
 footer .fl{display:flex;gap:20px;flex-wrap:wrap}
-@media (max-width:960px){.plans{grid-template-columns:repeat(2,1fr)}.cards,.steps{grid-template-columns:1fr 1fr}}
+@media (max-width:960px){.how{grid-template-columns:1fr}.plans{grid-template-columns:repeat(2,1fr)}.cards,.steps{grid-template-columns:1fr 1fr}}
 @media (max-width:760px){
   section{padding:52px 0}.hero{padding:44px 0 36px}
   .hero .grid,.signup{grid-template-columns:1fr;gap:32px}
   .nav .links{display:none}.nav .wrap{gap:12px}
-  .cards,.steps,.plans{grid-template-columns:1fr}
+  .cards,.cards.two,.steps,.plans{grid-template-columns:1fr}
   .signup{padding:36px 0}
 }
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
@@ -191,7 +205,7 @@ function nav(opts: PageOptions): string {
   const cur = (p: string): string => (opts.path === p ? ' aria-current="page"' : "");
   const links = opts.minimalNav
     ? ""
-    : `<nav class="links" aria-label="Main"><a href="/#features">Features</a><a href="/#how">How it works</a><a href="/pricing"${cur("/pricing")}>Pricing</a></nav>`;
+    : `<nav class="links" aria-label="Main"><a href="/#use-cases">Use cases</a><a href="/#features">Features</a><a href="/#how">How it works</a><a href="/pricing"${cur("/pricing")}>Pricing</a></nav>`;
   return `<header class="nav"><div class="wrap">
 <a class="logo" href="/" aria-label="${SITE_NAME} home">${MARK_SVG}<b>${SITE_NAME.toLowerCase()}</b></a>
 ${links}

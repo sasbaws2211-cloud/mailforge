@@ -1,5 +1,5 @@
 /**
- * Managed sending, for the workspace owner: let Mailforge send the workspace's email
+ * Managed sending, for the workspace owner: let Loomail send the workspace's email
  * through the operator's Resend account, optionally from the workspace's own domain.
  *
  *   GET    /v1/sending                  where things stand (and re-checks a domain that is still verifying)
@@ -24,8 +24,8 @@ import {
   sanitizeDisplayName,
   validateFromLocalPart,
   validateSendingDomain,
-} from "@mailforge/core";
-import { managedSending } from "@mailforge/db/schema";
+} from "@loomail/core";
+import { managedSending } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import { domainsClientFromEnv, loadSendingRow, senderFor, type SendingRow } from "../sending/context.js";
 import { applyDomainState, refreshDomainIfDue, removeResendDomain } from "../sending/domains.js";
@@ -47,21 +47,21 @@ function tooManyDomainChanges(tenantId: string, now = Date.now()): boolean {
 
 /** The operator's own domains, which no customer may claim. */
 function platformDomains(env: NodeJS.ProcessEnv, sharedFrom: string | null): string[] {
-  const hosts = [env.BASE_URL, env.MAILFORGE_SITE_URL, env.MAILFORGE_ADMIN_URL, env.DASHBOARD_URL].map((u) => {
+  const hosts = [env.BASE_URL, env.LOOMAIL_SITE_URL, env.LOOMAIL_ADMIN_URL, env.DASHBOARD_URL].map((u) => {
     try {
       return u ? new URL(u).hostname : "";
     } catch {
       return "";
     }
   });
-  const mails = [env.PLATFORM_FROM_EMAIL, sharedFrom, env.MAILFORGE_SUPPORT_EMAIL].map((a) => (a && a.includes("@") ? a.split("@")[1]! : ""));
+  const mails = [env.PLATFORM_FROM_EMAIL, sharedFrom, env.LOOMAIL_SUPPORT_EMAIL].map((a) => (a && a.includes("@") ? a.split("@")[1]! : ""));
   const own = [...hosts, ...mails].map((h) => h.trim().toLowerCase()).filter((h) => h !== "" && h !== "localhost");
   // The operator owns the parent of any subdomain it uses (mail.example.com -> example.com), so that is off limits too.
   const parents = own.filter((h) => h.split(".").length >= 3).map((h) => h.split(".").slice(1).join("."));
   return [...new Set([...own, ...parents])];
 }
 
-const NOT_OFFERED = { error: "Mailforge Sending is not available on this service.", code: "managed_unavailable" };
+const NOT_OFFERED = { error: "Loomail Sending is not available on this service.", code: "managed_unavailable" };
 
 const routes: FastifyPluginAsync = async (app) => {
   const env = process.env;
@@ -143,7 +143,7 @@ const routes: FastifyPluginAsync = async (app) => {
       const db: Db = request.server.db;
       const tenantId = request.tenant!.id;
       const row = await loadSendingRow(db, tenantId);
-      if (!row) return reply.status(409).send({ error: "Turn on Mailforge Sending first.", code: "not_enabled" });
+      if (!row) return reply.status(409).send({ error: "Turn on Loomail Sending first.", code: "not_enabled" });
       const b = request.body ?? {};
       const set: Partial<typeof managedSending.$inferInsert> = { updatedAt: new Date() };
 
@@ -214,7 +214,7 @@ const routes: FastifyPluginAsync = async (app) => {
       if (created.kind === "invalid") return reply.status(400).send({ error: created.message, code: "invalid_domain" });
       if (created.kind === "rate_limited") return reply.status(429).send({ error: created.message, code: "rate_limited" });
       // Our own credentials or Resend being down: not the customer's doing and not theirs to fix.
-      return reply.status(502).send({ error: "Mailforge Sending could not set up that domain right now. Try again shortly.", code: "sending_unavailable" });
+      return reply.status(502).send({ error: "Loomail Sending could not set up that domain right now. Try again shortly.", code: "sending_unavailable" });
     }
 
     const oldId = existing?.resendDomainId ?? null;
@@ -275,7 +275,7 @@ const routes: FastifyPluginAsync = async (app) => {
     const started = await client.verifyDomain(row.resendDomainId);
     if (!started.ok && started.kind !== "not_found") {
       request.log.warn({ tenantId, kind: started.kind }, "Resend verifyDomain failed");
-      return reply.status(502).send({ error: "Mailforge Sending could not check that domain right now. Try again shortly.", code: "sending_unavailable" });
+      return reply.status(502).send({ error: "Loomail Sending could not check that domain right now. Try again shortly.", code: "sending_unavailable" });
     }
     // Verification is asynchronous at Resend: read back what it says now (usually still "pending").
     const now = await client.getDomain(row.resendDomainId);

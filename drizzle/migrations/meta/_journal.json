@@ -239,6 +239,20 @@
       "when": 1791311470130,
       "tag": "0033_paystack_default",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791870087838,
+      "tag": "0034_addon_purchases",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791877802870,
+      "tag": "0035_addon_auto_renewals",
+      "breakpoints": true
     }
   ]
 }

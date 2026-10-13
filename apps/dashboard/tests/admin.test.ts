@@ -44,7 +44,7 @@ describe("workspaceBadge: the single most important thing about a workspace", ()
   });
 
   it("free is neutral", () => {
-    expect(workspaceBadge(ws({ stored_plan: "free", effective_plan: { id: "free", name: "Free" }, payment_status: "none" }), NOW)).toEqual({ label: "Free", variant: "neutral" });
+    expect(workspaceBadge(ws({ stored_plan: "free", effective_plan: { id: "free", name: "Free" }, payment_status: "none" }), NOW)).toEqual({ label: "No plan", variant: "neutral" });
   });
 
   it("a running trial counts days, singular and plural, never zero", () => {
@@ -74,7 +74,7 @@ describe("auditSummary and auditReason", () => {
 
   it("describes each kind of change in plain words", () => {
     expect(auditSummary(entry("set_plan", { before: { plan: "trial" }, after: { plan: "scale" } }))).toBe("Set plan to Scale (was Trial)");
-    expect(auditSummary(entry("set_plan", { before: { plan: null }, after: { plan: "starter" } }))).toBe("Set plan to Starter (was Free)");
+    expect(auditSummary(entry("set_plan", { before: { plan: null }, after: { plan: "starter" } }))).toBe("Set plan to Starter (was No plan)");
     expect(auditSummary(entry("extend_trial", {}))).toBe("Started a trial");
     expect(auditSummary(entry("suspend", {}))).toBe("Suspended the workspace");
     expect(auditSummary(entry("unsuspend", {}))).toBe("Reinstated the workspace");
@@ -82,7 +82,7 @@ describe("auditSummary and auditReason", () => {
   });
 
   it("copes with missing detail and unknown actions", () => {
-    expect(auditSummary(entry("set_plan", null))).toBe("Set plan to Free (was Free)");
+    expect(auditSummary(entry("set_plan", null))).toBe("Set plan to No plan (was No plan)");
     expect(auditSummary(entry("brand_new_thing", null))).toBe("brand new thing");
   });
 
@@ -108,10 +108,10 @@ describe("formatting", () => {
     expect(ago("2026-01-15T00:00:00Z", NOW)).toBe("Jan 15, 2026");
   });
 
-  it("planLabel capitalises and defaults to Free", () => {
+  it("planLabel capitalises and defaults to No plan", () => {
     expect(planLabel("growth")).toBe("Growth");
-    expect(planLabel(null)).toBe("Free");
-    expect(planLabel(undefined)).toBe("Free");
+    expect(planLabel(null)).toBe("No plan");
+    expect(planLabel(undefined)).toBe("No plan");
   });
 });
 

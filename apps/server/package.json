@@ -1,10 +1,10 @@
 {
-  "name": "@mailforge/server",
+  "name": "@loomail/server",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "bin": {
-    "mailforge": "bin/mailforge.mjs"
+    "loomail": "bin/loomail.mjs"
   },
   "scripts": {
     "build": "tsc --build",
@@ -14,13 +14,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mailforge/adapters": "workspace:*",
-    "@mailforge/api": "workspace:*",
-    "@mailforge/brain-oss": "workspace:*",
-    "@mailforge/core": "workspace:*",
-    "@mailforge/db": "workspace:*",
-    "@mailforge/scheduler": "workspace:*",
-    "@mailforge/worker": "workspace:*",
+    "@loomail/adapters": "workspace:*",
+    "@loomail/api": "workspace:*",
+    "@loomail/brain-oss": "workspace:*",
+    "@loomail/core": "workspace:*",
+    "@loomail/db": "workspace:*",
+    "@loomail/scheduler": "workspace:*",
+    "@loomail/worker": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "fastify": "^4.28.0",
     "pg": "^8.22.0",

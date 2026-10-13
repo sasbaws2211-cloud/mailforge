@@ -3,7 +3,7 @@
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
-import { wrapInShell, wrapInTextShell } from "@mailforge/core";
+import { wrapInShell, wrapInTextShell } from "@loomail/core";
 import type { TransactionalEmailInput } from "../transactional-email.js";
 
 export interface DeletionNoticeInput {
@@ -34,7 +34,7 @@ export function buildDeletionScheduledEmail(
   input: TransactionalEmailInput,
 ): { html: string; text: string; subject: string } {
   const day = utcDay(n.erasureDate);
-  const who = n.byAdmin ? `A Mailforge administrator (${n.requestedBy}) asked for` : `${n.requestedBy} asked for`;
+  const who = n.byAdmin ? `A Loomail administrator (${n.requestedBy}) asked for` : `${n.requestedBy} asked for`;
   // Header-injection guard: a workspace name is user text and goes into a subject line.
   const subject = `Your workspace "${n.workspaceName.replace(/[\r\n]+/g, " ")}" is scheduled for deletion`;
 
@@ -76,13 +76,13 @@ export function buildDeletionCancelledEmail(
   n: CancelledNoticeEmailInput,
   input: TransactionalEmailInput,
 ): { html: string; text: string; subject: string } {
-  const who = n.byAdmin ? `A Mailforge administrator (${n.cancelledBy})` : n.cancelledBy;
+  const who = n.byAdmin ? `A Loomail administrator (${n.cancelledBy})` : n.cancelledBy;
   const subject = `Deletion of your workspace "${n.workspaceName.replace(/[\r\n]+/g, " ")}" was cancelled`;
 
   const bodyHtml = [
     `<p style="margin:0 0 16px 0;">${esc(who)} cancelled the scheduled deletion of the workspace <strong>${esc(n.workspaceName)}</strong>.</p>`,
     `<p style="margin:0 0 16px 0;">Nothing was erased and it will not be. The pause on sending and the API that came with the deletion request has ended.</p>`,
-    `<p style="margin:0 0 24px 0;"><a href="${escAttr(n.dashboardUrl)}" style="${BUTTON_STYLE}">Open Mailforge</a></p>`,
+    `<p style="margin:0 0 24px 0;"><a href="${escAttr(n.dashboardUrl)}" style="${BUTTON_STYLE}">Open Loomail</a></p>`,
     `<p style="margin:0;font-size:13px;color:#585d68;">If you did not expect this, someone with access to the account did it. Sign in and review who is on your team.</p>`,
   ].join("\n");
 
@@ -119,13 +119,13 @@ export function buildWorkspaceErasedEmail(
   const help = n.supportEmail ? `If you have questions, write to ${n.supportEmail}.` : "If you have questions, contact the service operator.";
 
   const bodyHtml = [
-    `<p style="margin:0 0 16px 0;">A Mailforge administrator (${esc(n.erasedBy)}) permanently deleted the workspace <strong>${esc(n.workspaceName)}</strong> on <strong>${esc(day)}</strong>.</p>`,
+    `<p style="margin:0 0 16px 0;">A Loomail administrator (${esc(n.erasedBy)}) permanently deleted the workspace <strong>${esc(n.workspaceName)}</strong> on <strong>${esc(day)}</strong>.</p>`,
     `<p style="margin:0 0 16px 0;">Everything in it has been erased and cannot be recovered: contacts, events, flows, messages, templates and settings. Sending and the API have stopped, and nobody can sign in to it any more.</p>`,
     `<p style="margin:0;font-size:13px;color:#585d68;">${esc(help)}</p>`,
   ].join("\n");
 
   const bodyText = [
-    `A Mailforge administrator (${n.erasedBy}) permanently deleted the workspace "${n.workspaceName}" on ${day}.`,
+    `A Loomail administrator (${n.erasedBy}) permanently deleted the workspace "${n.workspaceName}" on ${day}.`,
     "",
     "Everything in it has been erased and cannot be recovered: contacts, events, flows, messages, templates and settings. Sending and the API have stopped, and nobody can sign in to it any more.",
     "",

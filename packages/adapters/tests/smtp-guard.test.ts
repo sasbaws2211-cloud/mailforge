@@ -88,19 +88,19 @@ describe("isBlockedIp", () => {
 describe("smtpHostPolicyFromEnv", () => {
   it("is off for a self-hosted install and on for a hosted one", () => {
     expect(smtpHostPolicyFromEnv({}).restrict).toBe(false);
-    expect(smtpHostPolicyFromEnv({ MAILFORGE_PUBLIC_SITE: "true" }).restrict).toBe(true);
-    expect(smtpHostPolicyFromEnv({ MAILFORGE_ENFORCE_PLANS: "true" }).restrict).toBe(true);
-    expect(smtpHostPolicyFromEnv({ MAILFORGE_PUBLIC_SITE: "false", MAILFORGE_ENFORCE_PLANS: "false" }).restrict).toBe(false);
+    expect(smtpHostPolicyFromEnv({ LOOMAIL_PUBLIC_SITE: "true" }).restrict).toBe(true);
+    expect(smtpHostPolicyFromEnv({ LOOMAIL_ENFORCE_PLANS: "true" }).restrict).toBe(true);
+    expect(smtpHostPolicyFromEnv({ LOOMAIL_PUBLIC_SITE: "false", LOOMAIL_ENFORCE_PLANS: "false" }).restrict).toBe(false);
   });
 
   it("an explicit setting wins either way", () => {
-    expect(smtpHostPolicyFromEnv({ MAILFORGE_PUBLIC_SITE: "true", MAILFORGE_RESTRICT_SMTP_HOSTS: "false" }).restrict).toBe(false);
-    expect(smtpHostPolicyFromEnv({ MAILFORGE_RESTRICT_SMTP_HOSTS: "true" }).restrict).toBe(true);
-    expect(smtpHostPolicyFromEnv({ MAILFORGE_PUBLIC_SITE: "true", MAILFORGE_RESTRICT_SMTP_HOSTS: "garbage" }).restrict).toBe(true);
+    expect(smtpHostPolicyFromEnv({ LOOMAIL_PUBLIC_SITE: "true", LOOMAIL_RESTRICT_SMTP_HOSTS: "false" }).restrict).toBe(false);
+    expect(smtpHostPolicyFromEnv({ LOOMAIL_RESTRICT_SMTP_HOSTS: "true" }).restrict).toBe(true);
+    expect(smtpHostPolicyFromEnv({ LOOMAIL_PUBLIC_SITE: "true", LOOMAIL_RESTRICT_SMTP_HOSTS: "garbage" }).restrict).toBe(true);
   });
 
   it("reads the exempt hosts and ports, normalised, ignoring junk", () => {
-    const p = smtpHostPolicyFromEnv({ MAILFORGE_SMTP_ALLOWED_HOSTS: " Mailpit , relay.INTERNAL.example. ,, [::1]", MAILFORGE_SMTP_ALLOWED_PORTS: "1025, 587, x, 70000" });
+    const p = smtpHostPolicyFromEnv({ LOOMAIL_SMTP_ALLOWED_HOSTS: " Mailpit , relay.INTERNAL.example. ,, [::1]", LOOMAIL_SMTP_ALLOWED_PORTS: "1025, 587, x, 70000" });
     expect(p.allowedHosts).toEqual(["mailpit", "relay.internal.example", "::1"]);
     expect(p.allowedPorts).toEqual([1025, 587]);
     expect(smtpHostPolicyFromEnv({}).allowedPorts).toEqual([...DEFAULT_ALLOWED_SMTP_PORTS]);

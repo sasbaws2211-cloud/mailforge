@@ -12,14 +12,14 @@
  *   pause  at a pause threshold: managed sending stops for that workspace at once (its
  *          messages wait, untouched), the owner is told why, and the operator is told
  *
- * The thresholds and the "too little volume to judge" rule are in @mailforge/core
+ * The thresholds and the "too little volume to judge" rule are in @loomail/core
  * (senderHealth). Only a platform admin can resume a paused workspace.
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { SENDER_HEALTH_WINDOW_DAYS, senderHealth, type SenderHealth } from "@mailforge/core";
-import { adminAuditLog, managedSending } from "@mailforge/db/schema";
+import { SENDER_HEALTH_WINDOW_DAYS, senderHealth, type SenderHealth } from "@loomail/core";
+import { adminAuditLog, managedSending } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import { getPlatformTransport, type PlatformTransport } from "../platform-mailer.js";
 import { platformAdminEmails } from "../admin/platform-admins.js";
@@ -176,7 +176,7 @@ export async function checkSenderHealth(db: Db, now: Date = new Date(), opts: He
 
     const transport = opts.transport === undefined ? getPlatformTransport(env) : opts.transport;
     const admins = opts.admins ?? platformAdminEmails(env);
-    const base = (env.MAILFORGE_ADMIN_URL || env.BASE_URL || "").replace(/\/+$/, "");
+    const base = (env.LOOMAIL_ADMIN_URL || env.BASE_URL || "").replace(/\/+$/, "");
 
     for (const r of rows.rows) {
       result.checked++;

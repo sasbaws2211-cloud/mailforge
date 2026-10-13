@@ -5,8 +5,8 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { and, eq, lt, sql } from "drizzle-orm";
-import { managedDomainCleanup, managedSending } from "@mailforge/db/schema";
-import type { ResendDomain, ResendDomainsClient } from "@mailforge/adapters";
+import { managedDomainCleanup, managedSending } from "@loomail/db/schema";
+import type { ResendDomain, ResendDomainsClient } from "@loomail/adapters";
 import type { Db } from "../plugins/db.js";
 import type { SendingRow } from "./context.js";
 

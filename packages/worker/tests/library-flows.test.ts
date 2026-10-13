@@ -9,7 +9,7 @@ import {
   LIBRARY_TEMPLATES,
   LIBRARY_FLOW_WELCOME,
   compiledPlanSchema,
-} from "@mailforge/core";
+} from "@loomail/core";
 import { renderTemplate, type TemplateContext } from "../src/template-renderer.js";
 
 describe("library-flows", () => {

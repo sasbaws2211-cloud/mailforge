@@ -9,7 +9,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { eq, and, isNull } from "drizzle-orm";
-import { sessions, tenants, users } from "@mailforge/db/schema";
+import { sessions, tenants, users } from "@loomail/db/schema";
 import type { TenantContext, UserRole } from "../types.js";
 import type { Db } from "./db.js";
 import { SESSION_COOKIE_NAME } from "../routes/auth.js";

@@ -1,5 +1,5 @@
 /**
- * Pure comparison functions for `mailforge doctor`.
+ * Pure comparison functions for `loomail doctor`.
  *
  * Extracted so they can be unit-tested independently of the CLI runtime
  * (which uses top-level await and cannot be imported directly by tests).

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <!--
-    Mailforge mark - favicon / avatar form.
+    Loomail mark - favicon / avatar form.
     Transparent ground: just the envelope, no tile. The fill adapts to the
     browser chrome via prefers-color-scheme: light chrome gets the light
     theme accent (oklch(0.66 0.17 50) = #e2702a), dark chrome gets the dark

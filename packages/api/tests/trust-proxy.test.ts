@@ -1,5 +1,5 @@
 /**
- * Reading MAILFORGE_TRUST_PROXY. A typo must never silently turn on trust in the
+ * Reading LOOMAIL_TRUST_PROXY. A typo must never silently turn on trust in the
  * X-Forwarded-For header, because that lets a client choose its own address.
  */
 import { describe, it, expect } from "vitest";

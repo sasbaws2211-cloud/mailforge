@@ -37,7 +37,7 @@ import {
   verifyRegistrationResponse,
 } from "@simplewebauthn/server";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
-import { adminPasskeyChallenges, adminPasskeys } from "@mailforge/db/schema";
+import { adminPasskeyChallenges, adminPasskeys } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import { isPlatformAdmin } from "./platform-admins.js";
 import { startAdminSession } from "./session.js";
@@ -51,21 +51,21 @@ const IP_LIMIT = 60;
 const WINDOW_MS = 3_600_000;
 
 /**
- * MAILFORGE_ADMIN_PASSKEYS: off | optional | enforced (default optional). An unknown
+ * LOOMAIL_ADMIN_PASSKEYS: off | optional | enforced (default optional). An unknown
  * value stops the server rather than being read as something weaker than intended.
  */
 export function passkeyModeFromEnv(raw: string | undefined): PasskeyMode {
   const v = (raw ?? "").trim().toLowerCase();
   if (v === "") return "optional";
   if (v === "off" || v === "optional" || v === "enforced") return v;
-  throw new Error(`MAILFORGE_ADMIN_PASSKEYS "${raw}" is not valid: use off, optional or enforced.`);
+  throw new Error(`LOOMAIL_ADMIN_PASSKEYS "${raw}" is not valid: use off, optional or enforced.`);
 }
 
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url");
 const unb64 = (s: string) => new Uint8Array(Buffer.from(s, "base64url"));
 
 /** A stable, opaque id for an admin that is not their email (the authenticator stores it). */
-const userHandle = (email: string) => new Uint8Array(createHash("sha256").update(`mailforge-admin:${email.toLowerCase()}`).digest());
+const userHandle = (email: string) => new Uint8Array(createHash("sha256").update(`loomail-admin:${email.toLowerCase()}`).digest());
 
 export async function passkeyCount(db: Db, email: string): Promise<number> {
   const r = await db.select({ n: sql<string>`count(*)::text` }).from(adminPasskeys).where(eq(adminPasskeys.email, email.toLowerCase()));
@@ -194,7 +194,7 @@ export async function registerAdminPasskeyRoutes(
     await sweep();
     const existing = await db.select({ id: adminPasskeys.id, transports: adminPasskeys.transports }).from(adminPasskeys).where(eq(adminPasskeys.email, email));
     const options = await generateRegistrationOptions({
-      rpName: "Mailforge admin console",
+      rpName: "Loomail admin console",
       rpID: rpId,
       userName: email,
       userID: userHandle(email),

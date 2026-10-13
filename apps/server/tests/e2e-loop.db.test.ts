@@ -30,7 +30,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
 import { randomBytes, createHash } from "node:crypto";
-import { buildApp } from "@mailforge/api";
+import { buildApp } from "@loomail/api";
 import {
   handleTriggerCheck,
   phaseStepAdvancement,
@@ -38,7 +38,7 @@ import {
   processDrainTick,
   fetchDrainBatchSimple,
   buildTenantTransportResolver,
-} from "@mailforge/worker";
+} from "@loomail/worker";
 import {
   tenants,
   users,
@@ -48,8 +48,8 @@ import {
   flows,
   flowMemberships,
   lifecycleMessages,
-} from "@mailforge/db/schema";
-import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
+} from "@loomail/db/schema";
+import { encrypt, parseEncryptionKey } from "@loomail/adapters";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -206,7 +206,7 @@ beforeAll(async () => {
   const transportEnvelope = encrypt(transportCreds, encKey);
   await db.execute(sql`
     INSERT INTO transport_configs(tenant_id, provider, config, is_active, from_email, from_name)
-    VALUES (${tenantId}, 'resend', ${transportEnvelope}, true, 'e2e@test.mailforge.org', 'E2E Test')
+    VALUES (${tenantId}, 'resend', ${transportEnvelope}, true, 'e2e@test.loomail.org', 'E2E Test')
   `);
 
   // Flow: event trigger, compiled, approval required
@@ -284,7 +284,7 @@ describe("end-to-end: event -> email", () => {
       method: "POST",
       url: "/v1/identify",
       headers: { authorization: `Bearer ${rawApiKey}` },
-      payload: { userId: "e2e_user_1", traits: { email: "e2e@test.mailforge.org", name: "E2E User" } },
+      payload: { userId: "e2e_user_1", traits: { email: "e2e@test.loomail.org", name: "E2E User" } },
     });
     expect(identifyRes.statusCode).toBe(200);
 
@@ -351,7 +351,7 @@ describe("end-to-end: event -> email", () => {
     const approveRes = await app.inject({
       method: "POST",
       url: `/v1/messages/${messageId}/approve`,
-      headers: { cookie: `mailforge_session=${sessionId}` },
+      headers: { cookie: `loomail_session=${sessionId}` },
     });
     expect(approveRes.statusCode).toBe(200);
 

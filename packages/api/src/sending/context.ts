@@ -9,7 +9,7 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { sql } from "drizzle-orm";
-import { ManagedResendAdapter, createResendDomainsClient, type DnsRecord, type ResendDomainsClient, type TransportAdapter } from "@mailforge/adapters";
+import { ManagedResendAdapter, createResendDomainsClient, type DnsRecord, type ResendDomainsClient, type TransportAdapter } from "@loomail/adapters";
 import {
   chooseManagedSender,
   isDomainStatus,
@@ -18,7 +18,7 @@ import {
   type DomainStatus,
   type ManagedSender,
   type ManagedSendingConfig,
-} from "@mailforge/core";
+} from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 
 export interface SendingRow {

@@ -94,7 +94,7 @@ import {
   type DraftPromptContext,
   type DecidePromptContext,
   type AssessPromptContext,
-} from "@mailforge/brain-oss";
+} from "@loomail/brain-oss";
 
 // ---------------------------------------------------------------------------
 // Constants

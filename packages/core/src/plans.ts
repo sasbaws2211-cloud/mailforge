@@ -1,5 +1,5 @@
 /**
- * Plans: the single source of truth for what each Mailforge plan includes.
+ * Plans: the single source of truth for what each Loomail plan includes.
  *
  * Read by the public pricing page today, and by plan enforcement and billing
  * later, so the numbers a customer sees are the numbers the product enforces.
@@ -15,17 +15,23 @@
  * Mirror side: PUBLIC (packages/core is mirrored).
  */
 
-export const PLAN_IDS = ["free", "starter", "growth", "scale"] as const;
+export const PLAN_IDS = ["free", "essential"] as const;
 export type PlanId = (typeof PLAN_IDS)[number];
 
 /** Value stored in tenants.plan while a signup trial is running. */
 export const TRIAL_PLAN_VALUE = "trial" as const;
 
 /** The paid plan a trial behaves like. */
-export const TRIAL_PLAN: PlanId = "growth";
+export const TRIAL_PLAN: PlanId = "essential";
 
 /** Length of the signup trial. No card is taken to start it. */
-export const TRIAL_DAYS = 14;
+export const TRIAL_DAYS = 7;
+
+/**
+ * The longest a trial can run from signup. The 7 days restart once, when the first real event
+ * arrives (setup takes real time: DNS, wiring the app), but never past this many days in total.
+ */
+export const TRIAL_MAX_DAYS = 14;
 
 export interface PlanLimits {
   /** Contacts a workspace may hold. null = unlimited. */
@@ -36,7 +42,7 @@ export interface PlanLimits {
   seats: number | null;
   /**
    * Tokens per calendar month a workspace may spend on the platform's own AI
-   * provider (Mailforge AI). Tokens on a customer's own key are never counted
+   * provider (Loomail AI). Tokens on a customer's own key are never counted
    * against this. null = unlimited.
    */
   aiTokensPerMonth: number | null;
@@ -58,98 +64,141 @@ export interface PlanDef {
   features: string[];
   /** Highlighted as the recommended plan on the pricing page. */
   recommended?: boolean;
-  /** Free plan shows a small "Powered by Mailforge" link in emails and pages. */
+  /** Free plan shows a small "Powered by Loomail" link in emails and pages. */
   showsPoweredBy?: boolean;
 }
 
 /** A year for the price of 10 months. This exact amount is what gets billed. */
 function annualTotal(monthly: number): number {
-  return monthly * 10;
+  return Math.round(monthly * 10 * 100) / 100;
 }
 
 /** Per-month equivalent of an annual total, rounded for display. */
 function annualMonthly(monthly: number): number {
-  return Math.round(annualTotal(monthly) / 12);
+  return Math.round((annualTotal(monthly) / 12) * 100) / 100;
 }
 
 export const PLANS: Readonly<Record<PlanId, PlanDef>> = {
+  // Internal only: where a workspace lands when its trial ends without a subscription.
+  // It is never offered for sale and allows no contacts, sends or AI use.
   free: {
     id: "free",
-    name: "Free",
-    tagline: "For trying Mailforge on a side project.",
+    name: "No plan",
+    tagline: "Subscribe to Essential to keep using Loomail.",
     priceMonthlyUsd: 0,
     priceAnnualUsd: 0,
     priceAnnualMonthlyUsd: 0,
-    limits: { contacts: 500, emailsPerMonth: 5_000, seats: 1, aiTokensPerMonth: 20_000 },
+    limits: { contacts: 0, emailsPerMonth: 0, seats: 1, aiTokensPerMonth: 0 },
     showsPoweredBy: true,
-    features: [
-      "500 contacts",
-      "5,000 emails per month",
-      "Unlimited flows",
-      "20,000 Mailforge AI tokens per month",
-      "Lifecycle states and retention grid",
-      "1 team member",
-      "Community support",
-    ],
+    features: [],
   },
-  starter: {
-    id: "starter",
-    name: "Starter",
-    tagline: "For early-stage products finding their first users.",
-    priceMonthlyUsd: 19,
-    priceAnnualUsd: annualTotal(19),
-    priceAnnualMonthlyUsd: annualMonthly(19),
-    limits: { contacts: 2_500, emailsPerMonth: 25_000, seats: 3, aiTokensPerMonth: 300_000 },
-    features: [
-      "2,500 contacts",
-      "25,000 emails per month",
-      "Unlimited flows",
-      "Plain-language flow builder",
-      "300,000 Mailforge AI tokens per month",
-      "3 team members",
-      "Email support",
-    ],
-  },
-  growth: {
-    id: "growth",
-    name: "Growth",
-    tagline: "For growing products that live on retention.",
-    priceMonthlyUsd: 49,
-    priceAnnualUsd: annualTotal(49),
-    priceAnnualMonthlyUsd: annualMonthly(49),
-    limits: { contacts: 10_000, emailsPerMonth: 100_000, seats: 10, aiTokensPerMonth: 1_500_000 },
+  essential: {
+    id: "essential",
+    name: "Essential",
+    tagline: "Everything in Loomail, for one simple price.",
+    priceMonthlyUsd: 100,
+    priceAnnualUsd: annualTotal(100),
+    priceAnnualMonthlyUsd: annualMonthly(100),
+    limits: { contacts: 6_000, emailsPerMonth: 1_000_000, seats: null, aiTokensPerMonth: 8_000_000 },
     recommended: true,
     features: [
-      "10,000 contacts",
-      "100,000 emails per month",
-      "Unlimited flows",
-      "Plain-language flow builder",
-      "1,500,000 Mailforge AI tokens per month",
-      "10 team members",
-      "No Mailforge branding",
-      "Priority email support",
-    ],
-  },
-  scale: {
-    id: "scale",
-    name: "Scale",
-    tagline: "For established products with large audiences.",
-    priceMonthlyUsd: 129,
-    priceAnnualUsd: annualTotal(129),
-    priceAnnualMonthlyUsd: annualMonthly(129),
-    limits: { contacts: 50_000, emailsPerMonth: 500_000, seats: null, aiTokensPerMonth: 8_000_000 },
-    features: [
-      "50,000 contacts",
-      "500,000 emails per month",
-      "Unlimited flows",
-      "Plain-language flow builder",
-      "8,000,000 Mailforge AI tokens per month",
+      "6,000 customer profiles",
+      "1,000,000 emails per month",
+      "Email and transactional messages",
+      "AI flow builder",
       "Unlimited team members",
-      "No Mailforge branding",
-      "Priority support with a named contact",
+      "Priority support",
     ],
   },
 };
+
+// ---------------------------------------------------------------------------
+// Extra usage (prepaid top-ups)
+// ---------------------------------------------------------------------------
+
+export const ADDON_KINDS = ["profiles", "emails", "ai"] as const;
+export type AddonKind = (typeof ADDON_KINDS)[number];
+
+export interface AddonDef {
+  kind: AddonKind;
+  /** Customer-facing name of the thing being added. */
+  label: string;
+  /** The rate as the customer reads it, e.g. "$0.009 per profile". */
+  rateLabel: string;
+  /** Units in one pack: the smallest amount that can be bought, and the step for more. */
+  packUnits: number;
+  /** What one pack costs, in USD cents. Exactly the per-unit rate times packUnits. */
+  packPriceCents: number;
+  /** Which plan limit the units are added to. */
+  limit: "contacts" | "emailsPerMonth" | "aiTokensPerMonth";
+}
+
+/**
+ * Prepaid top-ups for a month's usage above the plan. Rates:
+ *   extra profiles  $0.009 each        -> 1,000 profiles = $9
+ *   extra emails    $0.12 per 1,000    -> 100,000 emails = $12
+ *   extra AI        $10 per 100,000 credits
+ * A top-up raises the limit for the calendar month (UTC) it is bought in.
+ */
+export const ADDONS: Readonly<Record<AddonKind, AddonDef>> = {
+  profiles: {
+    kind: "profiles",
+    label: "Extra customer profiles",
+    rateLabel: "$0.009 per profile",
+    packUnits: 1_000,
+    packPriceCents: 900,
+    limit: "contacts",
+  },
+  emails: {
+    kind: "emails",
+    label: "Additional emails",
+    rateLabel: "$0.12 per 1,000 emails",
+    packUnits: 100_000,
+    packPriceCents: 1_200,
+    limit: "emailsPerMonth",
+  },
+  ai: {
+    kind: "ai",
+    label: "Extra AI credits",
+    rateLabel: "$10 per 100,000 credits",
+    packUnits: 100_000,
+    packPriceCents: 1_000,
+    limit: "aiTokensPerMonth",
+  },
+};
+
+/** Most packs of one kind in a single purchase: a typo guard, not a business limit. */
+export const MAX_ADDON_PACKS = 100;
+
+export function isAddonKind(value: unknown): value is AddonKind {
+  return typeof value === "string" && (ADDON_KINDS as readonly string[]).includes(value);
+}
+
+export function isValidPackCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_ADDON_PACKS;
+}
+
+/** USD price of `packs` packs, as exact dollars (never a float sum of cents). */
+export function addonPriceUsd(kind: AddonKind, packs: number): number {
+  return (ADDONS[kind].packPriceCents * packs) / 100;
+}
+
+/** Units gained by buying `packs` packs. */
+export function addonUnits(kind: AddonKind, packs: number): number {
+  return ADDONS[kind].packUnits * packs;
+}
+
+/** The value stored in billing_checkouts.plan for a top-up purchase. */
+export function addonCheckoutPlan(kind: AddonKind): string {
+  return `addon:${kind}`;
+}
+
+/** The kind of a billing_checkouts.plan value, or null when it is not a top-up. */
+export function parseAddonCheckoutPlan(plan: string | null | undefined): AddonKind | null {
+  if (!plan || !plan.startsWith("addon:")) return null;
+  const kind = plan.slice("addon:".length);
+  return isAddonKind(kind) ? kind : null;
+}
 
 export function isPlanId(value: unknown): value is PlanId {
   return typeof value === "string" && (PLAN_IDS as readonly string[]).includes(value);
@@ -299,4 +348,14 @@ export function trialDaysLeft(trialEndsAt: Date | null | undefined, now: Date = 
 /** When a trial that starts at `start` ends. */
 export function trialEndDate(start: Date = new Date()): Date {
   return new Date(start.getTime() + TRIAL_DAYS * 86_400_000);
+}
+
+/**
+ * Where a trial ends once the workspace's first real event has arrived: a fresh TRIAL_DAYS from
+ * now, never earlier than it already ended, and never later than TRIAL_MAX_DAYS after signup.
+ */
+export function rebasedTrialEnd(createdAt: Date, currentEnd: Date, now: Date = new Date()): Date {
+  const fresh = Math.max(currentEnd.getTime(), now.getTime() + TRIAL_DAYS * 86_400_000);
+  const cap = createdAt.getTime() + TRIAL_MAX_DAYS * 86_400_000;
+  return new Date(Math.min(fresh, cap));
 }

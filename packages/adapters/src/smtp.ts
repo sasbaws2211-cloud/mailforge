@@ -179,7 +179,7 @@ export class SmtpTransportAdapter implements TransportAdapter {
         headers: params.headers ?? {},
         ...(params.replyTo ? { replyTo: params.replyTo } : {}),
         // Use our message ID as the SMTP Message-ID header for traceability.
-        messageId: `${params.messageId}@mailforge`,
+        messageId: `${params.messageId}@loomail`,
       });
 
       // Nodemailer resolves on 250 (accepted by the server).

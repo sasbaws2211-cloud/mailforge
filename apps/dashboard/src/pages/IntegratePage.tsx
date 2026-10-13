@@ -8,7 +8,7 @@
  * Sections:
  *   1. First event indicator - polls /v1/ingestion/status every 3s while no
  *      event has arrived; flips to a received state showing what arrived.
- *   2. Browser snippet - the two-stub + mailforge.js snippet with the tenant's
+ *   2. Browser snippet - the two-stub + loomail.js snippet with the tenant's
  *      publishable key already interpolated. Creates a publishable key
  *      inline when none exists.
  *   3. API keys - list, create (publishable / secret), edit origins, revoke.
@@ -16,7 +16,7 @@
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */
-import { Fragment, useMemo, useState, type ElementType } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ElementType } from "react";
 import { Check, Copy, Plus, X, Zap, Code2, KeyRound, Send } from "lucide-react";
 import {
   useIngestKeys,
@@ -156,15 +156,15 @@ function buildSnippet(origin: string, rawKey: string | null): string {
   const k = rawKey ?? "PASTE_YOUR_PUBLISHABLE_KEY";
   return [
     "<script>",
-    "  window.mailforge = window.mailforge || function () {",
-    "    (window.mailforge.q = window.mailforge.q || []).push(arguments);",
+    "  window.loomail = window.loomail || function () {",
+    "    (window.loomail.q = window.loomail.q || []).push(arguments);",
     "  };",
     "</script>",
-    `<script async src="${origin}/mailforge.js"></script>`,
+    `<script async src="${origin}/loomail.js"></script>`,
     "<script>",
-    `  mailforge("init", "${k}", { endpoint: "${origin}" });`,
-    '  mailforge("identify", "user_123", { email: "user@example.com" });',
-    '  mailforge("track", "signed_up");',
+    `  loomail("init", "${k}", { endpoint: "${origin}" });`,
+    '  loomail("identify", "user_123", { email: "user@example.com" });',
+    '  loomail("track", "signed_up");',
     "</script>",
   ].join("\n");
 }
@@ -618,15 +618,63 @@ function TestEventCard({ secretKey }: { secretKey: string | null }) {
 // Page
 // ---------------------------------------------------------------------------
 
+/**
+ * The website snippet only needs a publishable key, which is safe to embed in a page by design
+ * (it can write events and nothing else). Making the customer press a button to get one is a
+ * pointless stop, so the first time they open this page with no key we create one for them.
+ *
+ * The raw value is only ever returned once, so it is kept for this browser session only; after
+ * that the snippet shows a placeholder and the Keys card can issue a new one.
+ */
+const AUTO_KEY_STORAGE = "loomail-integrate-publishable";
+
+function readAutoKey(): { id: string; key: string } | null {
+  try {
+    const raw = sessionStorage.getItem(AUTO_KEY_STORAGE);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as { id?: unknown; key?: unknown };
+    return typeof v.id === "string" && typeof v.key === "string" ? { id: v.id, key: v.key } : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function IntegratePage() {
   const { data, isLoading } = useIngestKeys();
   const create = useCreateIngestKey();
   const [createdKey, setCreatedKey] = useState<CreatedIngestKey | null>(null);
+  const [autoKey, setAutoKey] = useState<{ id: string; key: string } | null>(readAutoKey);
+  const autoTried = useRef(false);
 
   const keys = data?.keys ?? [];
   const activePublishable = keys.find((k) => k.kind === "publishable" && !k.revoked_at) ?? null;
+
+  // First visit with no publishable key: make one, once.
+  useEffect(() => {
+    if (isLoading || !data || autoTried.current || activePublishable || create.isPending) return;
+    autoTried.current = true;
+    create.mutate(
+      { kind: "publishable", label: "Website snippet" },
+      {
+        onSuccess: (k) => {
+          const v = { id: k.id, key: k.key };
+          setAutoKey(v);
+          try {
+            sessionStorage.setItem(AUTO_KEY_STORAGE, JSON.stringify(v));
+          } catch {
+            /* storage unavailable: the snippet works for this view only */
+          }
+        },
+      },
+    );
+  }, [isLoading, data, activePublishable, create]);
+
   const rawPublishable =
-    createdKey && createdKey.kind === "publishable" ? createdKey.key : null;
+    createdKey && createdKey.kind === "publishable"
+      ? createdKey.key
+      : autoKey && activePublishable && autoKey.id === activePublishable.id
+        ? autoKey.key
+        : null;
   // Track the raw secret key for the test-event panel
   const rawSecret =
     createdKey && createdKey.kind === "secret" ? createdKey.key : null;
@@ -646,26 +694,37 @@ export default function IntegratePage() {
       <PageHeader
         eyebrow="Ingestion"
         title="Integrate"
-        subtitle="Get events flowing into Mailforge: grab a key, paste the snippet, watch the first event arrive."
+        subtitle="Try it with a sample event, then paste the snippet into your site and watch your first real event arrive."
       />
 
       <div className="space-y-6">
         <FirstEventCard />
 
-        {createdKey && (
-          <CreatedKeyBanner created={createdKey} onDismiss={() => setCreatedKey(null)} />
-        )}
-
         <section className="rounded-lg border border-border bg-card p-6" aria-label="Sample event">
-          <SectionHeading icon={Send} title="Try it without a key" />
+          <SectionHeading icon={Send} title="Fastest way to see it work" />
           <p className="mt-2 text-[14px] text-muted-foreground">
             Send a real <code className="rounded bg-sunken px-1 text-[13px]">signed_up</code> event for you, using your own
-            address, with no API key. If your Welcome flow is on, the email arrives in your inbox.
+            address, with no key and nothing to install. If your Welcome flow is on, the email arrives in your inbox.
           </p>
           <div className="mt-3">
             <SampleEventButton variant="default" label="Send me a sample event" />
           </div>
         </section>
+
+        {isLoading ? (
+          <Skeleton className="h-64 w-full rounded-lg" />
+        ) : (
+          <SnippetCard
+            publishableKey={activePublishable}
+            rawKey={rawPublishable}
+            onCreateKey={createPublishable}
+            creating={create.isPending}
+          />
+        )}
+
+        {createdKey && (
+          <CreatedKeyBanner created={createdKey} onDismiss={() => setCreatedKey(null)} />
+        )}
 
         {/* Test event panel: appears when a raw secret key is available */}
         {rawSecret ? (
@@ -695,19 +754,7 @@ export default function IntegratePage() {
           </section>
         ) : null}
 
-        {isLoading ? (
-          <Skeleton className="h-64 w-full rounded-lg" />
-        ) : (
-          <>
-            <SnippetCard
-              publishableKey={activePublishable}
-              rawKey={rawPublishable}
-              onCreateKey={createPublishable}
-              creating={create.isPending}
-            />
-            <KeysCard keys={keys} onCreated={setCreatedKey} />
-          </>
-        )}
+        {!isLoading && <KeysCard keys={keys} onCreated={setCreatedKey} />}
       </div>
     </div>
   );

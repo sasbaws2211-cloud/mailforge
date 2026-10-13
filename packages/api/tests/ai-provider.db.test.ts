@@ -1,12 +1,12 @@
 /**
- * Integration tests for the platform AI provider ("Mailforge AI") and how it
+ * Integration tests for the platform AI provider ("Loomail AI") and how it
  * layers with a customer's own key:
  *
  *   - the admin console sets, changes, switches off, tests and removes the
  *     operator's providers; the key is encrypted and never comes back out
  *   - a workspace with no key of its own uses the operator's provider; with a
  *     key of its own it uses that and nothing else
- *   - Mailforge AI is metered per call and capped per plan per month
+ *   - Loomail AI is metered per call and capped per plan per month
  *     (only when plan enforcement is on); a workspace on its own key is not capped
  *   - the customer sees where their AI comes from, and can remove their key
  *
@@ -24,16 +24,16 @@ import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
-import { decrypt, encrypt, parseEncryptionKey } from "@mailforge/adapters";
-import { purgeWorkspace } from "@mailforge/db/purge";
-import { loadLlmCandidates } from "@mailforge/db/llm";
+import { decrypt, encrypt, parseEncryptionKey } from "@loomail/adapters";
+import { purgeWorkspace } from "@loomail/db/purge";
+import { loadLlmCandidates } from "@loomail/db/llm";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) throw new Error("[ai-provider.test] DATABASE_URL is not set.");
 
 const TEST_ENCRYPTION_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const ADMIN_EMAIL = "boss@ai-t.example";
-const REASON = "Setting up Mailforge AI for launch";
+const REASON = "Setting up Loomail AI for launch";
 
 let pool: pg.Pool;
 let lockClient: pg.PoolClient | undefined;
@@ -95,7 +95,7 @@ beforeAll(async () => {
     return;
   }
   await cleanup();
-  process.env.MAILFORGE_PLATFORM_ADMINS = ADMIN_EMAIL;
+  process.env.LOOMAIL_PLATFORM_ADMINS = ADMIN_EMAIL;
   app = await buildApp({
     logger: false,
     db,
@@ -110,7 +110,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
   if (!dbAvailable) return;
-  delete process.env.MAILFORGE_ENFORCE_PLANS;
+  delete process.env.LOOMAIL_ENFORCE_PLANS;
   revoked.clear();
   stubCalls.length = 0;
   enqueued.length = 0;
@@ -118,8 +118,8 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  delete process.env.MAILFORGE_PLATFORM_ADMINS;
-  delete process.env.MAILFORGE_ENFORCE_PLANS;
+  delete process.env.LOOMAIL_PLATFORM_ADMINS;
+  delete process.env.LOOMAIL_ENFORCE_PLANS;
   if (savedEncryptionKey !== undefined) process.env.ENCRYPTION_KEY = savedEncryptionKey;
   else delete process.env.ENCRYPTION_KEY;
   if (app) await app.close();
@@ -400,7 +400,7 @@ describe("the customer's view: GET /v1/settings/llm", () => {
     await setPlatform(admin, "primary", "sk-pri");
     r = (await call("GET", "/v1/settings/llm", c.session)).json();
     expect(r.llm).toBeNull();
-    expect(r.ai).toMatchObject({ source: "platform", name: "Mailforge AI" });
+    expect(r.ai).toMatchObject({ source: "platform", name: "Loomail AI" });
     // The real vendor, model and key are never shown to customers.
     expect(JSON.stringify(r)).not.toMatch(/primary-model|sk-pri|127\.0\.0\.1/);
 
@@ -415,7 +415,7 @@ describe("the customer's view: GET /v1/settings/llm", () => {
     const c = await newTenant({ plan: "starter" });
     await setPlatform(admin, "primary", "sk-pri");
     await addUsage(c, "platform", 1234);
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const r = (await call("GET", "/v1/settings/llm", c.session)).json();
     expect(r.ai.allowance).toMatchObject({ plan: "Starter", limit: 300_000, used: 1234, spent: false });
     expect(typeof r.ai.allowance.resets_at).toBe("string");
@@ -432,7 +432,7 @@ describe("the customer's view: GET /v1/settings/llm", () => {
 });
 
 describe("DELETE /v1/settings/llm: remove my own key", () => {
-  it("returns the workspace to Mailforge AI", async () => {
+  it("returns the workspace to Loomail AI", async () => {
     const admin = await newAdmin();
     const c = await newTenant();
     await setPlatform(admin, "primary", "sk-pri");
@@ -454,11 +454,11 @@ describe("DELETE /v1/settings/llm: remove my own key", () => {
 });
 
 describe("the plan meter", () => {
-  it("reports Mailforge AI tokens against the plan, and each plan's allowance in the catalogue", async () => {
+  it("reports Loomail AI tokens against the plan, and each plan's allowance in the catalogue", async () => {
     const c = await newTenant({ plan: "growth" });
     await addUsage(c, "platform", 400_000);
     await addUsage(c, "byok", 5_000_000); // their own key: not counted
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const r = (await call("GET", "/v1/plan", c.session)).json();
     expect(r.meters.ai).toMatchObject({ used: 400_000, limit: 1_500_000, state: "ok" });
     expect(r.plans.map((p: { limits: { ai_tokens_per_month: number } }) => p.limits.ai_tokens_per_month)).toEqual([20_000, 300_000, 1_500_000, 8_000_000]);
@@ -468,7 +468,7 @@ describe("the plan meter", () => {
     const c = await newTenant({ plan: "starter" });
     await db.execute(sql`INSERT INTO llm_usage (tenant_id, feature, source, provider, total_tokens, created_at) VALUES (${c.id}::uuid, 'content', 'platform', 'custom', 250000, now() - interval '40 days')`);
     await addUsage(c, "platform", 1000);
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     expect((await call("GET", "/v1/plan", c.session)).json().meters.ai.used).toBe(1000);
   });
 });
@@ -483,12 +483,12 @@ describe("compile: AI must be available", () => {
     expect(enqueued).toHaveLength(0);
   });
 
-  it("goes ahead on Mailforge AI while the allowance lasts", async () => {
+  it("goes ahead on Loomail AI while the allowance lasts", async () => {
     const admin = await newAdmin();
     const c = await newTenant({ plan: "free" });
     await setPlatform(admin, "primary", "sk-pri");
     await addUsage(c, "platform", 19_999);
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const f = await makeFlow(c);
     const r = await call("POST", `/v1/flows/${f}/compile`, c.session);
     expect(r.statusCode).toBe(202);
@@ -500,7 +500,7 @@ describe("compile: AI must be available", () => {
     const c = await newTenant({ plan: "free" });
     await setPlatform(admin, "primary", "sk-pri");
     await addUsage(c, "platform", 20_000);
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const f = await makeFlow(c);
     const r = await call("POST", `/v1/flows/${f}/compile`, c.session);
     expect(r.statusCode).toBe(402);
@@ -513,7 +513,7 @@ describe("compile: AI must be available", () => {
     const c = await newTenant({ plan: "free" });
     await addUsage(c, "platform", 5_000_000);
     await giveOwnKey(c, "sk-own");
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const f = await makeFlow(c);
     expect((await call("POST", `/v1/flows/${f}/compile`, c.session)).statusCode).toBe(202);
   });
@@ -522,7 +522,7 @@ describe("compile: AI must be available", () => {
 describe("AI draft: served, metered and tagged", () => {
   const draft = (t: Tenant, flowId: string) => call("POST", `/v1/flows/${flowId}/draft-step`, t.session, { step_order: 1 });
 
-  it("on Mailforge AI: uses the operator's key and records platform usage", async () => {
+  it("on Loomail AI: uses the operator's key and records platform usage", async () => {
     const admin = await newAdmin();
     const c = await newTenant({ plan: "starter" });
     await setPlatform(admin, "primary", "sk-pri");
@@ -581,7 +581,7 @@ describe("AI draft: served, metered and tagged", () => {
     const c = await newTenant({ plan: "free" });
     await setPlatform(admin, "primary", "sk-pri");
     await addUsage(c, "platform", 20_000);
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     stubCalls.length = 0;
     const r = await draft(c, await makeFlow(c));
     expect(r.statusCode).toBe(402);

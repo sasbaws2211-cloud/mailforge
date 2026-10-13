@@ -25,7 +25,7 @@ export interface AdminWorkspace {
   suspended_reason: string | null;
   deletion_scheduled_at: string | null;
   deletion_requested_by: string | null;
-  /** A hand-set Mailforge AI token allowance: null = the plan's, -1 = no cap. */
+  /** A hand-set Loomail AI token allowance: null = the plan's, -1 = no cap. */
   ai_allowance_override: number | null;
   contacts: number;
   emails_this_month: number;
@@ -39,7 +39,7 @@ export interface AdminOverview {
     suspended: number;
     signups_7d: number;
     signups_30d: number;
-    by_stored_plan: { trial_running: number; trial_ended: number; free: number; starter: number; growth: number; scale: number };
+    by_stored_plan: { trial_running: number; trial_ended: number; free: number; essential: number };
   };
   revenue: { currency: string; mrr_usd: number; active_subscriptions: number; cancelling_subscriptions: number };
   usage: { contacts: number; emails_this_month: number };
@@ -100,11 +100,11 @@ export interface AdminTenantDetail {
     platform_tokens_this_month: number;
     byok_tokens_this_month: number;
     calls_this_month: number;
-    /** What this workspace's Mailforge AI use cost you this month, in US dollars. */
+    /** What this workspace's Loomail AI use cost you this month, in US dollars. */
     platform_cost_usd: number;
     /** A hand-set allowance, or null when the plan's applies; -1 = no cap. */
     allowance_override: number | null;
-    /** The allowance in force in Mailforge AI tokens; null = no cap. */
+    /** The allowance in force in Loomail AI tokens; null = no cap. */
     allowance_tokens: number | null;
   };
   members: Array<{ email: string; name: string | null; role: string; last_login_at: string | null; deactivated: boolean }>;
@@ -186,7 +186,7 @@ export function postAdminAction(id: string, a: AdminAction) {
 }
 
 // ---------------------------------------------------------------------------
-// AI providers (Mailforge AI)
+// AI providers (Loomail AI)
 // ---------------------------------------------------------------------------
 
 export type AdminAiSlot = "primary" | "fallback";
@@ -216,7 +216,7 @@ export interface AdminAiOverview {
   providers: AdminAiProvider[];
   /** At least one switched-on provider exists, so workspaces without their own key can use AI. */
   available: boolean;
-  /** The operator's monthly dollar budget. At 100% Mailforge AI pauses for every workspace on it. */
+  /** The operator's monthly dollar budget. At 100% Loomail AI pauses for every workspace on it. */
   budget: { monthly_usd: number | null; spent_usd: number; state: "none" | "ok" | "near" | "reached"; max_usd: number };
   /** A switched-on provider has no prices, so the dollar figures undercount. */
   prices_missing: boolean;
@@ -228,7 +228,7 @@ export interface AdminAiOverview {
     platform_calls: number;
     platform_failed_calls: number;
     platform_workspaces: number;
-    /** What Mailforge AI cost you this month (chat calls; embeddings are not priced). */
+    /** What Loomail AI cost you this month (chat calls; embeddings are not priced). */
     platform_cost_usd: number;
     byok_tokens: number;
     by_feature: Array<{ feature: string; tokens: number; calls: number; cost_usd: number }>;

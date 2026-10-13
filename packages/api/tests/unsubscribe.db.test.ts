@@ -43,13 +43,13 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql, eq, and } from "drizzle-orm";
 import { buildApp } from "../src/index.js";
-import { tenants, contacts, lifecycleMessages, flows, flowMemberships, suppressions } from "@mailforge/db/schema";
-import { generateUnsubscribeToken } from "@mailforge/adapters";
+import { tenants, contacts, lifecycleMessages, flows, flowMemberships, suppressions } from "@loomail/db/schema";
+import { generateUnsubscribeToken } from "@loomail/adapters";
 import {
   THROTTLE_DEFAULTS,
   evaluateThrottleGate,
   type ThrottleGateInput,
-} from "@mailforge/core";
+} from "@loomail/core";
 
 // ---------------------------------------------------------------------------
 // DB setup
@@ -62,8 +62,8 @@ if (!TEST_DB_URL) {
     `[unsubscribe.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://loomail:loomail@localhost:5432/loomail\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://loomail:loomail@localhost:5433/loomail'\n`),
   );
 }
 

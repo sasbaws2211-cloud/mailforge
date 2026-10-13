@@ -2,9 +2,9 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in Mailforge, please report it privately.
+If you discover a security vulnerability in Loomail, please report it privately.
 
-**Email:** security@mailforge.org
+**Email:** security@loomail.org
 
 Please include:
 
@@ -15,7 +15,7 @@ Please include:
 
 ## Response Expectations
 
-Mailforge is maintained by a solo developer. Honest expectations:
+Loomail is maintained by a solo developer. Honest expectations:
 
 - Acknowledgment within 48 hours (usually faster)
 - Assessment and fix timeline within 1 week
@@ -23,7 +23,7 @@ Mailforge is maintained by a solo developer. Honest expectations:
 
 ## Scope
 
-This policy covers the Mailforge engine code in this repository. For issues with the hosted Cloud service at app.mailforge.org, use the same email.
+This policy covers the Loomail engine code in this repository. For issues with the hosted Cloud service at app.loomail.org, use the same email.
 
 ## No Bounty Program
 

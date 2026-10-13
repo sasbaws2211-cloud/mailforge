@@ -1,5 +1,5 @@
 /**
- * The marketing pages must not promise something untrue: when the service offers Mailforge
+ * The marketing pages must not promise something untrue: when the service offers Loomail
  * Sending (it sends the email for you), they say so; when it does not, they keep saying
  * customers bring their own email provider. No database needed.
  */
@@ -9,14 +9,14 @@ import { buildApp } from "../src/index.js";
 
 let app: FastifyInstance;
 beforeAll(async () => {
-  app = await buildApp({ publicSite: true, baseUrl: "https://mailforge.test", logger: false });
+  app = await buildApp({ publicSite: true, baseUrl: "https://loomail.test", logger: false });
 });
 afterEach(() => {
-  delete process.env.MAILFORGE_MANAGED_RESEND_API_KEY;
-  delete process.env.MAILFORGE_MANAGED_SENDING;
+  delete process.env.LOOMAIL_MANAGED_RESEND_API_KEY;
+  delete process.env.LOOMAIL_MANAGED_SENDING;
 });
 afterAll(async () => {
-  delete process.env.MAILFORGE_MANAGED_RESEND_API_KEY;
+  delete process.env.LOOMAIL_MANAGED_RESEND_API_KEY;
   await app.close();
 });
 
@@ -34,8 +34,8 @@ describe("when the service does not offer managed sending", () => {
 });
 
 describe("when the service offers managed sending", () => {
-  it("the landing page and FAQ say Mailforge can send for you, and that connecting your own provider is optional", async () => {
-    process.env.MAILFORGE_MANAGED_RESEND_API_KEY = "re_x";
+  it("the landing page and FAQ say Loomail can send for you, and that connecting your own provider is optional", async () => {
+    process.env.LOOMAIL_MANAGED_RESEND_API_KEY = "re_x";
     const home = text(await page("/"));
     expect(home).toMatch(/can send the email for you, so there is no email provider to sign up for/);
     expect(home).toMatch(/connect your own provider \(Resend, or any SMTP server\) if you prefer/);
@@ -44,7 +44,7 @@ describe("when the service offers managed sending", () => {
   });
 
   it("the pricing answer says sending is included up to the plan's email allowance, with your own provider as the alternative", async () => {
-    process.env.MAILFORGE_MANAGED_RESEND_API_KEY = "re_x";
+    process.env.LOOMAIL_MANAGED_RESEND_API_KEY = "re_x";
     const pricing = text(await page("/pricing"));
     expect(pricing).toMatch(/Sending is included, up to your plan's monthly email allowance/);
     expect(pricing).toMatch(/Prefer your own email provider\? Connect it and pay them directly/);
@@ -52,13 +52,13 @@ describe("when the service offers managed sending", () => {
   });
 
   it("the signup page lists it as a perk", async () => {
-    process.env.MAILFORGE_MANAGED_RESEND_API_KEY = "re_x";
+    process.env.LOOMAIL_MANAGED_RESEND_API_KEY = "re_x";
     expect(text(await page("/signup"))).toMatch(/We can send your email for you, or use your own provider/);
   });
 
   it("switching it off again (key kept) puts the old wording back", async () => {
-    process.env.MAILFORGE_MANAGED_RESEND_API_KEY = "re_x";
-    process.env.MAILFORGE_MANAGED_SENDING = "false";
+    process.env.LOOMAIL_MANAGED_RESEND_API_KEY = "re_x";
+    process.env.LOOMAIL_MANAGED_SENDING = "false";
     expect(text(await page("/signup"))).toMatch(/Send through your own email provider/);
   });
 });

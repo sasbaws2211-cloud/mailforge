@@ -49,7 +49,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { eq, isNull, and } from "drizzle-orm";
-import { apiKeys, tenants } from "@mailforge/db/schema";
+import { apiKeys, tenants } from "@loomail/db/schema";
 import type { Db } from "./db.js";
 
 export type ApiKeyKind = "publishable" | "secret";

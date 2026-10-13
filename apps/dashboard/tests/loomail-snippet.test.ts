@@ -1,5 +1,5 @@
 /**
- * Browser snippet tests (public/mailforge.js).
+ * Browser snippet tests (public/loomail.js).
  *
  * Runs the snippet in a minimal fake browser environment (window, navigator,
  * fetch) built from plain objects - no jsdom dependency. Verifies:
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const snippetSource = readFileSync(
-  path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/mailforge.js"),
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/loomail.js"),
   "utf8",
 );
 
@@ -62,7 +62,7 @@ function makeBrowser(opts: { beacon?: boolean; beaconFails?: boolean; noFetch?: 
   return { win, nav, sent, run };
 }
 
-describe("mailforge.js snippet", () => {
+describe("loomail.js snippet", () => {
   beforeEach(() => {
     // nothing shared between tests; each builds its own browser
   });
@@ -71,13 +71,13 @@ describe("mailforge.js snippet", () => {
     const b = makeBrowser({});
     // Pre-load stub, as documented
     const q: unknown[][] = [];
-    b.win.mailforge = function (...args: unknown[]) {
+    b.win.loomail = function (...args: unknown[]) {
       q.push(args);
     };
-    (b.win.mailforge as { q?: unknown[][] }).q = q;
-    (b.win.mailforge as Function)("init", "mf_pub_test", { endpoint: "http://localhost:3000" });
-    (b.win.mailforge as Function)("identify", "user_1", { email: "a@b.c" });
-    (b.win.mailforge as Function)("track", "signed_up");
+    (b.win.loomail as { q?: unknown[][] }).q = q;
+    (b.win.loomail as Function)("init", "mf_pub_test", { endpoint: "http://localhost:3000" });
+    (b.win.loomail as Function)("identify", "user_1", { email: "a@b.c" });
+    (b.win.loomail as Function)("track", "signed_up");
 
     b.run(b.win, b.nav, b.sent !== undefined ? (undefined as unknown as never) : (undefined as never));
     expect(b.sent.length).toBe(2);
@@ -95,9 +95,9 @@ describe("mailforge.js snippet", () => {
   it("sends via sendBeacon when available", () => {
     const b = makeBrowser({});
     b.run(b.win, b.nav, undefined as never);
-    const mailforge = b.win.mailforge as (...args: unknown[]) => void;
-    mailforge("init", "mf_pub_x", { endpoint: "http://x.test" });
-    mailforge("track", "u1", "evt", { a: 1 });
+    const loomail = b.win.loomail as (...args: unknown[]) => void;
+    loomail("init", "mf_pub_x", { endpoint: "http://x.test" });
+    loomail("track", "u1", "evt", { a: 1 });
     expect(b.sent[0]!.via).toBe("beacon");
     expect(b.sent[0]!.body).toMatchObject({ key: "mf_pub_x", userId: "u1", event: "evt", properties: { a: 1 } });
   });
@@ -112,9 +112,9 @@ describe("mailforge.js snippet", () => {
       return Promise.resolve();
     };
     noBeacon.run(noBeacon.win, noBeacon.nav, fetchFn as never);
-    const mailforge = noBeacon.win.mailforge as (...args: unknown[]) => void;
-    mailforge("init", "mf_pub_x", { endpoint: "http://x.test" });
-    mailforge("track", "u1", "evt");
+    const loomail = noBeacon.win.loomail as (...args: unknown[]) => void;
+    loomail("init", "mf_pub_x", { endpoint: "http://x.test" });
+    loomail("track", "u1", "evt");
     expect(fetchCalls.length).toBe(1);
 
     const beaconDeclines = makeBrowser({ beaconFails: true });
@@ -123,20 +123,20 @@ describe("mailforge.js snippet", () => {
       fetchCalls2.push({ url, body: JSON.parse(init.body), via: "fetch" });
       return Promise.resolve();
     }) as never);
-    const mailforge2 = beaconDeclines.win.mailforge as (...args: unknown[]) => void;
-    mailforge2("init", "mf_pub_x", { endpoint: "http://x.test" });
-    mailforge2("identify", "u2");
+    const loomail2 = beaconDeclines.win.loomail as (...args: unknown[]) => void;
+    loomail2("init", "mf_pub_x", { endpoint: "http://x.test" });
+    loomail2("identify", "u2");
     expect(fetchCalls2.length).toBe(1);
   });
 
   it("does nothing before init and never throws on garbage input", () => {
     const b = makeBrowser({});
     b.run(b.win, b.nav, undefined as never);
-    const mailforge = b.win.mailforge as (...args: unknown[]) => void;
-    mailforge("track", "no_user_yet");
-    mailforge("identify", "");
-    mailforge("init");
-    mailforge("track", "still_not_ready");
+    const loomail = b.win.loomail as (...args: unknown[]) => void;
+    loomail("track", "no_user_yet");
+    loomail("identify", "");
+    loomail("init");
+    loomail("track", "still_not_ready");
     expect(b.sent.length).toBe(0);
   });
 
@@ -146,19 +146,19 @@ describe("mailforge.js snippet", () => {
       throw new Error("host page has a broken fetch");
     };
     b.run(b.win, { sendBeacon: () => false }, throwingFetch as never);
-    const mailforge = b.win.mailforge as (...args: unknown[]) => void;
+    const loomail = b.win.loomail as (...args: unknown[]) => void;
     expect(() => {
-      mailforge("init", "mf_pub_x", { endpoint: "http://x.test" });
-      mailforge("track", "u1", "evt");
+      loomail("init", "mf_pub_x", { endpoint: "http://x.test" });
+      loomail("track", "u1", "evt");
     }).not.toThrow();
   });
 
   it("strips a trailing slash from the endpoint", () => {
     const b = makeBrowser({});
     b.run(b.win, b.nav, undefined as never);
-    const mailforge = b.win.mailforge as (...args: unknown[]) => void;
-    mailforge("init", "mf_pub_x", { endpoint: "http://x.test/" });
-    mailforge("track", "u1", "evt");
+    const loomail = b.win.loomail as (...args: unknown[]) => void;
+    loomail("init", "mf_pub_x", { endpoint: "http://x.test/" });
+    loomail("track", "u1", "evt");
     expect(b.sent[0]!.url).toBe("http://x.test/v1/track");
   });
 });

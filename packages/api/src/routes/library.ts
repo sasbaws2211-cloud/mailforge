@@ -16,11 +16,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { sql } from "drizzle-orm";
 import type { Db } from "../plugins/db.js";
-import {
-  LIBRARY_TEMPLATES,
-  LIBRARY_FLOW_WELCOME,
-  type InstallResult,
-} from "@mailforge/core";
+import { LIBRARY_CATALOG, libraryEntry, type InstallResult } from "@loomail/core";
 
 // ---------------------------------------------------------------------------
 // Route plugin
@@ -30,47 +26,61 @@ const libraryRoutes: FastifyPluginAsync = async (app) => {
   /**
    * GET /v1/library
    *
-   * List available library flow sets.
+   * The ready-made flows, each with whether this workspace already has it.
    */
-  app.get("/", { config: { minRole: "member" } }, async () => {
+  app.get("/", { config: { minRole: "member" } }, async (request) => {
+    const db: Db = request.server.db;
+    const installed = await db.execute<{ id: string; name: string; status: string }>(sql`
+      SELECT id, name, status FROM flows
+      WHERE tenant_id = ${request.tenant!.id}::uuid AND source = 'library'`);
+    const byName = new Map(installed.rows.map((r) => [r.name, r]));
     return {
-      flows: [
-        {
-          id: "welcome-onboarding",
-          name: LIBRARY_FLOW_WELCOME.name,
-          description: LIBRARY_FLOW_WELCOME.description,
-          emails: LIBRARY_FLOW_WELCOME.steps.length,
-          trigger: "signed_up event",
-          templates: LIBRARY_TEMPLATES.map((t) => ({
-            slug: t.slug,
-            name: t.name,
-            subject: t.subject,
-          })),
-        },
-      ],
+      flows: LIBRARY_CATALOG.map((e) => {
+        const have = byName.get(e.flow.name);
+        return {
+          id: e.id,
+          name: e.flow.name,
+          description: e.flow.description,
+          tagline: e.tagline,
+          when: e.when,
+          needs_event: e.needsEvent,
+          span: e.span,
+          emails: e.flow.steps.length,
+          trigger: e.needsEvent ? `${e.needsEvent} event` : e.when,
+          installed: Boolean(have),
+          flow_id: have?.id ?? null,
+          flow_status: have?.status ?? null,
+          templates: e.templates.map((t) => ({ slug: t.slug, name: t.name, subject: t.subject })),
+        };
+      }),
     };
   });
 
   /**
-   * POST /v1/library/install
+   * POST /v1/library/install   { id?: string }   (default "welcome-onboarding")
    *
-   * Install the welcome library flow and its templates for the calling tenant.
-   * Templates use ON CONFLICT DO NOTHING (idempotent on slug).
-   * The flow is created in "draft" status with compile_status = "ready"
-   * (pre-compiled plan, no LLM needed).
+   * Install one library flow and its templates for the calling tenant. Templates use
+   * ON CONFLICT DO NOTHING (idempotent on slug). The flow is created in "draft" status with
+   * compile_status = "ready" (pre-compiled plan, no LLM needed).
    *
-   * Returns 200 with the created flow ID and template count.
-   * Returns 409 if the flow already exists for this tenant (by name + source).
+   * Returns 400 for an unknown id and 409 if the flow already exists for this tenant.
    */
-  app.post("/install", { config: { minRole: "member" } }, async (request, reply) => {
+  app.post<{ Body: { id?: unknown } | undefined }>("/install", { config: { minRole: "member" } }, async (request, reply) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
+    const wanted = typeof request.body?.id === "string" ? request.body.id : "welcome-onboarding";
+    const entry = libraryEntry(wanted);
+    if (!entry) {
+      reply.status(400);
+      return { error: "Unknown library flow.", code: "unknown_library_flow" };
+    }
+    const LIBRARY_FLOW = entry.flow;
 
     // Check if already installed (by flow name + source = library)
     const existing = await db.execute<{ id: string }>(sql`
       SELECT id FROM flows
       WHERE tenant_id = ${tenantId}
-        AND name = ${LIBRARY_FLOW_WELCOME.name}
+        AND name = ${LIBRARY_FLOW.name}
         AND source = 'library'
       LIMIT 1
     `);
@@ -85,7 +95,7 @@ const libraryRoutes: FastifyPluginAsync = async (app) => {
 
     // Install templates (idempotent via ON CONFLICT DO NOTHING on tenant_id + slug)
     let templatesCreated = 0;
-    for (const tmpl of LIBRARY_TEMPLATES) {
+    for (const tmpl of entry.templates) {
       const result = await db.execute<{ id: string }>(sql`
         INSERT INTO templates (tenant_id, name, slug, subject, body_html, body_text, variables, category)
         VALUES (
@@ -115,19 +125,19 @@ const libraryRoutes: FastifyPluginAsync = async (app) => {
       )
       VALUES (
         ${tenantId},
-        ${LIBRARY_FLOW_WELCOME.name},
-        ${LIBRARY_FLOW_WELCOME.description},
-        ${LIBRARY_FLOW_WELCOME.triggerType},
-        ${JSON.stringify(LIBRARY_FLOW_WELCOME.triggerConfig)}::jsonb,
-        ${JSON.stringify(LIBRARY_FLOW_WELCOME.steps)}::jsonb,
-        ${LIBRARY_FLOW_WELCOME.source},
+        ${LIBRARY_FLOW.name},
+        ${LIBRARY_FLOW.description},
+        ${LIBRARY_FLOW.triggerType},
+        ${JSON.stringify(LIBRARY_FLOW.triggerConfig)}::jsonb,
+        ${JSON.stringify(LIBRARY_FLOW.steps)}::jsonb,
+        ${LIBRARY_FLOW.source},
         'draft',
-        ${LIBRARY_FLOW_WELCOME.approvalMode},
-        ${LIBRARY_FLOW_WELCOME.flowClass},
-        ${LIBRARY_FLOW_WELCOME.reentryPolicy},
-        ${LIBRARY_FLOW_WELCOME.reentryCooldownDays},
-        ${LIBRARY_FLOW_WELCOME.priority},
-        ${JSON.stringify(LIBRARY_FLOW_WELCOME.compiledPlan)}::jsonb,
+        ${LIBRARY_FLOW.approvalMode},
+        ${LIBRARY_FLOW.flowClass},
+        ${LIBRARY_FLOW.reentryPolicy},
+        ${LIBRARY_FLOW.reentryCooldownDays},
+        ${LIBRARY_FLOW.priority},
+        ${JSON.stringify(LIBRARY_FLOW.compiledPlan)}::jsonb,
         'ready',
         ${new Date()}
       )

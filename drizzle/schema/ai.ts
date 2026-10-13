@@ -2,7 +2,7 @@ import { pgTable, uuid, text, boolean, integer, bigint, timestamp, jsonb, index,
 import { tenants } from "./tenants.js";
 
 /**
- * The operator's own AI provider ("Mailforge AI"), shared by every workspace
+ * The operator's own AI provider ("Loomail AI"), shared by every workspace
  * that has not saved a key of its own. Set in the platform admin console.
  *
  * Two slots: `primary` is used first; `fallback` is tried when the primary

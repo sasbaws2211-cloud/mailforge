@@ -5,7 +5,7 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { randomBytes } from "node:crypto";
-import { isPlanId, parseGoal, TRIAL_PLAN, type OnboardingGoal, type PlanId } from "@mailforge/core";
+import { isPaidPlanId, parseGoal, TRIAL_PLAN, type OnboardingGoal, type PlanId } from "@loomail/core";
 
 export interface SignupInput {
   workspace: string;
@@ -42,6 +42,12 @@ const DISPOSABLE_DOMAINS = new Set([
 
 const EMAIL_RE = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]{2,}$/;
 
+/** True when `raw` looks like a usable email address (after trimming and lowercasing). */
+export function isPlausibleEmail(raw: string): boolean {
+  const email = normalizeEmail(raw);
+  return email.length <= 254 && EMAIL_RE.test(email);
+}
+
 export function normalizeEmail(raw: string): string {
   return raw.trim().toLowerCase();
 }
@@ -76,7 +82,7 @@ export function validateSignup(body: unknown): SignupValidation {
     return { ok: false, kind: "invalid", message: "Please accept the Terms and Privacy Policy to continue." };
   }
 
-  const plan = isPlanId(b.plan) ? b.plan : TRIAL_PLAN;
+  const plan = isPaidPlanId(b.plan) ? b.plan : TRIAL_PLAN;
   return { ok: true, value: { workspace, email, plan, goal: parseGoal(b.goal) } };
 }
 

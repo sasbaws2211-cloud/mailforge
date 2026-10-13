@@ -5,7 +5,7 @@
  *   byok      the customer's own key, saved in Settings. Used whenever it exists.
  *             Never counted against the plan allowance: the customer pays their
  *             provider directly.
- *   platform  the operator's provider ("Mailforge AI"), set in the admin console.
+ *   platform  the operator's provider ("Loomail AI"), set in the admin console.
  *             Used when the customer has no key of their own. Counted against the
  *             plan's monthly token allowance when plan enforcement is on.
  *
@@ -30,7 +30,7 @@ export const LLM_FEATURES = ["compile", "content", "ai_draft", "embedding"] as c
 export type LlmFeature = (typeof LLM_FEATURES)[number];
 
 /** The name customers see for the operator's provider. The real vendor and model are never shown. */
-export const PLATFORM_AI_NAME = "Mailforge AI";
+export const PLATFORM_AI_NAME = "Loomail AI";
 
 /** Rough token count for text, for calls whose provider does not report usage (about 4 characters a token). */
 export function estimateTokens(text: string): number {
@@ -45,7 +45,7 @@ export function aiAllowanceSpent(limit: number | null, used: number): boolean {
 /** Why AI is unavailable once the allowance is gone; safe to show to the customer. */
 export function aiAllowanceMessage(planName: string, limit: number): string {
   return (
-    `Your ${planName} plan's ${limit.toLocaleString("en-US")} Mailforge AI tokens for this month are used up. ` +
+    `Your ${planName} plan's ${limit.toLocaleString("en-US")} Loomail AI tokens for this month are used up. ` +
     "Upgrade your plan or add your own AI key in Settings to keep going."
   );
 }
@@ -168,4 +168,4 @@ export function aiBudgetState(budgetUsd: number | null, spentUsd: number): AiBud
  * nothing about money, only what to do. Customers on their own key never see it.
  */
 export const AI_UNAVAILABLE_MESSAGE =
-  "Mailforge AI is temporarily unavailable. Add your own AI key in Settings to keep going, or try again later.";
+  "Loomail AI is temporarily unavailable. Add your own AI key in Settings to keep going, or try again later.";

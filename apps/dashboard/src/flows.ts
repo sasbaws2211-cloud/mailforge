@@ -9,6 +9,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   fetchFlows,
+  fetchFlowStats,
   fetchFlow,
   fetchEventNames,
   createFlow,
@@ -26,6 +27,16 @@ export const FLOWS_QUERY_KEY = ["flows"] as const;
 
 export function flowQueryKey(id: string) {
   return ["flows", id] as const;
+}
+
+/** What each flow has done lately (sent, opens, health), keyed by flow id. Refreshed every minute. */
+export function useFlowStats() {
+  return useQuery({
+    queryKey: [...FLOWS_QUERY_KEY, "stats"] as const,
+    queryFn: fetchFlowStats,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
 }
 
 /** Fetch the flows list for the current tenant. */

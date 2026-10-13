@@ -1,9 +1,9 @@
-# Managed sending (Mailforge sends your customers' email)
+# Managed sending (Loomail sends your customers' email)
 
 By default every workspace has to bring its own email provider (a Resend account or an SMTP
 server). That is fine for developers and a wall for everyone else. **Managed sending** removes
-the wall: when you give Mailforge a Resend account of your own, a workspace can simply turn on
-"Mailforge Sending" and its email goes out through your account.
+the wall: when you give Loomail a Resend account of your own, a workspace can simply turn on
+"Loomail Sending" and its email goes out through your account.
 
 This guide is for the person running the service. Customers see a single switch in
 *Settings > Email sending*.
@@ -20,7 +20,7 @@ Under managed sending the sender is one of two things:
 
 | | Sent from | When | Limit |
 |---|---|---|---|
-| **Shared address** | your `MAILFORGE_MANAGED_SHARED_FROM`, with the workspace's name as the sender name and its own address as Reply-To | straight away, until a domain is verified | `MAILFORGE_MANAGED_SHARED_DAILY_LIMIT` a day per workspace (default 100) |
+| **Shared address** | your `LOOMAIL_MANAGED_SHARED_FROM`, with the workspace's name as the sender name and its own address as Reply-To | straight away, until a domain is verified | `LOOMAIL_MANAGED_SHARED_DAILY_LIMIT` a day per workspace (default 100) |
 | **Their own domain** | `hello@mail.theircompany.com` | once the workspace added the DNS records and Resend verified them | only the plan's monthly email limit |
 
 The shared address is one sender reputation shared by everyone using it, which is why it is capped
@@ -36,31 +36,31 @@ by the platform when the message is sent, whatever the workspace's settings or m
 2. **Create an API key with full access** (domains are created through the API) and set:
 
    ```
-   MAILFORGE_MANAGED_RESEND_API_KEY=re_...
+   LOOMAIL_MANAGED_RESEND_API_KEY=re_...
    ```
 
-   Nothing is offered to customers until this is set. `MAILFORGE_MANAGED_SENDING=false` switches it
+   Nothing is offered to customers until this is set. `LOOMAIL_MANAGED_SENDING=false` switches it
    off again without removing the key.
 3. **(Recommended) a shared sending address.** Verify a domain you own in Resend (for example
    `mail.yourdomain.com`) and set:
 
    ```
-   MAILFORGE_MANAGED_SHARED_FROM=notifications@mail.yourdomain.com
-   MAILFORGE_MANAGED_SHARED_DAILY_LIMIT=100
+   LOOMAIL_MANAGED_SHARED_FROM=notifications@mail.yourdomain.com
+   LOOMAIL_MANAGED_SHARED_DAILY_LIMIT=100
    ```
 
    Without it, a workspace must verify its own domain before anything can be sent.
-4. **Point a Resend webhook at your app** so bounces and spam complaints reach Mailforge:
+4. **Point a Resend webhook at your app** so bounces and spam complaints reach Loomail:
    in Resend, add a webhook to `https://YOUR-APP/webhooks/resend-platform`, select the email events
    (delivered, bounced, complained, opened, clicked), and put its signing secret in:
 
    ```
-   MAILFORGE_MANAGED_RESEND_WEBHOOK_SECRET=whsec_...
+   LOOMAIL_MANAGED_RESEND_WEBHOOK_SECRET=whsec_...
    ```
 
    This is not optional in practice: without it complaints and bounces are never recorded, nobody is
    suppressed, and the safety checks in section 4 have nothing to look at.
-5. Restart. Set `MAILFORGE_PLATFORM_ADMINS` and the `PLATFORM_*` email settings too (see
+5. Restart. Set `LOOMAIL_PLATFORM_ADMINS` and the `PLATFORM_*` email settings too (see
    `guide/ADMIN.md`): the safety checks email you and your customers.
 
 One webhook and one signing secret cover every workspace. Unlike a workspace's own provider, the
@@ -69,7 +69,7 @@ count, so this endpoint can never touch a workspace that uses its own provider.
 
 ## 3. What customers do
 
-*Settings > Email sending > Mailforge Sending > Turn on.* They can send at once from the shared
+*Settings > Email sending > Loomail Sending > Turn on.* They can send at once from the shared
 address. To use their own domain they enter it (a subdomain such as `mail.theircompany.com` is
 safest), copy the three DNS records shown into their DNS provider, and press *Check now*. The page
 also re-checks by itself while the domain is verifying, and starts sending from the domain the moment
@@ -87,7 +87,7 @@ The test email in *Settings* works through managed sending too.
 
 Everyone on managed sending shares your account's reputation, and providers judge an account by its
 worst traffic. A workspace mailing a stale list or people who did not ask can get **your** account
-throttled or suspended. So every 5 minutes Mailforge looks at each workspace's last 7 days:
+throttled or suspended. So every 5 minutes Loomail looks at each workspace's last 7 days:
 
 | | Warn the owner | Pause the workspace |
 |---|---|---|
@@ -132,9 +132,9 @@ Adjusting the thresholds means changing the constants in `packages/core/src/mana
 
 | Variable | Meaning |
 |---|---|
-| `MAILFORGE_MANAGED_RESEND_API_KEY` | Your Resend key for customer email. Managed sending is offered only when this is set. |
-| `MAILFORGE_MANAGED_RESEND_WEBHOOK_SECRET` | Signing secret of the Resend webhook to `/webhooks/resend-platform`. |
-| `MAILFORGE_MANAGED_SHARED_FROM` | Verified address used until a workspace verifies its own domain. Optional. |
-| `MAILFORGE_MANAGED_SHARED_DAILY_LIMIT` | Emails per workspace per day on the shared address. Default 100. |
-| `MAILFORGE_MANAGED_SENDING` | `false` switches managed sending off while keeping the key. |
-| `MAILFORGE_MANAGED_RESEND_BASE_URL` | Resend API address. Only for testing against a fake; leave unset. |
+| `LOOMAIL_MANAGED_RESEND_API_KEY` | Your Resend key for customer email. Managed sending is offered only when this is set. |
+| `LOOMAIL_MANAGED_RESEND_WEBHOOK_SECRET` | Signing secret of the Resend webhook to `/webhooks/resend-platform`. |
+| `LOOMAIL_MANAGED_SHARED_FROM` | Verified address used until a workspace verifies its own domain. Optional. |
+| `LOOMAIL_MANAGED_SHARED_DAILY_LIMIT` | Emails per workspace per day on the shared address. Default 100. |
+| `LOOMAIL_MANAGED_SENDING` | `false` switches managed sending off while keeping the key. |
+| `LOOMAIL_MANAGED_RESEND_BASE_URL` | Resend API address. Only for testing against a fake; leave unset. |

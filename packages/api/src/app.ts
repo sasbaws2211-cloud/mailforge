@@ -90,8 +90,8 @@ export interface BuildAppOptions {
    */
   role?: string;
   /**
-   * The Mailforge edition: "community" | "cloud".
-   * Supplied by apps/server from MAILFORGE_EDITION env.
+   * The Loomail edition: "community" | "cloud".
+   * Supplied by apps/server from LOOMAIL_EDITION env.
    * Reported in /health. Defaults to "community".
    */
   edition?: string;
@@ -126,7 +126,7 @@ export interface BuildAppOptions {
    * and add a SPA catch-all fallback for unknown paths.
    *
    * Used in both self-host and Cloud (Slice 2 deliberate reversal: the
-   * container serves the SPA in Cloud via app.mailforge.org passthrough).
+   * container serves the SPA in Cloud via app.loomail.org passthrough).
    * Defaults to true for community edition, false for cloud edition (the
    * cloud default becomes relevant only once brain-cloud ships; until then
    * the container always runs community). Defaults to false in BuildAppOptions
@@ -140,14 +140,14 @@ export interface BuildAppOptions {
    * Explicit path to the dashboard dist directory. When absent the app
    * resolves it relative to this file's own location, which works both from
    * compiled output (dist/app.js) and under tsx --watch (src/app.ts).
-   * Can also be set via MAILFORGE_DASHBOARD_DIST env var.
+   * Can also be set via LOOMAIL_DASHBOARD_DIST env var.
    */
   dashboardDist?: string;
   /**
    * When true, serve the public marketing site (landing, pricing, legal) and
    * self-serve signup, and show the landing page at "/" to visitors who are not
    * signed in. Off by default so self-hosted installs keep "/" as the dashboard.
-   * Set from MAILFORGE_PUBLIC_SITE by apps/server.
+   * Set from LOOMAIL_PUBLIC_SITE by apps/server.
    */
   publicSite?: boolean;
   /**
@@ -194,7 +194,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const app = Fastify({
     logger,
     // Behind a proxy (Render and similar) the client address comes from X-Forwarded-For; see trust-proxy.ts.
-    trustProxy: trustProxyFromEnv(process.env.MAILFORGE_TRUST_PROXY),
+    trustProxy: trustProxyFromEnv(process.env.LOOMAIL_TRUST_PROXY),
     // Destroy keep-alive connections immediately when app.close() is called.
     //
     // Without this, any open keep-alive connection (for example the one held by
@@ -243,8 +243,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(healthRoute, { role, edition });
 
   // /version: always registered, no auth required, no DB access.
-  // Returns build provenance: commit SHA (from MAILFORGE_COMMIT_SHA env), edition,
-  // and image build timestamp (from MAILFORGE_BUILT_AT env). Used by `mailforge doctor`
+  // Returns build provenance: commit SHA (from LOOMAIL_COMMIT_SHA env), edition,
+  // and image build timestamp (from LOOMAIL_BUILT_AT env). Used by `loomail doctor`
   // to compare local HEAD against the running container without SSH access.
   await app.register(versionRoute, { edition });
 
@@ -281,7 +281,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   }
 
   // Public marketing site + self-serve signup: landing at "/", /pricing, /terms,
-  // /privacy, /signup, robots.txt, sitemap.xml. Opt-in (MAILFORGE_PUBLIC_SITE).
+  // /privacy, /signup, robots.txt, sitemap.xml. Opt-in (LOOMAIL_PUBLIC_SITE).
   // Registered before static serving so "/" is answered here, not by the SPA.
   if (opts.publicSite) {
     await app.register(marketingRoutes, { siteUrl: baseUrl });
@@ -378,7 +378,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         await v1.register(accountRoutes, { prefix: "/account", billing: billingRuntime, dashboardUrl, noticeTransports: opts.noticeTransports });
       }
 
-      // admin: platform operator console (404 for everyone not in MAILFORGE_PLATFORM_ADMINS)
+      // admin: platform operator console (404 for everyone not in LOOMAIL_PLATFORM_ADMINS)
       if (opts.db && opts.adminEmbedded !== false) {
         await v1.register(adminRoutes, { prefix: "/admin", billing: billingRuntime, dashboardUrl, noticeTransports: opts.noticeTransports });
       }
@@ -454,7 +454,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         await v1.register(profileRoutes, { prefix: "/profile" });
       }
 
-      // /v1/diagnostics: authenticated env fingerprint check for `mailforge doctor`.
+      // /v1/diagnostics: authenticated env fingerprint check for `loomail doctor`.
       // Session-cookie auth only (same preHandler as all /v1 routes).
       // Returns commit SHA, edition, and key fingerprints from the running container.
       // Never returns secret values.
@@ -483,7 +483,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   }
 
   // --- Static serving + SPA fallback (LAST) ------------------------------------
-  // Registered when opts.serveDashboard is true. In Cloud, app.mailforge.org
+  // Registered when opts.serveDashboard is true. In Cloud, app.loomail.org
   // passthrough routing forwards SPA requests to the container, so the container
   // serves assets just as in self-host mode (Slice 2 deliberate reversal).
   // Must come after all API routes to avoid shadowing them.
@@ -502,7 +502,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
  *
  * Path resolution strategy:
  *   1. opts.dashboardDist if provided
- *   2. MAILFORGE_DASHBOARD_DIST env var if set
+ *   2. LOOMAIL_DASHBOARD_DIST env var if set
  *   3. Resolved relative to this file: works under tsx --watch (src/)
  *      and from compiled output (dist/) because both are one level below
  *      packages/api/ and apps/dashboard/dist is always at a fixed
@@ -510,7 +510,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
  *
  * If the resolved path does not exist on disk, logs a warning and returns
  * without registering anything. This prevents a crash when starting the
- * server before running `pnpm --filter @mailforge/dashboard build`.
+ * server before running `pnpm --filter @loomail/dashboard build`.
  */
 export async function registerSpaServing(
   app: FastifyInstance,
@@ -528,8 +528,8 @@ export async function registerSpaServing(
     app.log.warn(
       `[dashboard] serveDashboard=true but dist directory not found. ` +
       `mechanism=${mechanism} tried=${distPath} -- ` +
-      "If mechanism=auto, verify WORKDIR is the monorepo root or set MAILFORGE_DASHBOARD_DIST explicitly. " +
-      "Run `pnpm --filter @mailforge/dashboard build` to create the dist directory. " +
+      "If mechanism=auto, verify WORKDIR is the monorepo root or set LOOMAIL_DASHBOARD_DIST explicitly. " +
+      "Run `pnpm --filter @loomail/dashboard build` to create the dist directory. " +
       "Static serving and SPA fallback are disabled until the path exists.",
     );
     return;
@@ -597,7 +597,7 @@ export async function registerSpaServing(
  */
 export function resolvedDashboardDist(opts: Pick<BuildAppOptions, "dashboardDist">): { distPath: string; mechanism: "opts" | "env" | "auto" } {
   if (opts.dashboardDist) return { distPath: opts.dashboardDist, mechanism: "opts" };
-  if (process.env.MAILFORGE_DASHBOARD_DIST) return { distPath: process.env.MAILFORGE_DASHBOARD_DIST, mechanism: "env" };
+  if (process.env.LOOMAIL_DASHBOARD_DIST) return { distPath: process.env.LOOMAIL_DASHBOARD_DIST, mechanism: "env" };
 
   // Auto: resolve relative to this file. The layout is fixed:
   //   packages/api/src/app.ts  (tsx)   -> dirname = packages/api/src

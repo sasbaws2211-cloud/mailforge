@@ -1,5 +1,5 @@
 /**
- * Integration tests for the second round of Mailforge AI features:
+ * Integration tests for the second round of Loomail AI features:
  *   - dollar cost: prices set on a provider turn tokens into dollars, recorded per call
  *   - per-workspace allowance override set by a platform admin
  *   - failure-rate health and the email alert to platform admins
@@ -18,7 +18,7 @@ import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
-import { decrypt, parseEncryptionKey } from "@mailforge/adapters";
+import { decrypt, parseEncryptionKey } from "@loomail/adapters";
 import { checkAiAlert, loadAiHealth, buildAiAlertEmail, aiAlertSettings } from "../src/ai/alerts.js";
 import type { PlatformTransport } from "../src/platform-mailer.js";
 
@@ -75,19 +75,19 @@ beforeAll(async () => {
     return;
   }
   await cleanup();
-  process.env.MAILFORGE_PLATFORM_ADMINS = ADMIN_EMAIL;
+  process.env.LOOMAIL_PLATFORM_ADMINS = ADMIN_EMAIL;
   app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000", dashboardUrl: "http://localhost:3000" });
 });
 
 afterEach(async () => {
   if (!dbAvailable) return;
-  delete process.env.MAILFORGE_ENFORCE_PLANS;
+  delete process.env.LOOMAIL_ENFORCE_PLANS;
   await cleanup();
 });
 
 afterAll(async () => {
-  delete process.env.MAILFORGE_PLATFORM_ADMINS;
-  delete process.env.MAILFORGE_ENFORCE_PLANS;
+  delete process.env.LOOMAIL_PLATFORM_ADMINS;
+  delete process.env.LOOMAIL_ENFORCE_PLANS;
   if (savedKey !== undefined) process.env.ENCRYPTION_KEY = savedKey;
   else delete process.env.ENCRYPTION_KEY;
   if (app) await app.close();
@@ -226,7 +226,7 @@ describe("cost of AI calls", () => {
     expect((await usageRows(c))[0]!.cost_micros).toBe(0);
 
     const own = await newTenant();
-    const { encrypt } = await import("@mailforge/adapters");
+    const { encrypt } = await import("@loomail/adapters");
     const env = encrypt(JSON.stringify({ apiKey: "sk-own", baseUrl: stubUrl, model: "own", input_price: 99, output_price: 99 }), parseEncryptionKey(KEY));
     await db.execute(sql`INSERT INTO llm_configs (tenant_id, provider, config, is_active) VALUES (${own.id}::uuid, 'custom', ${env}, true)`);
     await draft(own);
@@ -259,7 +259,7 @@ describe("per-workspace allowance override", () => {
     const admin = await newAdmin();
     const c = await newTenant({ plan: "free" });
     const other = await newTenant({ plan: "free" });
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const r = await set(admin, c, 750_000);
     expect(r.statusCode).toBe(200);
     expect(r.json().workspace.ai_allowance_override).toBe(750_000);
@@ -274,7 +274,7 @@ describe("per-workspace allowance override", () => {
     const c = await newTenant({ plan: "free" });
     await setPlatform(admin);
     await addUsage(c, { tokens: 25_000 }); // over Free's 20,000
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     expect((await draft(c)).statusCode).toBe(402);
     await set(admin, c, 100_000);
     expect((await draft(c)).statusCode).toBe(200);
@@ -284,7 +284,7 @@ describe("per-workspace allowance override", () => {
     const admin = await newAdmin();
     const c = await newTenant({ plan: "growth" });
     await setPlatform(admin);
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await set(admin, c, 0);
     expect((await draft(c)).statusCode).toBe(402);
   });
@@ -292,7 +292,7 @@ describe("per-workspace allowance override", () => {
   it("'unlimited' lifts the cap, and null returns to the plan's", async () => {
     const admin = await newAdmin();
     const c = await newTenant({ plan: "free" });
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await set(admin, c, "unlimited");
     let meter = (await call("GET", "/v1/plan", c.session)).json().meters.ai;
     expect(meter).toMatchObject({ limit: null, state: "unlimited" });
@@ -362,8 +362,8 @@ describe("AI health", () => {
   });
 
   it("thresholds can be tuned from the environment, and bad values are ignored", () => {
-    expect(aiAlertSettings({ MAILFORGE_AI_ALERT_MIN_CALLS: "3", MAILFORGE_AI_ALERT_FAIL_RATE: "0.9" } as NodeJS.ProcessEnv)).toMatchObject({ minCalls: 3, failRate: 0.9 });
-    expect(aiAlertSettings({ MAILFORGE_AI_ALERT_MIN_CALLS: "-4", MAILFORGE_AI_ALERT_FAIL_RATE: "7", MAILFORGE_AI_ALERT_WINDOW_MINUTES: "x" } as NodeJS.ProcessEnv)).toMatchObject({
+    expect(aiAlertSettings({ LOOMAIL_AI_ALERT_MIN_CALLS: "3", LOOMAIL_AI_ALERT_FAIL_RATE: "0.9" } as NodeJS.ProcessEnv)).toMatchObject({ minCalls: 3, failRate: 0.9 });
+    expect(aiAlertSettings({ LOOMAIL_AI_ALERT_MIN_CALLS: "-4", LOOMAIL_AI_ALERT_FAIL_RATE: "7", LOOMAIL_AI_ALERT_WINDOW_MINUTES: "x" } as NodeJS.ProcessEnv)).toMatchObject({
       minCalls: 10,
       failRate: 0.5,
       windowMinutes: 15,
@@ -406,7 +406,7 @@ describe("failure alert email", () => {
     const r = await checkAiAlert(db as never, T0, opts);
     expect(r.sent).toBe(2);
     expect(sent.map((m) => m.to)).toEqual(["a@x.test", "b@x.test"]);
-    expect(sent[0]!.subject).toMatch(/Mailforge AI is failing: 80%/);
+    expect(sent[0]!.subject).toMatch(/Loomail AI is failing: 80%/);
     expect(sent[0]!.bodyText).toMatch(/8 of 10/);
     expect(sent[0]!.bodyText).toMatch(/Test key/);
     expect(sent[0]!.bodyText).toContain("/admin/ai");

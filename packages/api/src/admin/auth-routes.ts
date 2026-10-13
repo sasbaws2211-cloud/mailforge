@@ -22,8 +22,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { and, eq, isNull, lt, gt } from "drizzle-orm";
-import { wrapInShell, wrapInTextShell } from "@mailforge/core";
-import { adminLoginTokens, adminSessions } from "@mailforge/db/schema";
+import { wrapInShell, wrapInTextShell } from "@loomail/core";
+import { adminLoginTokens, adminSessions } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import { getPlatformTransport, type PlatformTransport } from "../platform-mailer.js";
 import { isPlatformAdmin } from "./platform-admins.js";
@@ -56,13 +56,13 @@ function allow(buckets: Map<string, number[]>, key: string, limit: number, now: 
 function buildLoginEmail(link: string): { subject: string; html: string; text: string } {
   const button = "display:inline-block;padding:12px 24px;background:#26282e;color:#f7f7f9;text-decoration:none;border-radius:6px;font-size:14px;font-weight:500;";
   const bodyHtml = [
-    `<p style="margin:0 0 16px 0;">Someone asked to sign in to the Mailforge admin console with this address. Click below to continue:</p>`,
+    `<p style="margin:0 0 16px 0;">Someone asked to sign in to the Loomail admin console with this address. Click below to continue:</p>`,
     `<p style="margin:0 0 24px 0;"><a href="${esc(link)}" style="${button}">Sign in to the admin console</a></p>`,
     `<p style="margin:0 0 8px 0;font-size:13px;color:#585d68;">Or copy this URL:<br/><span style="word-break:break-all;">${esc(link)}</span></p>`,
     `<p style="margin:0;font-size:13px;color:#585d68;">The link works once and expires in ${LOGIN_LINK_MINUTES} minutes. If this was not you, ignore this email: nothing happens unless the link is used.</p>`,
   ].join("\n");
   const bodyText = [
-    "Someone asked to sign in to the Mailforge admin console with this address. Open this URL to continue:",
+    "Someone asked to sign in to the Loomail admin console with this address. Open this URL to continue:",
     "",
     link,
     "",
@@ -70,8 +70,8 @@ function buildLoginEmail(link: string): { subject: string; html: string; text: s
   ].join("\n");
   return {
     subject: "Your admin console sign-in link",
-    html: wrapInShell({ bodyHtml, brand: {}, tenantName: "Mailforge admin", complianceFooterHtml: "" }),
-    text: wrapInTextShell({ bodyText, brand: {}, tenantName: "Mailforge admin", complianceFooterText: "" }),
+    html: wrapInShell({ bodyHtml, brand: {}, tenantName: "Loomail admin", complianceFooterHtml: "" }),
+    text: wrapInTextShell({ bodyText, brand: {}, tenantName: "Loomail admin", complianceFooterText: "" }),
   };
 }
 

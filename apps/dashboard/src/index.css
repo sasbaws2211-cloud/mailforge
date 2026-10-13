@@ -1,11 +1,11 @@
 /**
- * Mailforge design tokens and Tailwind CSS v4 entry point.
+ * Loomail design tokens and Tailwind CSS v4 entry point.
  *
  * Two first-class themes. Light values live in :root, dark values in .dark.
  * The .dark class is set on <html> by the inline script in index.html before
  * first paint (no flash), and by src/lib/theme.ts afterwards. The resolved
  * theme follows the OS unless the user has stored an explicit choice in
- * localStorage under "mailforge-ui-theme".
+ * localStorage under "loomail-ui-theme".
  *
  * SINGLE SOURCE RULE: every color in the app is a var() defined below.
  * The @theme inline block maps Tailwind utility names to those vars.
@@ -26,7 +26,7 @@
   /* Surfaces. Three-step lift in light: sidebar (--bg-sunken) is
    * recessed, canvas (--bg) is the marketing-white, cards (--bg-raised)
    * are pure white. Canvas is lightened to 0.992 to match the landing page's
-   * airy white (mailforge-web/src/styles/global.css) while the sidebar stays
+   * airy white (loomail-web/src/styles/global.css) while the sidebar stays
    * at 0.95 for a crisp split (ratio ~1.13). Cards stay white and rely on
    * the 1px border plus the 0.8% lift off the canvas. */
   --bg:        oklch(0.992 0.002 264);

@@ -60,7 +60,7 @@ export interface BrandSettings {
   logo_url?: string;
   /** Logo height in px. Default 32. Max 64. */
   logo_height?: number;
-  /** Hex color for the accent bar and link color. Default "#b8541a" (Mailforge ember orange). */
+  /** Hex color for the accent bar and link color. Default "#b8541a" (Loomail ember orange). */
   accent_color?: string;
   /** Custom footer text (replaces default "You are receiving this..."). */
   footer_text?: string;

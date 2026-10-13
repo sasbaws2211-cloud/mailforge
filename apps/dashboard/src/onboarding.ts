@@ -46,6 +46,8 @@ export interface OnboardingInfo {
   /** The customer chose "later". */
   dismissed: boolean;
   completed_at: string | null;
+  /** Made-up customers are present (added from the setup panel). */
+  has_demo_data: boolean;
 }
 
 export const ONBOARDING_QUERY_KEY = ["onboarding"] as const;
@@ -82,6 +84,23 @@ export function useDismissOnboarding() {
     mutationFn: (dismissed: boolean) => setDismissed(dismissed),
     onSuccess: () => qc.invalidateQueries({ queryKey: ONBOARDING_QUERY_KEY }),
   });
+}
+
+async function demoData(method: "POST" | "DELETE"): Promise<void> {
+  const res = await apiFetch("/v1/onboarding/demo-data", { method });
+  if (!res.ok) throw new Error(`Could not ${method === "POST" ? "add" : "clear"} the demo data (${res.status})`);
+}
+
+/** Add or clear the made-up customers, then refresh everything that shows contacts. */
+export function useDemoData() {
+  const qc = useQueryClient();
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ONBOARDING_QUERY_KEY });
+    void qc.invalidateQueries();
+  };
+  const add = useMutation({ mutationFn: () => demoData("POST"), onSuccess: refresh });
+  const clear = useMutation({ mutationFn: () => demoData("DELETE"), onSuccess: refresh });
+  return { add, clear };
 }
 
 export type StepState = "done" | "next" | "todo";
@@ -152,7 +171,7 @@ export function waitingNotice(info: Pick<OnboardingInfo, "waiting_emails" | "wai
     case "no_sender":
       return { title, body: "Nothing is set up to send them yet. They will go out as soon as sending is set up.", to: "/settings/transport", cta: "Set up sending" };
     case "needs_domain":
-      return { title, body: "Mailforge Sending needs a verified domain before it can send. Add your domain and the DNS records.", to: "/settings/transport", cta: "Add a domain" };
+      return { title, body: "Loomail Sending needs a verified domain before it can send. Add your domain and the DNS records.", to: "/settings/transport", cta: "Add a domain" };
     case "paused":
       return { title, body: "Sending is paused for this workspace, so nothing is going out. Open sending to see why.", to: "/settings/transport", cta: "See why" };
     case "no_address":
@@ -232,6 +251,30 @@ export function useSendSample() {
       void qc.invalidateQueries({ queryKey: ["ingestion"] });
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Test email (a sample message from the platform sender, before any sender is set up)
+// ---------------------------------------------------------------------------
+
+async function sendTestEmail(): Promise<{ ok: true; sent_to: string }> {
+  const res = await apiFetch("/v1/onboarding/test-email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (res.ok) return res.json() as Promise<{ ok: true; sent_to: string }>;
+  let body: { error?: string } = {};
+  try {
+    body = (await res.json()) as typeof body;
+  } catch {
+    /* no body */
+  }
+  throw new SampleError(body.error ?? `The test email could not be sent (${res.status}).`);
+}
+
+export function useSendTestEmail() {
+  return useMutation({ mutationFn: sendTestEmail });
 }
 
 /** What to tell the customer after a sample: what happened, and what is still missing. */

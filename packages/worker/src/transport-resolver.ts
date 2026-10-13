@@ -1,7 +1,7 @@
 /**
  * Transport resolver - reads a tenant's active transport configuration and
  * delegates credential decryption + adapter construction to the shared
- * resolveTransportAdapter() in @mailforge/adapters.
+ * resolveTransportAdapter() in @loomail/adapters.
  *
  * Called once per drain tick per tenant. No caching - per the recorded
  * [impl] decision: "Transport configuration is read and decrypted per drain
@@ -33,7 +33,7 @@
  */
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { resolveTransportAdapter } from "@mailforge/adapters";
+import { resolveTransportAdapter } from "@loomail/adapters";
 import type { TransportAdapter, TransportResolver } from "./transport.js";
 import { resolveManagedTransport } from "./managed-sending.js";
 
@@ -81,7 +81,7 @@ export function buildTenantTransportResolver(db: Db): TransportResolver {
 
     const row = rows.rows[0]!;
 
-    // Step 2: Resolve adapter via the shared function in @mailforge/adapters.
+    // Step 2: Resolve adapter via the shared function in @loomail/adapters.
     const result = resolveTransportAdapter(row.provider, row.config);
 
     if (!result.ok) {

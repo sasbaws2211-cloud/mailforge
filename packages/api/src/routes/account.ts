@@ -14,7 +14,7 @@
 import { Readable } from "node:stream";
 import type { FastifyPluginAsync } from "fastify";
 import { eq } from "drizzle-orm";
-import { tenants } from "@mailforge/db/schema";
+import { tenants } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import type { BillingRuntime } from "../billing/config.js";
 import { BillingError } from "../billing/service.js";

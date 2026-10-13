@@ -24,23 +24,20 @@ describe("AI allowance per plan", () => {
     }
   });
 
-  it("each plan's feature list states its AI allowance", () => {
-    for (const id of PLAN_IDS) {
-      const cap = PLANS[id].limits.aiTokensPerMonth!;
-      expect(PLANS[id].features.some((f) => f.includes(cap.toLocaleString("en-US")) && f.includes("AI"))).toBe(true);
-    }
+  it("the plan's feature list names the AI flow builder", () => {
+    expect(PLANS.essential.features).toContain("AI flow builder");
   });
 
   it("is enforced as the 'ai' limit kind, and unlimited when enforcement is off", () => {
-    const on = entitlementsFor({ plan: "starter", trialEndsAt: null, enforced: true });
-    expect(limitFor(on, "ai")).toBe(PLANS.starter.limits.aiTokensPerMonth);
-    const off = entitlementsFor({ plan: "starter", trialEndsAt: null, enforced: false });
+    const on = entitlementsFor({ plan: "essential", trialEndsAt: null, enforced: true });
+    expect(limitFor(on, "ai")).toBe(PLANS.essential.limits.aiTokensPerMonth);
+    const off = entitlementsFor({ plan: "essential", trialEndsAt: null, enforced: false });
     expect(limitFor(off, "ai")).toBeNull();
   });
 
   it("assertWithinLimit refuses AI use past the cap with a message that names both ways out", () => {
-    const ent = entitlementsFor({ plan: "free", trialEndsAt: null, enforced: true });
-    const cap = PLANS.free.limits.aiTokensPerMonth!;
+    const ent = entitlementsFor({ plan: "essential", trialEndsAt: null, enforced: true });
+    const cap = PLANS.essential.limits.aiTokensPerMonth!;
     expect(() => assertWithinLimit(ent, "ai", cap - 1, 1)).not.toThrow();
     expect(() => assertWithinLimit(ent, "ai", cap, 1)).toThrow(PlanLimitError);
     try {
@@ -48,10 +45,10 @@ describe("AI allowance per plan", () => {
     } catch (e) {
       const err = e as PlanLimitError;
       expect(err.kind).toBe("ai");
-      expect(err.message).toMatch(/upgrade your plan/i);
+      expect(err.message).toMatch(/buy extra AI credits/i);
       expect(err.message).toMatch(/own AI key/i);
     }
-    expect(planLimitMessage("ai", 1, "Free")).toContain("1 Mailforge AI token this month");
+    expect(planLimitMessage("ai", 1, "Essential")).toContain("1 Loomail AI token this month");
   });
 });
 
@@ -165,11 +162,11 @@ describe("shouldSendAiAlert", () => {
 
 describe("per-workspace AI allowance override", () => {
   const ent = (aiTokensOverride: number | null | undefined, enforced = true) =>
-    entitlementsFor({ plan: "free", trialEndsAt: null, aiTokensOverride, enforced });
+    entitlementsFor({ plan: "essential", trialEndsAt: null, aiTokensOverride, enforced });
 
   it("uses the plan's allowance unless an admin set one", () => {
-    expect(limitFor(ent(undefined), "ai")).toBe(20_000);
-    expect(limitFor(ent(null), "ai")).toBe(20_000);
+    expect(limitFor(ent(undefined), "ai")).toBe(8_000_000);
+    expect(limitFor(ent(null), "ai")).toBe(8_000_000);
   });
 
   it("a number replaces the plan's (more or less, and zero means none)", () => {
@@ -184,7 +181,7 @@ describe("per-workspace AI allowance override", () => {
 
   it("changes only the AI limit, and does nothing when plans are not enforced", () => {
     const e = ent(42);
-    expect(e.limits).toMatchObject({ contacts: 500, emailsPerMonth: 5_000, seats: 1, aiTokensPerMonth: 42 });
+    expect(e.limits).toMatchObject({ contacts: 6_000, emailsPerMonth: 1_000_000, seats: null, aiTokensPerMonth: 42 });
     expect(limitFor(ent(42, false), "ai")).toBeNull();
   });
 });

@@ -1,59 +1,59 @@
 /**
- * Tests for @mailforge/core queue contract.
+ * Tests for @loomail/core queue contract.
  *
  * Covers the queue names and payload types defined in tasks 5, 11, 12b, 14, 15, and 22.
  * Additional queues added in Phase 2 get their own tests in the same commit.
  */
 import { describe, it, expect } from "vitest";
-import { QUEUE, MAILFORGE_CORE_VERSION } from "../src/index.js";
+import { QUEUE, LOOMAIL_CORE_VERSION } from "../src/index.js";
 import type { ScanJobData, CompileJobData, TriggerCheckJobData, DrainJobData, ReapJobData, CounterRolloverJobData, PartitionMaintenanceJobData, ContentGenerationJobData, KbEmbedJobData, QueueName } from "../src/index.js";
 
-describe("@mailforge/core - version", () => {
+describe("@loomail/core - version", () => {
   it("exports version", () => {
-    expect(MAILFORGE_CORE_VERSION).toBe("0.0.0");
+    expect(LOOMAIL_CORE_VERSION).toBe("0.0.0");
   });
 });
 
 describe("QUEUE constants", () => {
-  it("SCAN is mailforge.scan", () => {
-    expect(QUEUE.SCAN).toBe("mailforge.scan");
+  it("SCAN is loomail.scan", () => {
+    expect(QUEUE.SCAN).toBe("loomail.scan");
   });
 
-  it("COMPILE is mailforge.compile", () => {
-    expect(QUEUE.COMPILE).toBe("mailforge.compile");
+  it("COMPILE is loomail.compile", () => {
+    expect(QUEUE.COMPILE).toBe("loomail.compile");
   });
 
-  it("TRIGGER_CHECK is mailforge.trigger-check", () => {
-    expect(QUEUE.TRIGGER_CHECK).toBe("mailforge.trigger-check");
+  it("TRIGGER_CHECK is loomail.trigger-check", () => {
+    expect(QUEUE.TRIGGER_CHECK).toBe("loomail.trigger-check");
   });
 
-  it("DRAIN is mailforge.drain", () => {
-    expect(QUEUE.DRAIN).toBe("mailforge.drain");
+  it("DRAIN is loomail.drain", () => {
+    expect(QUEUE.DRAIN).toBe("loomail.drain");
   });
 
-  it("REAP is mailforge.reap", () => {
-    expect(QUEUE.REAP).toBe("mailforge.reap");
+  it("REAP is loomail.reap", () => {
+    expect(QUEUE.REAP).toBe("loomail.reap");
   });
 
-  it("COUNTER_ROLLOVER is mailforge.counter-rollover", () => {
-    expect(QUEUE.COUNTER_ROLLOVER).toBe("mailforge.counter-rollover");
+  it("COUNTER_ROLLOVER is loomail.counter-rollover", () => {
+    expect(QUEUE.COUNTER_ROLLOVER).toBe("loomail.counter-rollover");
   });
 
-  it("PARTITION_MAINTENANCE is mailforge.partition-maintenance", () => {
-    expect(QUEUE.PARTITION_MAINTENANCE).toBe("mailforge.partition-maintenance");
+  it("PARTITION_MAINTENANCE is loomail.partition-maintenance", () => {
+    expect(QUEUE.PARTITION_MAINTENANCE).toBe("loomail.partition-maintenance");
   });
 
-  it("CONTENT_GENERATION is mailforge.content-generation", () => {
-    expect(QUEUE.CONTENT_GENERATION).toBe("mailforge.content-generation");
+  it("CONTENT_GENERATION is loomail.content-generation", () => {
+    expect(QUEUE.CONTENT_GENERATION).toBe("loomail.content-generation");
   });
 
-  it("KB_EMBED is mailforge.kb-embed", () => {
-    expect(QUEUE.KB_EMBED).toBe("mailforge.kb-embed");
+  it("KB_EMBED is loomail.kb-embed", () => {
+    expect(QUEUE.KB_EMBED).toBe("loomail.kb-embed");
   });
 
-  it("all queue names use the mailforge. prefix", () => {
+  it("all queue names use the loomail. prefix", () => {
     for (const [key, value] of Object.entries(QUEUE)) {
-      expect(value, `QUEUE.${key}`).toMatch(/^mailforge\./);
+      expect(value, `QUEUE.${key}`).toMatch(/^loomail\./);
     }
   });
 

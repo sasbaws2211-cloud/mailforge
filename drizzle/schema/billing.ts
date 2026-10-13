@@ -96,6 +96,8 @@ export const billingCheckouts = pgTable(
     providerPlanId: text("provider_plan_id"),
     customerEmail: text("customer_email").notNull(),
     status: text("status").notNull().default("pending"),
+    /** A top-up bought with "repeat every month": remember the card when it is paid. */
+    repeatMonthly: boolean("repeat_monthly").notNull().default(false),
     checkoutUrl: text("checkout_url"),
     providerTransactionId: text("provider_transaction_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -105,6 +107,79 @@ export const billingCheckouts = pgTable(
     uniqueIndex("uq_billing_checkouts_tx_ref").on(t.txRef),
     index("idx_billing_checkouts_tenant").on(t.tenantId, t.createdAt),
   ],
+);
+
+/**
+ * Prepaid top-ups: extra customer profiles, emails or AI credits bought on top of
+ * the plan. One row per paid checkout (checkout_id is unique, so a payment is
+ * applied once). A top-up raises the limit for the calendar month (UTC) it was
+ * bought in: usage sums the rows whose period_start is that month.
+ *
+ * kind: profiles | emails | ai
+ */
+export const addonPurchases = pgTable(
+  "addon_purchases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id),
+    checkoutId: uuid("checkout_id")
+      .notNull()
+      .references(() => billingCheckouts.id),
+    kind: text("kind").notNull(),
+    packs: integer("packs").notNull(),
+    /** Units added to the limit (packs x pack size). */
+    units: integer("units").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    /** First instant of the calendar month (UTC) this top-up counts for. */
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_addon_purchases_checkout").on(t.checkoutId),
+    index("idx_addon_purchases_tenant_period").on(t.tenantId, t.periodStart),
+  ],
+);
+
+/**
+ * A top-up that renews itself each month (the customer ticked "repeat every month").
+ *
+ * The provider's reusable card authorization is stored encrypted (AES-256-GCM, same key and
+ * envelope as email credentials) and is only ever used to charge THIS workspace's own top-up
+ * at the current price. One row per workspace and kind.
+ *
+ * last_period is the first instant of the calendar month (UTC) the top-up was last in effect
+ * for: the renewal job acts when it is behind the current month. Two failed attempts switch the
+ * renewal off and the owner is emailed.
+ *
+ * kind: profiles | emails | ai
+ */
+export const addonAutoRenewals = pgTable(
+  "addon_auto_renewals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id),
+    kind: text("kind").notNull(),
+    packs: integer("packs").notNull(),
+    /** Encrypted envelope holding the provider's authorization code. */
+    authorizationEnc: text("authorization_enc").notNull(),
+    /** The payer's email, which the provider requires for a charge against the authorization. */
+    payerEmail: text("payer_email").notNull(),
+    cardBrand: text("card_brand"),
+    cardLast4: text("card_last4"),
+    enabled: boolean("enabled").notNull().default(true),
+    lastPeriod: timestamp("last_period", { withTimezone: true }).notNull(),
+    failCount: integer("fail_count").notNull().default(0),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("uq_addon_auto_renewals_tenant_kind").on(t.tenantId, t.kind)],
 );
 
 /**

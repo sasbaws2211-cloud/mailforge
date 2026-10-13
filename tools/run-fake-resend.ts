@@ -4,7 +4,7 @@
  *
  *   npx tsx tools/run-fake-resend.ts
  *
- * Resend API   http://0.0.0.0:4030   (set MAILFORGE_MANAGED_RESEND_BASE_URL to it)
+ * Resend API   http://0.0.0.0:4030   (set LOOMAIL_MANAGED_RESEND_BASE_URL to it)
  * Control      http://0.0.0.0:4031
  *   /state                     domains and emails the fake has seen
  *   /verify?domain=x.example   mark a domain verified (stands in for DNS being set up)

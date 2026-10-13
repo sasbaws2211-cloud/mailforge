@@ -5,25 +5,25 @@
  * this file turns them into the steps a customer sees, which one is next, and how
  * far along they are.
  *
- * The steps are the real preconditions of sending, in the order a person can do
- * them, not a tour of the product:
- *   address  - the postal address CAN-SPAM requires; the drain refuses to send without it
- *   sender   - somewhere for mail to go out from (own provider or Mailforge Sending)
+ * The steps are the real preconditions of sending, ordered so that the customer sees the
+ * product work first and does the slow plumbing (DNS, sender verification) afterwards:
  *   flow     - at least one active flow, or nothing is ever sent
  *   events   - a first event, which creates a contact and starts a flow
+ *   address  - the postal address CAN-SPAM requires; the drain refuses to send without it
+ *   sender   - somewhere for mail to go out from (own provider or Loomail Sending)
  *   email    - a first email actually sent: the moment the product has worked
  *
  * Mirror side: PUBLIC (packages/core is mirrored).
  */
 
-export const ONBOARDING_STEP_IDS = ["workspace", "address", "sender", "flow", "events", "email"] as const;
+export const ONBOARDING_STEP_IDS = ["workspace", "flow", "events", "address", "sender", "email"] as const;
 export type OnboardingStepId = (typeof ONBOARDING_STEP_IDS)[number];
 
 /** What the API observed about a workspace. Every field is a plain yes/no. */
 export interface OnboardingFacts {
   /** A postal address is saved in the workspace settings. */
   hasPostalAddress: boolean;
-  /** The workspace has its own active transport, or Mailforge Sending is switched on. */
+  /** The workspace has its own active transport, or Loomail Sending is switched on. */
   hasSender: boolean;
   /** At least one flow is active. */
   hasActiveFlow: boolean;
@@ -96,9 +96,27 @@ const STEP_DEFS: readonly StepDef[] = [
     done: () => true,
   },
   {
+    id: "flow",
+    title: "Turn on your first flow",
+    description: "A flow decides who gets which email and when. Ten ready-made flows work with no AI setup: pick one and turn it on.",
+    href: "/flows#ready-made",
+    cta: "Choose a flow",
+    minutes: 2,
+    done: (f) => f.hasActiveFlow,
+  },
+  {
+    id: "events",
+    title: "Send your first event",
+    description: "Your product tells Loomail when someone signs up or does something. That is what starts a flow.",
+    href: "/integrate",
+    cta: "Connect your app",
+    minutes: 10,
+    done: (f) => f.hasEvents,
+  },
+  {
     id: "address",
     title: "Add your business address",
-    description: "Law requires a postal address in the footer of every marketing email. Mailforge will not send without one.",
+    description: "Law requires a postal address in the footer of every marketing email. Loomail will not send without one.",
     href: "/settings/postal",
     cta: "Add address",
     minutes: 1,
@@ -107,29 +125,11 @@ const STEP_DEFS: readonly StepDef[] = [
   {
     id: "sender",
     title: "Choose how email is sent",
-    description: "Turn on Mailforge Sending with your own domain, or connect Resend, SES or SMTP.",
+    description: "Last bit of plumbing: turn on Loomail Sending with your own domain, or connect Resend, SES or SMTP. Domain checks can take a while, so start early.",
     href: "/settings/transport",
     cta: "Set up sending",
     minutes: 5,
     done: (f) => f.hasSender,
-  },
-  {
-    id: "flow",
-    title: "Turn on your first flow",
-    description: "A flow decides who gets which email and when. The Welcome flow is ready to use and needs no AI setup.",
-    href: "/home#welcome-flow",
-    cta: "Choose a flow",
-    minutes: 2,
-    done: (f) => f.hasActiveFlow,
-  },
-  {
-    id: "events",
-    title: "Send your first event",
-    description: "Your product tells Mailforge when someone signs up or does something. That is what starts a flow.",
-    href: "/integrate",
-    cta: "Connect your app",
-    minutes: 10,
-    done: (f) => f.hasEvents,
   },
   {
     id: "email",
@@ -232,11 +232,11 @@ export type WaitingReason = "no_sender" | "needs_domain" | "paused" | "no_addres
 
 export interface WaitingInput {
   hasOwnTransport: boolean;
-  /** Mailforge Sending is switched on for the workspace. */
+  /** Loomail Sending is switched on for the workspace. */
   managedEnabled: boolean;
-  /** Mailforge Sending has somewhere to send from: a verified domain, or the operator's shared address. */
+  /** Loomail Sending has somewhere to send from: a verified domain, or the operator's shared address. */
   managedUsable: boolean;
-  /** Mailforge Sending is paused for the workspace. */
+  /** Loomail Sending is paused for the workspace. */
   managedPaused: boolean;
   hasPostalAddress: boolean;
 }

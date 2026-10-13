@@ -8,7 +8,7 @@
  *   PUT  /v1/settings/transport
  *     Write or replace the active transport configuration for the calling tenant.
  *     Encrypts the credential and webhook secret with the envelope from
- *     @mailforge/adapters before storing. Deactivates any previous active row
+ *     @loomail/adapters before storing. Deactivates any previous active row
  *     for this tenant in the same operation (upsert via deactivate + insert).
  *     Body: { provider, from_email, from_name?, api_key, webhook_secret?, daily_limit? }
  *
@@ -70,9 +70,9 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { eq, and, sql } from "drizzle-orm";
-import { encrypt, decrypt, parseEncryptionKey, resolveSmtpTarget, resolveTransportAdapter, smtpHostPolicyFromEnv, SmtpTransportAdapter } from "@mailforge/adapters";
-import { transportConfigs, llmConfigs, tenants } from "@mailforge/db/schema";
-import { wrapInShell, wrapInTextShell, buildShellComplianceHtml, buildShellComplianceText, resolveThrottleConfig, type BrandSettings } from "@mailforge/core";
+import { encrypt, decrypt, parseEncryptionKey, resolveSmtpTarget, resolveTransportAdapter, smtpHostPolicyFromEnv, SmtpTransportAdapter } from "@loomail/adapters";
+import { transportConfigs, llmConfigs, tenants } from "@loomail/db/schema";
+import { wrapInShell, wrapInTextShell, buildShellComplianceHtml, buildShellComplianceText, resolveThrottleConfig, type BrandSettings } from "@loomail/core";
 import {
   KNOWN_LLM_PROVIDERS,
   isKnownLlmProvider,
@@ -82,18 +82,18 @@ import {
 import type { Db } from "../plugins/db.js";
 import { loadAiStatus, type AiStatus } from "../ai/resolver.js";
 import { resolveManagedAdapter } from "../sending/context.js";
-import { PLATFORM_AI_NAME, startOfNextMonthUtc } from "@mailforge/core";
+import { PLATFORM_AI_NAME, startOfNextMonthUtc } from "@loomail/core";
 
 /** The part of an LLM settings answer that says where the workspace's AI comes from. */
 function aiSummary(status: AiStatus, now: Date) {
   const { limit, used, planName } = status.allowance;
   return {
-    // byok = the workspace's own key; platform = Mailforge AI; none = nothing set up
+    // byok = the workspace's own key; platform = Loomail AI; none = nothing set up
     source: status.source,
     name: PLATFORM_AI_NAME,
-    // The operator has paused Mailforge AI for everyone on it. Says nothing about why; own-key workspaces never see this.
+    // The operator has paused Loomail AI for everyone on it. Says nothing about why; own-key workspaces never see this.
     unavailable: status.unavailable,
-    // Tokens spent on Mailforge AI this month against the plan allowance (null limit = no cap).
+    // Tokens spent on Loomail AI this month against the plan allowance (null limit = no cap).
     allowance: {
       plan: planName,
       limit,
@@ -696,7 +696,7 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   /**
    * DELETE /v1/settings/llm
-   * Remove the workspace's own AI key. The workspace then uses Mailforge AI
+   * Remove the workspace's own AI key. The workspace then uses Loomail AI
    * (when the operator has set it up), within its plan's monthly allowance.
    * Idempotent: removing a key that is not there still answers 200.
    * Owner only, like saving one.
@@ -1217,7 +1217,7 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
         const managed = await resolveManagedAdapter(db, tenantId);
         if (!managed) {
           reply.status(400);
-          return { error: "Email sending is not set up. Turn on Mailforge Sending or connect your own email provider in Settings before sending a test email." };
+          return { error: "Email sending is not set up. Turn on Loomail Sending or connect your own email provider in Settings before sending a test email." };
         }
         adapter = managed;
         // The managed adapter fixes the sender itself; these are ignored.
@@ -1273,7 +1273,7 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const testMessageId = `test-${Date.now()}`;
-      const { generateUnsubscribeToken } = await import("@mailforge/adapters");
+      const { generateUnsubscribeToken } = await import("@loomail/adapters");
       const token = generateUnsubscribeToken(tenantId, testMessageId, signingKey);
       const baseUrlForLinks = process.env.BASE_URL ?? `http://localhost:${process.env.PORT ?? 3000}`;
       const oneClickUrl = `${baseUrlForLinks}/unsubscribe/one-click?token=${token}`;

@@ -57,7 +57,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
-import { tenants, kbEntries, users, sessions } from "@mailforge/db/schema";
+import { tenants, kbEntries, users, sessions } from "@loomail/db/schema";
 import { buildApp } from "../../api/src/index.js";
 
 // ---------------------------------------------------------------------------
@@ -68,10 +68,10 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 // ---------------------------------------------------------------------------
-// Mock: @mailforge/adapters decrypt (avoid real crypto in embedding path)
+// Mock: @loomail/adapters decrypt (avoid real crypto in embedding path)
 // ---------------------------------------------------------------------------
 
-vi.mock("@mailforge/adapters", () => ({
+vi.mock("@loomail/adapters", () => ({
   decrypt: vi.fn((_ciphertext: string, _key: unknown) => {
     // Return a minimal valid config JSON; embedding_model is absent so the
     // default "text-embedding-3-small" is used.
@@ -98,8 +98,8 @@ if (!TEST_DB_URL) {
     `[embed-kb.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://loomail:loomail@localhost:5432/loomail\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://loomail:loomail@localhost:5433/loomail'\n`),
   );
 }
 
@@ -161,7 +161,7 @@ beforeAll(async () => {
     .values({ tenantId: testTenantId, userId: uA!.id, expiresAt: new Date(Date.now() + 86400_000) })
     .returning({ id: sessions.id });
   sessionId = sA!.id;
-  cookieA = `mailforge_session=${sessionId}`;
+  cookieA = `loomail_session=${sessionId}`;
 
   // Insert a minimal llm_configs row for testTenantId so the worker finds it.
   // The actual config is intercepted by the mocked decrypt().
@@ -262,7 +262,7 @@ describe("KB API enqueue behaviour and embedding_status (gap 2 + gap 3)", () => 
     });
     expect(res.statusCode).toBe(201);
 
-    const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "mailforge.kb-embed");
+    const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "loomail.kb-embed");
     expect(kbEmbedCalls).toHaveLength(1);
     const [, payload, opts] = kbEmbedCalls[0]!;
     expect(payload).toMatchObject({ kb_entry_id: res.json().id, tenant_id: testTenantId });
@@ -330,7 +330,7 @@ describe("KB API enqueue behaviour and embedding_status (gap 2 + gap 3)", () => 
     expect(patchRes.statusCode).toBe(200);
     expect(patchRes.json().embedding_status).toBe("pending");
 
-    const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "mailforge.kb-embed");
+    const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "loomail.kb-embed");
     expect(kbEmbedCalls).toHaveLength(1);
     const [, payload] = kbEmbedCalls[0]!;
     expect(payload).toMatchObject({ kb_entry_id: id, tenant_id: testTenantId });
@@ -361,7 +361,7 @@ describe("KB API enqueue behaviour and embedding_status (gap 2 + gap 3)", () => 
     // embedding_status must stay 'pending' from the initial create
     expect(patchRes.json().embedding_status).toBe("pending");
 
-    const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "mailforge.kb-embed");
+    const kbEmbedCalls = enqueue.mock.calls.filter(([q]: [string]) => q === "loomail.kb-embed");
     expect(kbEmbedCalls).toHaveLength(0);
   });
 });

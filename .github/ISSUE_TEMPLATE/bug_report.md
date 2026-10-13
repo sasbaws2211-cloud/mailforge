@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in Mailforge
+about: Report a bug in Loomail
 title: "[Bug] "
 labels: bug
 assignees: ""
@@ -26,7 +26,7 @@ What actually happened.
 
 ## Environment
 
-- Mailforge version (tag): 
+- Loomail version (tag): 
 - OS: 
 - Docker version: 
 - Postgres version: 
@@ -44,4 +44,4 @@ Any other context about the problem.
 
 ---
 
-**Note:** Mailforge is maintained by a solo developer. There is no SLA on response times, but clear bug reports with reproduction steps are prioritized and appreciated.
+**Note:** Loomail is maintained by a solo developer. There is no SLA on response times, but clear bug reports with reproduction steps are prioritized and appreciated.

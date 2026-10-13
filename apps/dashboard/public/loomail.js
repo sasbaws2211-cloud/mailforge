@@ -1,12 +1,12 @@
 /*
- * Mailforge browser snippet.
+ * Loomail browser snippet.
  *
  * Dependency-free event sender. Paste-safe: designed to be dropped into a
  * plain HTML page with no build step.
  *
  * Guarantees:
  * - Load order independent. Calls made before this file executes are queued
- *   by the two-line stub (window.mailforge function with a .q array) and
+ *   by the two-line stub (window.loomail function with a .q array) and
  *   replayed here once the real implementation loads.
  * - Survives page unload. Sends use navigator.sendBeacon when available,
  *   falling back to fetch with keepalive.
@@ -17,15 +17,15 @@
  *
  * Usage:
  *   <script>
- *     window.mailforge = window.mailforge || function () {
- *       (window.mailforge.q = window.mailforge.q || []).push(arguments);
+ *     window.loomail = window.loomail || function () {
+ *       (window.loomail.q = window.loomail.q || []).push(arguments);
  *     };
  *   </script>
- *   <script async src="https://YOUR_MAILFORGE_HOST/mailforge.js"></script>
+ *   <script async src="https://YOUR_LOOMAIL_HOST/loomail.js"></script>
  *   <script>
- *     mailforge("init", "mf_pub_...", { endpoint: "https://YOUR_MAILFORGE_HOST" });
- *     mailforge("identify", "user_123", { email: "user@example.com" });
- *     mailforge("track", "signed_up", { plan: "trial" });
+ *     loomail("init", "mf_pub_...", { endpoint: "https://YOUR_LOOMAIL_HOST" });
+ *     loomail("identify", "user_123", { email: "user@example.com" });
+ *     loomail("track", "signed_up", { plan: "trial" });
  *   </script>
  *
  * After identify(userId), track(event, properties) reuses that userId.
@@ -107,15 +107,15 @@
     }
   }
 
-  function mailforge() {
+  function loomail() {
     handle(arguments);
   }
 
   // Replay anything queued by the pre-load stub.
-  var prior = window.mailforge;
+  var prior = window.loomail;
   var queued = prior && prior.q ? prior.q : [];
-  mailforge.q = [];
-  window.mailforge = mailforge;
+  loomail.q = [];
+  window.loomail = loomail;
   for (var i = 0; i < queued.length; i++) {
     handle(queued[i]);
   }

@@ -28,8 +28,8 @@ export default function AdminLoginPage() {
 
   const [expired] = useState(() => {
     try {
-      const flag = sessionStorage.getItem("mailforge-session-expired");
-      if (flag) sessionStorage.removeItem("mailforge-session-expired");
+      const flag = sessionStorage.getItem("loomail-session-expired");
+      if (flag) sessionStorage.removeItem("loomail-session-expired");
       return flag === "1";
     } catch {
       return false;

@@ -1,6 +1,6 @@
 /**
  * Pure rules for how the dashboard talks about AI: where a workspace's AI comes
- * from, how much of its Mailforge AI allowance is used, and what to tell the
+ * from, how much of its Loomail AI allowance is used, and what to tell the
  * customer about it.
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
@@ -39,20 +39,20 @@ export interface AiSummary {
   body: string;
   /** warning when something has stopped or is about to; info otherwise. */
   tone: "success" | "warning" | "info";
-  /** Show the usage bar (Mailforge AI with a cap only). */
+  /** Show the usage bar (Loomail AI with a cap only). */
   showMeter: boolean;
 }
 
 /**
  * What to say about a workspace's AI. The customer never sees which vendor or
- * model sits behind Mailforge AI, only what it costs them in allowance.
+ * model sits behind Loomail AI, only what it costs them in allowance.
  */
 export function describeAi(ai: LlmAiInfo): AiSummary {
   const { source, allowance, name } = ai;
   if (source === "byok") {
     return {
       heading: "Using your own AI key",
-      body: "Drafts, compiles and search run on your provider and are billed by them. No Mailforge AI allowance is used.",
+      body: "Drafts, compiles and search run on your provider and are billed by them. No Loomail AI allowance is used.",
       tone: "success",
       showMeter: false,
     };
@@ -105,6 +105,6 @@ export function describeAi(ai: LlmAiInfo): AiSummary {
 /** A short label for a source, for badges and tables. */
 export const AI_SOURCE_LABEL: Record<AiSource, string> = {
   byok: "Own key",
-  platform: "Mailforge AI",
+  platform: "Loomail AI",
   none: "None",
 };

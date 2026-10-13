@@ -1,20 +1,20 @@
-# Ingestion: Sending Events to Mailforge
+# Ingestion: Sending Events to Loomail
 
-> Audience: anyone integrating a product with a Mailforge install. Everything on
-> this page is copy-paste runnable. Replace `https://YOUR_MAILFORGE_HOST` with
+> Audience: anyone integrating a product with a Loomail install. Everything on
+> this page is copy-paste runnable. Replace `https://YOUR_LOOMAIL_HOST` with
 > your install's base URL (`http://localhost:3000` in the default compose
 > setup) and the example keys with your own.
 
 ## What "Segment-compatible" means here
 
-Mailforge accepts the Segment wire format for `track` and `identify`, single
+Loomail accepts the Segment wire format for `track` and `identify`, single
 calls and `/v1/batch`, with `messageId` (server-side dedup), `timestamp`
 (clamped to +/- 72 hours of server time), `traits` (shallow merge on
 identify; explicit `null` clears a trait), and `properties`.
 
 Not supported: `page`, `screen`, `group`, `alias`, and anonymous-only events
 (every call needs a `userId`; items without one are rejected with a per-item
-error in batches). This is a deliberate scope line: Mailforge acts on product
+error in batches). This is a deliberate scope line: Loomail acts on product
 lifecycle events, not web analytics.
 
 ## Keys
@@ -34,12 +34,12 @@ a key takes effect immediately.
 ## 1. curl
 
 ```bash
-curl -X POST https://YOUR_MAILFORGE_HOST/v1/identify \
+curl -X POST https://YOUR_LOOMAIL_HOST/v1/identify \
   -H "Authorization: Bearer mf_live_YOUR_SECRET_KEY" \
   -H "Content-Type: application/json" \
   -d '{"userId": "user_123", "traits": {"email": "user@example.com", "plan": "trial"}}'
 
-curl -X POST https://YOUR_MAILFORGE_HOST/v1/track \
+curl -X POST https://YOUR_LOOMAIL_HOST/v1/track \
   -H "Authorization: Bearer mf_live_YOUR_SECRET_KEY" \
   -H "Content-Type: application/json" \
   -d '{"userId": "user_123", "event": "signed_up", "messageId": "optional-dedup-key"}'
@@ -47,19 +47,19 @@ curl -X POST https://YOUR_MAILFORGE_HOST/v1/track \
 
 ## 2. The browser snippet
 
-Served by your own install at `/mailforge.js`. Paste before `</body>`:
+Served by your own install at `/loomail.js`. Paste before `</body>`:
 
 ```html
 <script>
-  window.mailforge = window.mailforge || function () {
-    (window.mailforge.q = window.mailforge.q || []).push(arguments);
+  window.loomail = window.loomail || function () {
+    (window.loomail.q = window.loomail.q || []).push(arguments);
   };
 </script>
-<script async src="https://YOUR_MAILFORGE_HOST/mailforge.js"></script>
+<script async src="https://YOUR_LOOMAIL_HOST/loomail.js"></script>
 <script>
-  mailforge("init", "mf_pub_YOUR_PUBLISHABLE_KEY", { endpoint: "https://YOUR_MAILFORGE_HOST" });
-  mailforge("identify", "user_123", { email: "user@example.com" });
-  mailforge("track", "signed_up", { plan: "trial" });
+  loomail("init", "mf_pub_YOUR_PUBLISHABLE_KEY", { endpoint: "https://YOUR_LOOMAIL_HOST" });
+  loomail("identify", "user_123", { email: "user@example.com" });
+  loomail("track", "signed_up", { plan: "trial" });
 </script>
 ```
 
@@ -67,7 +67,7 @@ Properties worth knowing:
 
 - **No build step, no dependencies.** The file is ~2 KB minified (~1 KB gzipped).
 - **Load-order independent.** The two-line stub queues calls made before
-  `mailforge.js` arrives; the snippet replays them when it loads.
+  `loomail.js` arrives; the snippet replays them when it loads.
 - **No CORS preflight.** Payloads go out as `text/plain` with the key in the
   body, which is a CORS-simple request. Nothing triggers an OPTIONS round
   trip. (`Authorization: Bearer` + `application/json` also works and is what
@@ -75,7 +75,7 @@ Properties worth knowing:
 - **Survives page unload.** Sends via `navigator.sendBeacon`, falling back
   to `fetch(..., { keepalive: true })`.
 - **Never breaks your page.** Every code path is wrapped; a down or
-  misconfigured Mailforge is invisible to your users.
+  misconfigured Loomail is invisible to your users.
 - After `identify(userId)`, `track(event, properties)` reuses that user.
   The explicit form `track(userId, event, properties)` also works.
 
@@ -92,11 +92,11 @@ abuse friction, not the trust boundary.
 Any HTTP client works. Node 18+:
 
 ```javascript
-const MAILFORGE = "https://YOUR_MAILFORGE_HOST";
+const LOOMAIL = "https://YOUR_LOOMAIL_HOST";
 const KEY = "mf_live_YOUR_SECRET_KEY";
 
 async function track(userId, event, properties = {}) {
-  const res = await fetch(`${MAILFORGE}/v1/track`, {
+  const res = await fetch(`${LOOMAIL}/v1/track`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${KEY}`,
@@ -104,7 +104,7 @@ async function track(userId, event, properties = {}) {
     },
     body: JSON.stringify({ userId, event, properties }),
   });
-  if (!res.ok) throw new Error(`mailforge track failed: ${res.status}`);
+  if (!res.ok) throw new Error(`loomail track failed: ${res.status}`);
 }
 
 await track("user_123", "invoice_paid", { amount: 4900 });
@@ -114,21 +114,21 @@ The same shape works from Python (`requests`), Go (`net/http`), Ruby, or
 anything else that can POST JSON with a header. We deliberately do not ship
 first-party server SDKs yet: the endpoint is the SDK.
 
-## 4. Pointing an existing Segment SDK at Mailforge
+## 4. Pointing an existing Segment SDK at Loomail
 
 If you already have Segment instrumentation, you can dual-send or migrate
 without touching your event calls.
 
 **@segment/analytics-node** posts batches to `{host}{path}` and
 authenticates with the write key as the HTTP Basic username, both of which
-Mailforge understands:
+Loomail understands:
 
 ```javascript
 const { Analytics } = require("@segment/analytics-node");
 
 const analytics = new Analytics({
   writeKey: "mf_live_YOUR_SECRET_KEY",
-  host: "https://YOUR_MAILFORGE_HOST",  // path defaults to /v1/batch
+  host: "https://YOUR_LOOMAIL_HOST",  // path defaults to /v1/batch
   flushAt: 20,                        // batching works; /v1/batch is supported
   maxRetries: 3,
 });
@@ -154,7 +154,7 @@ settings port them.
 
 ## 5. Google Tag Manager
 
-GTM has no native Mailforge destination; use a Custom HTML tag:
+GTM has no native Loomail destination; use a Custom HTML tag:
 
 1. In GTM: **Tags > New > Custom HTML**.
 2. Paste the browser snippet from section 2 (the whole block, stubs and
@@ -162,27 +162,27 @@ GTM has no native Mailforge destination; use a Custom HTML tag:
 3. Trigger: **All Pages** (plus any event triggers you want `track` calls
    bound to).
 4. For event-level calls, fire additional Custom HTML tags on your GTM
-   events, e.g. `<script>mailforge("track", "signup_completed")</script>`.
+   events, e.g. `<script>loomail("track", "signup_completed")</script>`.
 
-Because the snippet queues calls made before `mailforge.js` loads, GTM's async
+Because the snippet queues calls made before `loomail.js` loads, GTM's async
 container loading cannot race it.
 
 ## 6. Dual-sending alongside an existing Segment install
 
-Keep Segment exactly as it is and add Mailforge as a second sink:
+Keep Segment exactly as it is and add Loomail as a second sink:
 
 - **Server-side:** instantiate a second `Analytics` client pointed at
-  Mailforge (section 4) next to your existing one, and call both. Or add a
+  Loomail (section 4) next to your existing one, and call both. Or add a
   three-line forwarder in front of your current `analytics.track` call
   sites using the plain-fetch helper in section 3.
-- **Browser:** load the Mailforge snippet (section 2) next to Segment's
+- **Browser:** load the Loomail snippet (section 2) next to Segment's
   analytics.js and call both. There is no conflict; the two libraries share
   nothing.
 - **Via Segment itself:** in the Segment dashboard, add a **Webhook
   destination** on your source pointing at
-  `https://YOUR_MAILFORGE_HOST/v1/batch` with the secret key as an
+  `https://YOUR_LOOMAIL_HOST/v1/batch` with the secret key as an
   `Authorization: Bearer` header. Every event Segment receives is forwarded
-  to Mailforge. (This is the zero-code option; it depends on Segment's webhook
+  to Loomail. (This is the zero-code option; it depends on Segment's webhook
   retry behavior for delivery guarantees.)
 
 ## What the AI sees of the data you send

@@ -1,13 +1,13 @@
 # Billing with Paystack
 
-Mailforge sells Starter, Growth and Scale as card subscriptions, monthly or yearly,
-through Paystack. Billing is **off** until you configure it; until then the Plan
+Loomail sells one plan, Essential ($100 a month), as a card subscription, plus prepaid
+extra-usage packs (profiles, emails, AI credits), through Paystack. Billing is **off** until you configure it; until then the Plan
 page shows a "Contact us" link instead of an upgrade button.
 
 ## 1. Set up Paystack (you do this, with your own account)
 
 1. Create a Paystack account and, for real money, finish business verification.
-2. Check which **currencies** your account can charge (Settings, Preferences). Mailforge
+2. Check which **currencies** your account can charge (Settings, Preferences). Loomail
    prices are in **USD**, and a charge must be in the same currency as its plan. If your
    account can only charge your local currency (NGN, GHS, ...), read "Currency" under
    Known limits before you go further.
@@ -15,7 +15,7 @@ page shows a "Contact us" link instead of an upgrade button.
    Settings, API Keys & Webhooks.
 4. On the same page, set the **Test Webhook URL** to
    `https://<your-domain>/webhooks/paystack`. (There is no separate webhook secret:
-   Paystack signs every webhook with your secret key, and Mailforge checks that signature.)
+   Paystack signs every webhook with your secret key, and Loomail checks that signature.)
 5. Put the key in `.env` yourself:
 
 ```
@@ -40,11 +40,12 @@ test-mode run: pay, renewal, cancel.
 Prices are set in US dollars (`packages/core/src/plans.ts`). With `PAYSTACK_CURRENCY` other than USD,
 the charge is **the USD price times `PAYSTACK_USD_RATE`, rounded up to a whole unit**:
 
-| Plan | USD | GHS at 15.5 |
+| Item | USD | GHS at 15.5 |
 |---|---|---|
-| Starter | $19 / mo, $190 / yr | GHS 295 / mo, 2,945 / yr |
-| Growth | $49 / mo, $490 / yr | GHS 760 / mo, 7,595 / yr |
-| Scale | $129 / mo, $1,290 / yr | GHS 2,000 / mo, 19,995 / yr |
+| Essential | $100 / mo | GHS 1,550 / mo |
+| 1,000 extra profiles | $9 | GHS 140 |
+| 100,000 extra emails | $12 | GHS 186 |
+| 100,000 extra AI credits | $10 | GHS 155 |
 
 - **The rate is a fixed number you set**, not a live feed. A customer's price is locked when they
   subscribe: Paystack plans are created per amount, so changing the rate gives new subscribers
@@ -74,7 +75,7 @@ the charge is **the USD price times `PAYSTACK_USD_RATE`, rounded up to a whole u
   as before. That page and the webhook keep working either way.
 - **Test data:** Paystack refuses some email domains (for example `.example`) with "Invalid
   Email Address Passed"; use a normal-looking address when testing.
-- **Money is only believed after Mailforge asks Paystack.** A webhook or browser
+- **Money is only believed after Loomail asks Paystack.** A webhook or browser
   redirect just triggers a lookup of the transaction by its reference; the plan changes
   only if the lookup says `success`, in the right currency, for at least the expected
   amount (amounts are compared in minor units, so 4900 means 49.00).
@@ -86,11 +87,11 @@ the charge is **the USD price times `PAYSTACK_USD_RATE`, rounded up to a whole u
 - **Changing plan** starts the new plan at once with a new charge, and cancels the old
   subscription. There is no proration: the unused part of the old period is not refunded.
 - **Cancel** stops future charges; the plan stays until the end of the paid period,
-  then the workspace falls to Free. Nothing is deleted. A customer who cancels from
+  then the workspace has no plan: sending and new profiles pause. Nothing is deleted. A customer who cancels from
   Paystack's own emails, or you from the Paystack dashboard, is picked up through the
   `subscription.disable` and `subscription.not_renew` webhooks.
 - **Failed renewal**: the plan keeps working for 3 days (grace) and the Plan page warns.
-  After that the workspace is on Free until paid. Paystack retries failed charges itself.
+  After that the workspace has no plan until paid. Paystack retries failed charges itself.
 - A workspace whose plan was set by hand (no payment record) never lapses.
 - A charge arriving after the customer cancelled is recorded and flagged
   "refund may be due" in `billing_events` for you to handle in Paystack.

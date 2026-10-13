@@ -51,7 +51,11 @@ describe("computeOnboarding", () => {
     expect(p.total).toBe(6);
     expect(p.percent).toBe(17);
     expect(p.complete).toBe(false);
-    expect(p.next).toBe("address");
+    expect(p.next).toBe("flow");
+  });
+
+  it("puts the slow plumbing (address, sender) after the steps that show the product working", () => {
+    expect([...ONBOARDING_STEP_IDS]).toEqual(["workspace", "flow", "events", "address", "sender", "email"]);
   });
 
   it("maps each fact to exactly its own step", () => {
@@ -64,7 +68,7 @@ describe("computeOnboarding", () => {
 
   it("points next at the first step still open, even when a later one is done", () => {
     const p = computeOnboarding({ ...NOTHING, hasPostalAddress: true, hasEvents: true });
-    expect(p.next).toBe("sender");
+    expect(p.next).toBe("flow");
     expect(p.done).toBe(3);
   });
 

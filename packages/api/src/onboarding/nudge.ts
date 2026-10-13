@@ -17,7 +17,7 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { sql } from "drizzle-orm";
-import { nudgeDue, plansEnforced, trialDaysLeft } from "@mailforge/core";
+import { nudgeDue, plansEnforced, trialDaysLeft } from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 import { getPlatformTransport, type PlatformTransport } from "../platform-mailer.js";
 import { buildNudgeEmail, type TransactionalEmailInput } from "../transactional-email.js";
@@ -143,7 +143,7 @@ async function nudgeOne(
       total: snap.progress.total,
       nth: prevCount + 1,
       trialDaysLeft: trialEnds ? trialDaysLeft(trialEnds, now) : null,
-      supportEmail: process.env.MAILFORGE_SUPPORT_EMAIL?.trim() || null,
+      supportEmail: process.env.LOOMAIL_SUPPORT_EMAIL?.trim() || null,
     });
 
     let delivered = 0;

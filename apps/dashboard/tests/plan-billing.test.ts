@@ -62,7 +62,9 @@ function paying(over: {
       contacts: ok(100, 10000),
       emails: { ...ok(10, 100000), resets_at: "2026-11-01T00:00:00.000Z" },
       seats: { ...ok(1, 10), members: 1, pending_invites: 0 },
+      ai: { ...ok(10, 1000000), source: "platform", resets_at: "2026-11-01T00:00:00.000Z" },
     },
+    addons: [],
     plans: CATALOG,
   };
 }
@@ -104,7 +106,7 @@ describe("payment overdue (inside the grace period)", () => {
   });
 });
 
-describe("subscription lapsed (now on Free)", () => {
+describe("subscription lapsed (now no plan)", () => {
   const lapsed = () =>
     paying({
       effective: { id: "free", name: "Free" },
@@ -113,24 +115,26 @@ describe("subscription lapsed (now on Free)", () => {
       subscription: sub({ status: "ended", current_period_end: new Date(Date.now() - 10 * DAY).toISOString() }),
     });
 
-  it("explains the downgrade, names the old plan, reassures about data, and cannot be dismissed", () => {
+  it("says the subscription ended, reassures about data, offers to subscribe, and cannot be dismissed", () => {
     const n = planNotice(lapsed())!;
-    expect(n.id).toBe("subscription-lapsed");
-    expect(n.tone).toBe("warning");
+    expect(n.id).toBe("no-plan");
+    expect(n.tone).toBe("danger");
     expect(n.dismissible).toBe(false);
-    expect(n.message).toContain("Growth subscription has ended");
-    expect(n.message).toContain("now on the Free plan");
+    expect(n.message).toContain("subscription has ended");
     expect(n.message).toContain("Your data is safe");
+    expect(n.action).toEqual({ kind: "subscribe" });
   });
 
   it("turns the attention dot on", () => {
     expect(planNeedsAttention(lapsed())).toBe(true);
   });
 
-  it("outranks an ended trial", () => {
+  it("an ended trial reads as a trial that ended, not a subscription", () => {
     const p = lapsed();
     p.trial.expired = true;
-    expect(planNotice(p)!.id).toBe("subscription-lapsed");
+    const n = planNotice(p)!;
+    expect(n.id).toBe("no-plan");
+    expect(n.message).toContain("free trial has ended");
   });
 });
 
@@ -175,7 +179,7 @@ describe("storedPlanName", () => {
 
 describe("billingReturnNotice", () => {
   it("has wording for each state Paystack can send the customer back with", () => {
-    expect(billingReturnNotice("success")).toMatchObject({ tone: "success", message: "Payment confirmed. Your plan is active." });
+    expect(billingReturnNotice("success")).toMatchObject({ tone: "success", message: "Payment confirmed. Your plan and usage are updated." });
     expect(billingReturnNotice("pending")!.message).toContain("confirming your payment");
     expect(billingReturnNotice("failed")!.message).toContain("you have not been charged");
     expect(billingReturnNotice("cancelled")!.message).toContain("Nothing was charged");

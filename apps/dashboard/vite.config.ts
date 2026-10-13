@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
 /**
- * Vite configuration for the Mailforge dashboard SPA.
+ * Vite configuration for the Loomail dashboard SPA.
  *
  * Dev server proxy: forwards API calls to the Fastify backend so the
  * browser always operates on a single origin (no CORS needed).

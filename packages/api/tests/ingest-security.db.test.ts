@@ -22,7 +22,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import { buildApp, hashApiKey } from "../src/index.js";
-import { tenants, apiKeys } from "@mailforge/db/schema";
+import { tenants, apiKeys } from "@loomail/db/schema";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) {

@@ -17,15 +17,17 @@
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Plus, Workflow } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useFlows, FLOWS_QUERY_KEY } from "../flows.js";
-import { updateFlow, type Flow, type FlowApiError } from "../api.js";
-import { SetupChecklist, useSetupChecklist } from "../components/setup-checklist.js";
+import { useFlows, useFlowStats, FLOWS_QUERY_KEY } from "../flows.js";
+import { updateFlow, type Flow, type FlowApiError, type FlowHealthState, type FlowStats } from "../api.js";
+import { SetupStrip } from "../components/setup-strip.js";
+import { StarterPacks } from "../components/starter-packs.js";
 import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/page-header.js";
+import { LibraryGallery } from "../components/library-gallery.js";
 import { Badge, type BadgeVariant } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { Skeleton } from "../components/ui/skeleton.js";
@@ -63,6 +65,37 @@ function statusVariant(status: Flow["status"]): BadgeVariant {
   }
 }
 
+/** Health -> badge label and tone. Draft and paused flows just show their status. */
+function healthBadge(h: FlowHealthState): { label: string; variant: BadgeVariant } | null {
+  switch (h) {
+    case "ok": return { label: "Sending", variant: "success" };
+    case "waiting": return { label: "Waiting for first match", variant: "neutral" };
+    case "quiet": return { label: "Quiet", variant: "warning" };
+    case "attention": return { label: "Needs attention", variant: "danger" };
+    default: return null;
+  }
+}
+
+function pct(n: number, of: number): string {
+  return of > 0 ? `${Math.round((n / of) * 100)}%` : "-";
+}
+
+/** The "last 30 days" cell: sent, open rate, and people currently in the flow. */
+function StatsCell({ stats }: { stats: FlowStats | undefined }) {
+  if (!stats) return <span className="text-muted-foreground">-</span>;
+  if (stats.sent_30d === 0 && stats.in_flow === 0) {
+    return <span className="text-muted-foreground">No sends yet</span>;
+  }
+  return (
+    <div className="text-[13px] leading-snug">
+      <span className="font-medium text-foreground tabular-nums">{stats.sent_30d.toLocaleString("en-US")}</span>
+      <span className="text-muted-foreground"> sent</span>
+      <span className="text-muted-foreground"> &middot; {pct(stats.opened_30d, stats.sent_30d)} opened</span>
+      {stats.in_flow > 0 && <span className="block text-muted-foreground">{stats.in_flow.toLocaleString("en-US")} in the flow now</span>}
+    </div>
+  );
+}
+
 /** compile_status -> badge tone. */
 function compileVariant(cs: Flow["compile_status"]): BadgeVariant {
   switch (cs) {
@@ -84,14 +117,14 @@ function FlowsHeader({ count }: { count: number | null }) {
       title="Flows"
       subtitle={
         count === null || count === 0
-          ? "AI-drafted email sequences, compiled from plain language."
+          ? "Email sequences that run themselves. Pick a ready-made one, or write your own with AI."
           : `${count} ${count === 1 ? "flow" : "flows"}`
       }
       actions={
         <Link to="/flows/new">
           <Button size="sm">
             <Plus size={16} strokeWidth={1.5} />
-            New flow
+            Write a flow with AI
           </Button>
         </Link>
       }
@@ -129,13 +162,13 @@ function FlowsEmptyState() {
   return (
     <EmptyState
       icon={Workflow}
-      title="No flows yet"
-      description="Flows define the automated email sequences your contacts receive based on lifecycle transitions and events. Create your first flow to start engaging your users."
+      title="Or write your own"
+      description="Describe what should happen in plain language and Loomail's AI turns it into a flow you can read before it goes live. Needs an AI provider (Settings, AI provider)."
       action={
         <Link to="/flows/new">
           <Button size="sm">
             <Plus size={16} strokeWidth={1.5} />
-            New flow
+            Write a flow with AI
           </Button>
         </Link>
       }
@@ -217,28 +250,23 @@ export default function FlowsPage() {
     },
   });
 
+  const statsQuery = useFlowStats();
   const flows = data?.flows ?? [];
   const count = isLoading || isError ? null : flows.length;
-  const checklist = useSetupChecklist(count);
+  const location = useLocation();
+
+  // Arriving from setup ("Choose a flow") lands on the gallery, not the top of the page.
+  useEffect(() => {
+    if (location.hash === "#ready-made" && !isLoading) {
+      document.getElementById("ready-made")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [location.hash, isLoading, flows.length]);
 
   return (
     <div className="mx-auto max-w-6xl">
       <FlowsHeader count={count} />
 
-      {checklist.visible && (
-        <SetupChecklist
-          setup={checklist.setup}
-          flowCount={count}
-          onDismiss={checklist.dismiss}
-        />
-      )}
-      {checklist.showReopen && (
-        <div className="mb-6 -mt-4 flex justify-end">
-          <Button variant="ghost" size="sm" onClick={checklist.reopen}>
-            Finish setup
-          </Button>
-        </div>
-      )}
+      <SetupStrip />
 
       {actionError && (
         <div
@@ -258,7 +286,27 @@ export default function FlowsPage() {
         />
       )}
 
-      {!isLoading && !isError && flows.length === 0 && <FlowsEmptyState />}
+      {!isLoading && !isError && flows.length === 0 && (
+        <>
+          <LibraryGallery />
+          <FlowsEmptyState />
+          <div className="mt-8">
+            <StarterPacks />
+          </div>
+        </>
+      )}
+
+      {!isLoading && !isError && flows.length > 0 && (
+        <details className="mb-6 rounded-lg border border-border bg-card px-4 py-3" open={location.hash === "#ready-made"}>
+          <summary className="cursor-pointer select-none text-[14px] font-medium text-foreground">
+            Add a ready-made flow
+          </summary>
+          <div className="mt-4">
+            <LibraryGallery compact />
+            <StarterPacks />
+          </div>
+        </details>
+      )}
 
       {!isLoading && !isError && flows.length > 0 && (
         <Table>
@@ -267,9 +315,8 @@ export default function FlowsPage() {
               <TableHead>Name</TableHead>
               <TableHead>Content</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Compiled</TableHead>
+              <TableHead>Last 30 days</TableHead>
               <TableHead>Trigger</TableHead>
-              <TableHead>Approval</TableHead>
               <TableHead className="text-right">Created</TableHead>
               <TableHead>
                 <span className="sr-only">Actions</span>
@@ -293,6 +340,9 @@ export default function FlowsPage() {
                     >
                       {flow.name}
                     </Link>
+                    {flow.approval_mode === "require" && flow.status === "active" && (
+                      <span className="block text-[12px] font-normal text-muted-foreground">Emails wait for your approval</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Badge variant={contentInfo(flow).variant}>
@@ -300,23 +350,33 @@ export default function FlowsPage() {
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={statusVariant(flow.status)}>
-                      {flow.status}
-                    </Badge>
+                    <div className="flex flex-col items-start gap-1">
+                      {(() => {
+                        const stats = statsQuery.data?.[flow.id];
+                        const hb = flow.status === "active" && stats ? healthBadge(stats.health) : null;
+                        return (
+                          <>
+                            <Badge variant={hb ? hb.variant : statusVariant(flow.status)}>
+                              {hb ? hb.label : flow.status}
+                            </Badge>
+                            {stats?.health_note && flow.status === "active" && (
+                              <span className="max-w-[16rem] text-[12px] leading-snug text-muted-foreground">{stats.health_note}</span>
+                            )}
+                          </>
+                        );
+                      })()}
+                      {flow.compile_status !== "ready" && (
+                        <Badge variant={compileVariant(flow.compile_status)} pulse={flow.compile_status === "pending"}>
+                          {flow.compile_status === "failed" ? "plan failed" : flow.compile_status === "pending" ? "compiling" : "not compiled"}
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>
-                    <Badge
-                      variant={compileVariant(flow.compile_status)}
-                      pulse={flow.compile_status === "pending"}
-                    >
-                      {flow.compile_status ?? "not compiled"}
-                    </Badge>
+                    <StatsCell stats={statsQuery.data?.[flow.id]} />
                   </TableCell>
                   <TableCell className="font-mono text-[13px] text-muted-foreground">
                     {flow.trigger_type}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {flow.approval_mode}
                   </TableCell>
                   <TableCell className="text-right font-mono text-[13px] text-muted-foreground">
                     {formatDate(flow.created_at)}

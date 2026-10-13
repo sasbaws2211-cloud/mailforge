@@ -1,9 +1,9 @@
 /**
  * Which AI serves a workspace, for the API.
  *
- * The rule is the same one the worker applies (see @mailforge/db/llm and
+ * The rule is the same one the worker applies (see @loomail/db/llm and
  * packages/worker/src/provider-resolver.ts): the workspace's own key if it has
- * one, otherwise the operator's providers (Mailforge AI), which are capped per
+ * one, otherwise the operator's providers (Loomail AI), which are capped per
  * plan per calendar month when plan enforcement is on. The few queries are
  * duplicated between the API and the worker on purpose, like the plan checks.
  *
@@ -20,21 +20,21 @@ import {
   NO_AI_PROVIDER_MESSAGE,
   type LlmFeature,
   type LlmSource,
-} from "@mailforge/core";
-import { loadAiBudgetStatus, loadLlmCandidates, platformTokensUsed, recordLlmUsage } from "@mailforge/db/llm";
-import { decrypt, parseEncryptionKey } from "@mailforge/adapters";
-import { buildProviderFromCandidates, type LlmProvider } from "@mailforge/brain-oss";
+} from "@loomail/core";
+import { loadAiBudgetStatus, loadLlmCandidates, platformTokensUsed, recordLlmUsage } from "@loomail/db/llm";
+import { decrypt, parseEncryptionKey } from "@loomail/adapters";
+import { buildProviderFromCandidates, type LlmProvider } from "@loomail/brain-oss";
 import type { Db } from "../plugins/db.js";
 import { loadEntitlements } from "../plan/usage.js";
 
 export interface AiStatus {
-  /** byok: the workspace's own key. platform: Mailforge AI. none: nothing is set up. */
+  /** byok: the workspace's own key. platform: Loomail AI. none: nothing is set up. */
   source: LlmSource | "none";
-  /** Mailforge AI tokens this month; only meaningful when source is platform. */
+  /** Loomail AI tokens this month; only meaningful when source is platform. */
   allowance: { limit: number | null; used: number; planName: string };
-  /** True when the workspace is on Mailforge AI and has used up the month's tokens. */
+  /** True when the workspace is on Loomail AI and has used up the month's tokens. */
   spent: boolean;
-  /** The operator's monthly dollar budget is used up: Mailforge AI is paused for everyone on it. */
+  /** The operator's monthly dollar budget is used up: Loomail AI is paused for everyone on it. */
   unavailable: boolean;
 }
 

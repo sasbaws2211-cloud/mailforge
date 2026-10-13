@@ -12,7 +12,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { tenantTablesInDeleteOrder } from "@mailforge/db/purge";
+import { tenantTablesInDeleteOrder } from "@loomail/db/purge";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
 import { biggestDrop, goalCounts, loadOnboardingFunnel, parseFunnelWindow, type FunnelStageId } from "../src/admin/funnel.js";
@@ -106,14 +106,14 @@ beforeAll(async () => {
     return;
   }
   await cleanup();
-  process.env.MAILFORGE_PLATFORM_ADMINS = ADMIN_EMAIL;
+  process.env.LOOMAIL_PLATFORM_ADMINS = ADMIN_EMAIL;
   app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000", dashboardUrl: "http://localhost:3000" });
 });
 afterEach(async () => {
   if (dbAvailable) await cleanup();
 });
 afterAll(async () => {
-  delete process.env.MAILFORGE_PLATFORM_ADMINS;
+  delete process.env.LOOMAIL_PLATFORM_ADMINS;
   if (app) await app.close();
   await pool?.end();
 });

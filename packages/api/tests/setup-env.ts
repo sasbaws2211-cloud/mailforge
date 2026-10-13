@@ -12,17 +12,17 @@
 for (const key of Object.keys(process.env)) {
   if (key.startsWith("PLATFORM_")) delete process.env[key];
 }
-delete process.env.MAILFORGE_PUBLIC_SITE;
-delete process.env.MAILFORGE_ENFORCE_PLANS;
+delete process.env.LOOMAIL_PUBLIC_SITE;
+delete process.env.LOOMAIL_ENFORCE_PLANS;
 // Operator identity shown on the public legal pages; a deployed .env sets real values.
-delete process.env.MAILFORGE_SUPPORT_EMAIL;
-delete process.env.MAILFORGE_LEGAL_NAME;
+delete process.env.LOOMAIL_SUPPORT_EMAIL;
+delete process.env.LOOMAIL_LEGAL_NAME;
 for (const key of Object.keys(process.env)) {
   if (key.startsWith("PAYSTACK_")) delete process.env[key];
 }
 
 // SMTP destination rules are read from the environment; tests that need them set them.
-for (const k of ["MAILFORGE_RESTRICT_SMTP_HOSTS", "MAILFORGE_SMTP_ALLOWED_HOSTS", "MAILFORGE_SMTP_ALLOWED_PORTS"]) delete process.env[k];
+for (const k of ["LOOMAIL_RESTRICT_SMTP_HOSTS", "LOOMAIL_SMTP_ALLOWED_HOSTS", "LOOMAIL_SMTP_ALLOWED_PORTS"]) delete process.env[k];
 
 // Managed sending is configured by the operator; tests that need it set these themselves.
-for (const k of Object.keys(process.env)) if (k.startsWith("MAILFORGE_MANAGED_")) delete process.env[k];
+for (const k of Object.keys(process.env)) if (k.startsWith("LOOMAIL_MANAGED_")) delete process.env[k];

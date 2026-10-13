@@ -12,7 +12,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { BILLING_GRACE_DAYS } from "@mailforge/core";
+import { BILLING_GRACE_DAYS } from "@loomail/core";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
 
@@ -109,7 +109,7 @@ describe("entitlements follow the paid-through date", () => {
 
   it("a paid plan within its paid period (or its grace period) keeps the paid limits; past grace it is Free", async () => {
     if (!dbAvailable) return;
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     try {
       // 600 contacts is over Free (500) but well inside Growth (10,000).
       const current = await newTenant("growth", { paidThrough: new Date(Date.now() + 10 * DAY), contacts: 600 });
@@ -123,29 +123,29 @@ describe("entitlements follow the paid-through date", () => {
       expect(res.statusCode).toBe(402);
       expect(res.json()).toMatchObject({ plan: "free", limit: 500 });
     } finally {
-      delete process.env.MAILFORGE_ENFORCE_PLANS;
+      delete process.env.LOOMAIL_ENFORCE_PLANS;
     }
   });
 
   it("a plan granted by hand (no paid-through date) never lapses", async () => {
     if (!dbAvailable) return;
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     try {
       const t = await newTenant("scale", { paidThrough: null, contacts: 600 });
       expect((await track(await withKey(t), "n1")).statusCode).toBe(200);
       expect((await planOf(t)).plan.id).toBe("scale");
     } finally {
-      delete process.env.MAILFORGE_ENFORCE_PLANS;
+      delete process.env.LOOMAIL_ENFORCE_PLANS;
     }
   });
 
   it("the public unsubscribe page shows the Free credit line once a plan has lapsed, and not while paid", async () => {
     if (!dbAvailable) return;
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     process.env.UNSUBSCRIBE_SIGNING_KEY = "billing-test-signing-key-do-not-use";
-    process.env.MAILFORGE_SITE_URL = "https://mailforge.example";
+    process.env.LOOMAIL_SITE_URL = "https://loomail.example";
     try {
-      const { generateUnsubscribeToken } = await import("@mailforge/adapters");
+      const { generateUnsubscribeToken } = await import("@loomail/adapters");
       const page = async (t: Tenant) => {
         const token = generateUnsubscribeToken(t.id, "00000000-0000-4000-8000-000000000000", process.env.UNSUBSCRIBE_SIGNING_KEY!);
         return (await app.inject({ method: "GET", url: `/unsubscribe?token=${encodeURIComponent(token)}` })).body;
@@ -155,9 +155,9 @@ describe("entitlements follow the paid-through date", () => {
       expect(await page(paid)).not.toContain('class="credit"');
       expect(await page(lapsed)).toContain('class="credit"');
     } finally {
-      delete process.env.MAILFORGE_ENFORCE_PLANS;
+      delete process.env.LOOMAIL_ENFORCE_PLANS;
       delete process.env.UNSUBSCRIBE_SIGNING_KEY;
-      delete process.env.MAILFORGE_SITE_URL;
+      delete process.env.LOOMAIL_SITE_URL;
     }
   });
 });

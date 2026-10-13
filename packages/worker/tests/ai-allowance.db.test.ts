@@ -1,5 +1,5 @@
 /**
- * Integration tests for the worker side of Mailforge AI: provider resolution
+ * Integration tests for the worker side of Loomail AI: provider resolution
  * (own key, else the operator's primary then fallback), per-call metering, the
  * monthly plan allowance, and "hold, never drop" when the allowance runs out.
  *
@@ -12,8 +12,8 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
-import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
-import { loadLlmCandidates } from "@mailforge/db/llm";
+import { encrypt, parseEncryptionKey } from "@loomail/adapters";
+import { loadLlmCandidates } from "@loomail/db/llm";
 import { resolveTenantProvider } from "../src/provider-resolver.js";
 import { aiAllowanceFor, tenantsOutOfAiAllowance } from "../src/ai-gate.js";
 import { resolveEmbeddingProvider, recordEmbeddingUsage } from "../src/embedding-client.js";
@@ -79,7 +79,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
   if (!dbAvailable) return;
-  delete process.env.MAILFORGE_ENFORCE_PLANS;
+  delete process.env.LOOMAIL_ENFORCE_PLANS;
   revoked.clear();
   stubKeys.length = 0;
   await cleanup();
@@ -217,8 +217,8 @@ describe("the monthly allowance", () => {
     expect((await resolveTenantProvider(db, t, "content")).ok).toBe(true);
   });
 
-  it("blocks Mailforge AI exactly when the plan's tokens are used up, with a retry-later code", async () => {
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+  it("blocks Loomail AI exactly when the plan's tokens are used up, with a retry-later code", async () => {
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
     const t = await newTenant("free"); // 20,000 a month
     await addUsage(t, 19_999);
@@ -234,7 +234,7 @@ describe("the monthly allowance", () => {
   });
 
   it("a bigger plan has a bigger allowance", async () => {
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
     const t = await newTenant("growth");
     await addUsage(t, 1_000_000);
@@ -243,7 +243,7 @@ describe("the monthly allowance", () => {
   });
 
   it("a workspace on its own key is never blocked", async () => {
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const t = await newTenant("free");
     await addUsage(t, 20_000_000);
     await setOwn(t, "sk-own");
@@ -251,7 +251,7 @@ describe("the monthly allowance", () => {
   });
 
   it("only this month's platform tokens count", async () => {
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
     const t = await newTenant("free");
     await db.execute(sql`INSERT INTO llm_usage (tenant_id, feature, source, provider, total_tokens, created_at) VALUES (${t}::uuid, 'content', 'platform', 'custom', 99999, now() - interval '40 days')`);
@@ -259,8 +259,8 @@ describe("the monthly allowance", () => {
     expect(await aiAllowanceFor(db, t, NOW)).toMatchObject({ used: 0 });
   });
 
-  it("tenantsOutOfAiAllowance names only workspaces on Mailforge AI that have used it up", async () => {
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+  it("tenantsOutOfAiAllowance names only workspaces on Loomail AI that have used it up", async () => {
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
     const spent = await newTenant("free");
     const fine = await newTenant("free");
@@ -270,7 +270,7 @@ describe("the monthly allowance", () => {
     await addUsage(own, 20_000);
     await setOwn(own, "sk-own");
     expect([...(await tenantsOutOfAiAllowance(db, [spent, fine, own], NOW))]).toEqual([spent]);
-    delete process.env.MAILFORGE_ENFORCE_PLANS;
+    delete process.env.LOOMAIL_ENFORCE_PLANS;
     expect((await tenantsOutOfAiAllowance(db, [spent, fine, own], NOW)).size).toBe(0);
   });
 });
@@ -297,7 +297,7 @@ describe("content generation holds, never drops, when the allowance is spent", (
   const status = async (id: string) => (await q<{ status: string }>(sql`SELECT status FROM lifecycle_messages WHERE id = ${id}::uuid`))[0]!.status;
 
   it("a tick leaves a spent workspace's queued messages exactly as they were", async () => {
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
     const t = await newTenant("free");
     await addUsage(t, 20_000);
@@ -309,7 +309,7 @@ describe("content generation holds, never drops, when the allowance is spent", (
   });
 
   it("when the allowance runs out mid-batch the message goes back to the queue, not to 'failed'", async () => {
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
     const t = await newTenant("free");
     await addUsage(t, 20_000);
@@ -329,7 +329,7 @@ describe("content generation holds, never drops, when the allowance is spent", (
   });
 
   it("a workspace with tokens left is still processed alongside a spent one", async () => {
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
     const spent = await newTenant("free");
     const fine = await newTenant("free");
@@ -415,7 +415,7 @@ describe("a hand-set allowance is what the worker enforces", () => {
   }
 
   it("raises the cap above the plan's, lowers it below, or lifts it", async () => {
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
     const t = await newTenant("free"); // plan allowance 20,000
     await addUsage(t, 25_000);
@@ -433,7 +433,7 @@ describe("a hand-set allowance is what the worker enforces", () => {
   });
 
   it("content generation is held or released by the override", async () => {
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
     const t = await newTenant("free");
     await addUsage(t, 20_000);
@@ -455,7 +455,7 @@ describe("the operator dollar budget, as the worker sees it", () => {
     await db.execute(sql`DELETE FROM platform_settings`);
   });
 
-  it("stops resolving Mailforge AI once the month's spend reaches the budget, with a retry-later code and no money in the message", async () => {
+  it("stops resolving Loomail AI once the month's spend reaches the budget, with a retry-later code and no money in the message", async () => {
     await setPlatform("primary", "sk-pri");
     const t = await newTenant();
     await budget(5);

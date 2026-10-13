@@ -26,7 +26,7 @@ import {
   ResendTransportAdapter,
   SmtpTransportAdapter,
   type TransportAdapter,
-} from "@mailforge/adapters";
+} from "@loomail/adapters";
 
 export interface PlatformTransport {
   adapter: TransportAdapter;

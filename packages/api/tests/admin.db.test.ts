@@ -99,7 +99,7 @@ beforeAll(async () => {
     return;
   }
   await cleanup();
-  process.env.MAILFORGE_PLATFORM_ADMINS = ` ${ADMIN_EMAIL.toUpperCase()} , someone-else@admin-t.example`;
+  process.env.LOOMAIL_PLATFORM_ADMINS = ` ${ADMIN_EMAIL.toUpperCase()} , someone-else@admin-t.example`;
   const opts = { logger: false as const, db, baseUrl: "http://localhost:3000", dashboardUrl: "http://localhost:3000" };
   app = await buildApp(opts);
 });
@@ -111,7 +111,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  delete process.env.MAILFORGE_PLATFORM_ADMINS;
+  delete process.env.LOOMAIL_PLATFORM_ADMINS;
   if (app) await app.close();
   if (lockClient) {
     await lockClient.query("SELECT pg_advisory_unlock(7770001)");
@@ -129,11 +129,11 @@ async function withAdmin(): Promise<Tenant> {
 
 describe("who is a platform admin", () => {
   it("is read from the env list: trimmed, case-insensitive, nobody by default", () => {
-    expect(platformAdminEmails({ MAILFORGE_PLATFORM_ADMINS: " A@x.com ,b@y.com,, " } as NodeJS.ProcessEnv)).toEqual(["a@x.com", "b@y.com"]);
-    expect(isPlatformAdmin("A@X.COM", { MAILFORGE_PLATFORM_ADMINS: "a@x.com" } as NodeJS.ProcessEnv)).toBe(true);
+    expect(platformAdminEmails({ LOOMAIL_PLATFORM_ADMINS: " A@x.com ,b@y.com,, " } as NodeJS.ProcessEnv)).toEqual(["a@x.com", "b@y.com"]);
+    expect(isPlatformAdmin("A@X.COM", { LOOMAIL_PLATFORM_ADMINS: "a@x.com" } as NodeJS.ProcessEnv)).toBe(true);
     expect(isPlatformAdmin("a@x.com", {} as NodeJS.ProcessEnv)).toBe(false);
-    expect(isPlatformAdmin(null, { MAILFORGE_PLATFORM_ADMINS: "a@x.com" } as NodeJS.ProcessEnv)).toBe(false);
-    expect(isPlatformAdmin("", { MAILFORGE_PLATFORM_ADMINS: "" } as NodeJS.ProcessEnv)).toBe(false);
+    expect(isPlatformAdmin(null, { LOOMAIL_PLATFORM_ADMINS: "a@x.com" } as NodeJS.ProcessEnv)).toBe(false);
+    expect(isPlatformAdmin("", { LOOMAIL_PLATFORM_ADMINS: "" } as NodeJS.ProcessEnv)).toBe(false);
   });
 });
 
@@ -170,12 +170,12 @@ describe("access", () => {
   it("when no admins are configured, nobody gets in, not even an address that looks like an admin", async () => {
     if (!dbAvailable) return;
     const t = await newTenant({ email: ADMIN_EMAIL });
-    const saved = process.env.MAILFORGE_PLATFORM_ADMINS;
-    delete process.env.MAILFORGE_PLATFORM_ADMINS;
+    const saved = process.env.LOOMAIL_PLATFORM_ADMINS;
+    delete process.env.LOOMAIL_PLATFORM_ADMINS;
     try {
       expect((await get(t, "/v1/admin/overview")).statusCode).toBe(404);
     } finally {
-      process.env.MAILFORGE_PLATFORM_ADMINS = saved;
+      process.env.LOOMAIL_PLATFORM_ADMINS = saved;
     }
   });
 

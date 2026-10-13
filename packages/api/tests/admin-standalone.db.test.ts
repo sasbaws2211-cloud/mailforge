@@ -12,8 +12,8 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@mailforge/adapters";
-import { tenantTablesInDeleteOrder } from "@mailforge/db/purge";
+import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@loomail/adapters";
+import { tenantTablesInDeleteOrder } from "@loomail/db/purge";
 import { buildAdminApp, buildApp, ADMIN_SESSION_COOKIE } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
 
@@ -118,9 +118,9 @@ beforeAll(async () => {
     return;
   }
   await cleanup();
-  process.env.MAILFORGE_PLATFORM_ADMINS = ` ${OPS.toUpperCase()} , ${OTHER_ADMIN}`;
-  const sender = { adapter: loginBox, fromEmail: "no-reply@platform.example", fromName: "Mailforge" };
-  const noticeSender = { adapter: noticeBox, fromEmail: "no-reply@platform.example", fromName: "Mailforge" };
+  process.env.LOOMAIL_PLATFORM_ADMINS = ` ${OPS.toUpperCase()} , ${OTHER_ADMIN}`;
+  const sender = { adapter: loginBox, fromEmail: "no-reply@platform.example", fromName: "Loomail" };
+  const noticeSender = { adapter: noticeBox, fromEmail: "no-reply@platform.example", fromName: "Loomail" };
   const quiet = { logger: false as const };
   // The main instance has generous limits so tests can sign in as often as they like; adminStrict has the real ones.
   admin = await buildAdminApp({ ...quiet, db: db as never, adminUrl: ADMIN_URL, customerUrl: CUSTOMER_URL, loginTransports: [sender], noticeTransports: [noticeSender], loginLimits: { perEmail: 10_000, perIp: 10_000 } });
@@ -142,7 +142,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  delete process.env.MAILFORGE_PLATFORM_ADMINS;
+  delete process.env.LOOMAIL_PLATFORM_ADMINS;
   for (const a of [admin, adminHttps, adminStrict, customer, embedded]) if (a) await a.close();
   if (lockClient) {
     await lockClient.query("SELECT pg_advisory_unlock(7770001)");
@@ -311,12 +311,12 @@ describe("using the link", () => {
     if (!dbAvailable) return;
     await login(OTHER_ADMIN);
     const token = lastToken();
-    const saved = process.env.MAILFORGE_PLATFORM_ADMINS;
-    process.env.MAILFORGE_PLATFORM_ADMINS = OPS;
+    const saved = process.env.LOOMAIL_PLATFORM_ADMINS;
+    process.env.LOOMAIL_PLATFORM_ADMINS = OPS;
     try {
       expect((await confirm(token)).headers.location).toBe("/login?error=invalid_link");
     } finally {
-      process.env.MAILFORGE_PLATFORM_ADMINS = saved;
+      process.env.LOOMAIL_PLATFORM_ADMINS = saved;
     }
   });
 });
@@ -345,13 +345,13 @@ describe("the session", () => {
     if (!dbAvailable) return;
     const s = await signIn(OTHER_ADMIN);
     expect((await api(admin, "GET", "/v1/admin/overview", s)).statusCode).toBe(200);
-    const saved = process.env.MAILFORGE_PLATFORM_ADMINS;
-    process.env.MAILFORGE_PLATFORM_ADMINS = OPS;
+    const saved = process.env.LOOMAIL_PLATFORM_ADMINS;
+    process.env.LOOMAIL_PLATFORM_ADMINS = OPS;
     try {
       expect((await api(admin, "GET", "/v1/admin/overview", s)).statusCode).toBe(401);
       expect((await q<{ n: string }>(sql`SELECT count(*)::text AS n FROM admin_sessions WHERE id = ${s}::uuid`))[0]!.n).toBe("0");
     } finally {
-      process.env.MAILFORGE_PLATFORM_ADMINS = saved;
+      process.env.LOOMAIL_PLATFORM_ADMINS = saved;
     }
   });
 
@@ -497,7 +497,7 @@ describe("protections specific to a cookie-authenticated console", () => {
     if (!dbAvailable) return;
     const res = await admin.inject({ method: "GET", url: "/health" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, service: "mailforge-admin" });
+    expect(res.json()).toEqual({ ok: true, service: "loomail-admin" });
   });
 });
 

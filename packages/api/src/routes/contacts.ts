@@ -44,7 +44,7 @@ import {
   RETENTION_TENURE_BUCKETS,
   RETENTION_RECENCY_BUCKETS,
   type LifecycleConfig,
-} from "@mailforge/core";
+} from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
-import { managedSendingConfigFromEnv } from "@mailforge/core";
+import { managedSendingConfigFromEnv } from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 import { domainsClientFromEnv } from "./context.js";
 import { sweepDomainCleanup } from "./domains.js";

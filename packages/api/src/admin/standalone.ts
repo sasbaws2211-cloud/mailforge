@@ -6,7 +6,7 @@
  * customer app and nothing else:
  *
  *   - its own sign-in: an emailed link, available only to addresses listed in
- *     MAILFORGE_PLATFORM_ADMINS (see admin/auth-routes.ts). Admins are people, not
+ *     LOOMAIL_PLATFORM_ADMINS (see admin/auth-routes.ts). Admins are people, not
  *     members of any workspace, so they need no workspace account.
  *   - its own session cookie (a different name from the customer app, so the two
  *     can never be mistaken for each other even on the same host name).
@@ -32,7 +32,7 @@ import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import type { FastifyInstance, FastifyServerOptions } from "fastify";
 import { eq } from "drizzle-orm";
-import { adminSessions } from "@mailforge/db/schema";
+import { adminSessions } from "@loomail/db/schema";
 import { registerDbPlugin, type Db } from "../plugins/db.js";
 import type { PlatformTransport } from "../platform-mailer.js";
 import { resolveBillingRuntime, type BillingRuntime } from "../billing/config.js";
@@ -65,7 +65,7 @@ export interface AdminAppOptions {
   /** Sign-in link requests allowed per hour. Defaults to 5 per address and 20 per client. */
   loginLimits?: { perEmail: number; perIp: number };
   /**
-   * Passkeys: off | optional | enforced. Defaults to MAILFORGE_ADMIN_PASSKEYS, then optional.
+   * Passkeys: off | optional | enforced. Defaults to LOOMAIL_ADMIN_PASSKEYS, then optional.
    * rpId is the site name passkeys are bound to (default: the host of adminUrl); changing it
    * later invalidates every registered passkey.
    */
@@ -93,7 +93,7 @@ export async function buildAdminApp(opts: AdminAppOptions): Promise<FastifyInsta
 
   const logger =
     opts.logger !== undefined ? opts.logger : process.env.NODE_ENV === "test" ? false : { level: process.env.LOG_LEVEL ?? "info" };
-  const app = Fastify({ logger, forceCloseConnections: true, trustProxy: trustProxyFromEnv(process.env.MAILFORGE_TRUST_PROXY) });
+  const app = Fastify({ logger, forceCloseConnections: true, trustProxy: trustProxyFromEnv(process.env.LOOMAIL_TRUST_PROXY) });
 
   await app.register(cookie);
   installDbErrorHandler(app);
@@ -141,10 +141,10 @@ export async function buildAdminApp(opts: AdminAppOptions): Promise<FastifyInsta
     request.adminSession = { id: s.id, email: s.email, method: (s.method === "passkey" ? "passkey" : "email") as SignInMethod };
   });
 
-  app.get("/health", async () => ({ ok: true, service: "mailforge-admin" }));
+  app.get("/health", async () => ({ ok: true, service: "loomail-admin" }));
 
-  const passkeyMode = opts.passkeys?.mode ?? passkeyModeFromEnv(process.env.MAILFORGE_ADMIN_PASSKEYS);
-  const rpId = opts.passkeys?.rpId || process.env.MAILFORGE_ADMIN_RP_ID || new URL(adminUrl).hostname;
+  const passkeyMode = opts.passkeys?.mode ?? passkeyModeFromEnv(process.env.LOOMAIL_ADMIN_PASSKEYS);
+  const rpId = opts.passkeys?.rpId || process.env.LOOMAIL_ADMIN_RP_ID || new URL(adminUrl).hostname;
 
   await registerAdminAuthRoutes(app, { db: opts.db, adminUrl, secureCookies, loginTransports: opts.loginTransports, loginLimits: opts.loginLimits, customerUrl: opts.customerUrl, passkeyMode });
   await registerAdminPasskeyRoutes(app, { db: opts.db, adminOrigin, rpId, mode: passkeyMode, secureCookies });

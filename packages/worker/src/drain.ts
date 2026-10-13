@@ -71,7 +71,7 @@ import {
   flows,
   lifecycleMessages,
   suppressions,
-} from "@mailforge/db/schema";
+} from "@loomail/db/schema";
 import {
   evaluateThrottleGate,
   resolveThrottleConfig,
@@ -83,7 +83,7 @@ import {
   type PoweredBy,
   type ThrottleGateInput,
   type ThrottleVerdict,
-} from "@mailforge/core";
+} from "@loomail/core";
 import type { TransportAdapter, TransportResolver } from "./transport.js";
 import { managedDailyLimit } from "./managed-sending.js";
 import { loadTenantEntitlements, poweredByFor, remainingMonthlyEmails, suspendedTenantIds } from "./plan-gate.js";

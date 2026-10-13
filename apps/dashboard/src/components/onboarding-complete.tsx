@@ -9,7 +9,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, PartyPopper, X } from "lucide-react";
 
-const CLOSED_KEY = "mailforge-onboarding-complete-closed";
+const CLOSED_KEY = "loomail-onboarding-complete-closed";
 
 function readClosed(): boolean {
   try {

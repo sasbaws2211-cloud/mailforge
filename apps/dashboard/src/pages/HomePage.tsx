@@ -533,15 +533,15 @@ function ResourcesSection() {
           icon={BookOpen}
           title="Documentation"
           description="Setup guides, the flow model, ingestion API reference, and self-hosting notes."
-          href="https://mailforge.org/docs"
-          linkLabel="mailforge.org/docs"
+          href="https://loomail.org/docs"
+          linkLabel="loomail.org/docs"
         />
         <ResourceCard
           icon={MessagesSquare}
           title="Ask the community"
-          description="Questions, flow recipes, and deliverability war stories from other Mailforge operators."
-          href="https://mailforge.org/community"
-          linkLabel="mailforge.org/community"
+          description="Questions, flow recipes, and deliverability war stories from other Loomail operators."
+          href="https://loomail.org/community"
+          linkLabel="loomail.org/community"
         />
         <div className="rounded-lg border border-border bg-card p-5 sm:col-span-2 lg:col-span-1">
           <span className="flex h-9 w-9 items-center justify-center rounded-md bg-accent-soft text-accent-text">
@@ -964,7 +964,7 @@ function SetupHome({
       key: "ingest-key",
       done: checks.ingestKey,
       label: "Ingest API key",
-      reason: "Your app uses this key to send events to Mailforge. No key means no data.",
+      reason: "Your app uses this key to send events to Loomail. No key means no data.",
       fixLocation: "integrate",
       linkTo: "/integrate",
       linkLabel: "Create in Integrate",
@@ -1100,7 +1100,7 @@ function HostedOnboardingHome({
  * Dismissed state: stored in localStorage so it persists across refreshes.
  * A user who knows what they are doing should never be blocked by setup.
  */
-const SETUP_DISMISSED_KEY = "mailforge-home-setup-dismissed";
+const SETUP_DISMISSED_KEY = "loomail-home-setup-dismissed";
 
 function readSetupDismissed(): boolean {
   try {

@@ -1,6 +1,6 @@
 # Platform admin console
 
-The Admin console is for whoever runs the Mailforge service. It shows every customer
+The Admin console is for whoever runs the Loomail service. It shows every customer
 workspace and lets you fix plans, give trials, and switch a workspace off. Ordinary
 customers never see it.
 
@@ -9,7 +9,7 @@ customers never see it.
 Set the email addresses of the people who run the service in `.env`:
 
 ```
-MAILFORGE_PLATFORM_ADMINS=you@yourdomain.com,partner@yourdomain.com
+LOOMAIL_PLATFORM_ADMINS=you@yourdomain.com,partner@yourdomain.com
 ```
 
 Restart the app. Those people then see an **Admin** item at the bottom of the sidebar,
@@ -50,8 +50,8 @@ log with your email, in the same step as the change.
 
 | Action | What it does |
 | --- | --- |
-| Set plan by hand | Puts the workspace on Free, Starter, Growth or Scale with no expiry, replacing any trial. For design partners, goodwill, fixing a mistake. |
-| Give a trial | Growth trial ending the chosen number of days from now (1 to 90). Revives an ended trial. |
+| Set plan by hand | Puts the workspace on Essential, or on no plan, with no expiry, replacing any trial. For design partners, goodwill, fixing a mistake. |
+| Give a trial | Essential trial ending the chosen number of days from now (1 to 90). Revives an ended trial. |
 | Cancel subscription | Stops future charges. The plan runs to the end of the paid period. Needs billing configured. Nothing is refunded here: do refunds in Paystack. |
 | Suspend / Reinstate | Suspend switches the workspace off. Reinstate switches it back on. |
 
@@ -99,14 +99,14 @@ docker compose -f docker-compose.yml -f docker-compose.admin.yml up -d
 or set these in `.env` and restart:
 
 ```
-MAILFORGE_ADMIN_PORT=3011
-MAILFORGE_ADMIN_URL=https://admin.yourdomain.com
-MAILFORGE_PLATFORM_ADMINS=you@yourdomain.com
+LOOMAIL_ADMIN_PORT=3011
+LOOMAIL_ADMIN_URL=https://admin.yourdomain.com
+LOOMAIL_PLATFORM_ADMINS=you@yourdomain.com
 ```
 
 The console now listens on its own port (3011 locally: http://localhost:3011). The server
-refuses to start if `MAILFORGE_ADMIN_PORT` is not a port or equals `PORT`.
-`MAILFORGE_ADMIN_HOST` (default: the same as `HOST`) lets you bind it to `127.0.0.1` so only
+refuses to start if `LOOMAIL_ADMIN_PORT` is not a port or equals `PORT`.
+`LOOMAIL_ADMIN_HOST` (default: the same as `HOST`) lets you bind it to `127.0.0.1` so only
 your reverse proxy can reach it.
 
 ### What changes
@@ -114,17 +114,17 @@ your reverse proxy can reach it.
 - **The customer app serves no admin routes.** `/v1/admin/*` is gone from it (404), and it
   never tells its dashboard that a user is an administrator, so there is no Admin item.
 - **Its own sign-in, for administrators only.** Enter an address on the console's login
-  page; if it is on `MAILFORGE_PLATFORM_ADMINS` a link is emailed from the platform sender
+  page; if it is on `LOOMAIL_PLATFORM_ADMINS` a link is emailed from the platform sender
   (`PLATFORM_*` settings, so these must be configured; locally Mailpit catches it). The
   answer is the same for any address, so the page cannot be used to find administrators.
   An administrator needs no workspace account.
 - **The link** works once, lasts 15 minutes, is stored only as a hash, and opening it does
   nothing until you press the button (mail scanners that fetch links cannot sign anyone in).
 - **The session** lasts 8 hours, lives in a database table, and is checked against the
-  administrator list on every request: remove someone from `MAILFORGE_PLATFORM_ADMINS`,
+  administrator list on every request: remove someone from `LOOMAIL_PLATFORM_ADMINS`,
   restart, and their next request signs them out. Signing out deletes the session.
-- **Separate cookies.** The console uses `mailforge_admin_session` (HttpOnly, SameSite=Lax,
-  and Secure when `MAILFORGE_ADMIN_URL` is https). A customer session does nothing on the
+- **Separate cookies.** The console uses `loomail_admin_session` (HttpOnly, SameSite=Lax,
+  and Secure when `LOOMAIL_ADMIN_URL` is https). A customer session does nothing on the
   console and a console session does nothing on the customer app.
 - **Cross-site requests are refused:** any write whose `Origin` is not the console's own
   gets a 403. The page cannot be framed, is marked noindex, and API responses are never cached.
@@ -151,7 +151,7 @@ nginx: `proxy_pass http://127.0.0.1:3011;` with the usual `Host` and `X-Forwarde
 inside a `server` block for `admin.yourdomain.com` with a TLS certificate (and `allow`/`deny`
 lines for an IP allow-list).
 
-Checklist: `MAILFORGE_ADMIN_URL` is the public https address; the platform email sender
+Checklist: `LOOMAIL_ADMIN_URL` is the public https address; the platform email sender
 works (try signing in); the admin port is not published to the internet directly; your own
 mailbox is protected, because **whoever can read an administrator's email can sign in as
 them**. For stronger protection put the console behind an IP allow-list, a VPN or an
@@ -169,8 +169,8 @@ involved**: the browser and operating system do their part, and an open-source l
 no authenticator maker has to vouch for anything.
 
 ```
-MAILFORGE_ADMIN_PASSKEYS=optional     # off | optional (default) | enforced
-MAILFORGE_ADMIN_RP_ID=                # leave unset; see "The address matters" below
+LOOMAIL_ADMIN_PASSKEYS=optional     # off | optional (default) | enforced
+LOOMAIL_ADMIN_RP_ID=                # leave unset; see "The address matters" below
 ```
 
 - **optional**: passkeys and emailed links both work. Signed in by email, the console shows
@@ -190,10 +190,10 @@ MAILFORGE_ADMIN_RP_ID=                # leave unset; see "The address matters" b
   refused). Many phones always report 0, which is accepted.
 
 **The address matters.** A passkey is bound to the console's host name (taken from
-`MAILFORGE_ADMIN_URL`; `localhost` in development, which browsers treat as secure). **If you
+`LOOMAIL_ADMIN_URL`; `localhost` in development, which browsers treat as secure). **If you
 later move the console to a different host name, every registered passkey stops working**
 and each administrator must register again. Choose the final address before rolling
-passkeys out. `MAILFORGE_ADMIN_RP_ID` can bind them to a parent name instead (for example
+passkeys out. `LOOMAIL_ADMIN_RP_ID` can bind them to a parent name instead (for example
 `yourdomain.com`, which then also covers `admin.yourdomain.com`), but set it before anyone
 registers and never change it. In production passkeys need https.
 
@@ -207,7 +207,7 @@ docker compose exec -T -e ADMIN_EMAIL=you@yourdomain.com app sh -c \
 
 It removes that administrator's passkeys and sessions (`ADMIN_EMAIL=all` for everyone).
 They can then sign in by emailed link and register a new passkey. In an emergency, set
-`MAILFORGE_ADMIN_PASSKEYS=optional` and restart to allow links again.
+`LOOMAIL_ADMIN_PASSKEYS=optional` and restart to allow links again.
 
 ### Known limits of the separate deployment
 
@@ -219,19 +219,19 @@ They can then sign in by emailed link and register a new passkey. In an emergenc
   in a separate container or machine would need the server to be started with only that
   role; that is not built.
 
-## 7. AI providers (Mailforge AI)
+## 7. AI providers (Loomail AI)
 
 Flow compiling, AI drafting, email generation and knowledge-base search all need an AI
 provider. A workspace gets one of two ways:
 
 | | Whose key | Counted against the plan? | Who pays the AI bill |
 |---|---|---|---|
-| **Mailforge AI** | yours, set once here | yes, per month | you |
+| **Loomail AI** | yours, set once here | yes, per month | you |
 | **Their own key** | the customer's, saved in Settings | never | the customer |
 
 A workspace that has saved its own key always uses it, and only it: if that key breaks, the
 customer is told so rather than silently moving onto your bill. A workspace with no key uses
-Mailforge AI. Customers never see which vendor or model is behind it.
+Loomail AI. Customers never see which vendor or model is behind it.
 
 ### Setting it up
 
@@ -251,28 +251,27 @@ nowhere afterwards, and never written to the audit log.
   *Embedding model* to whichever provider has one (for example OpenAI's
   `text-embedding-3-small`); search uses the first provider that names one.
 
-### Allowances (only when `MAILFORGE_ENFORCE_PLANS=true`)
+### Allowances (only when `LOOMAIL_ENFORCE_PLANS=true`)
 
-Each plan includes a monthly (UTC calendar month) allowance of Mailforge AI tokens. The
-numbers live in `packages/core/src/plans.ts` next to the other limits:
-
-| Free | Starter | Growth | Scale |
-|---|---|---|---|
-| 20,000 | 300,000 | 1,500,000 | 8,000,000 |
+Essential includes a monthly (UTC calendar month) allowance of Loomail AI tokens: 8,000,000.
+The number lives in `packages/core/src/plans.ts` next to the other limits. A workspace with no
+plan (trial ended, or subscription lapsed) has an allowance of 0. Customers can buy more in
+packs of 100,000 credits from Settings, under Plan; a purchase raises that calendar month's
+allowance only.
 
 At the cap nothing is deleted. AI drafting and compiling stop with a clear message
-("upgrade your plan or add your own key"); emails already queued for AI generation simply wait
-and carry on when the month rolls over, the plan is upgraded, or the customer adds a key.
+("buy extra AI credits or add your own key"); emails already queued for AI generation simply wait
+and carry on when the month rolls over, the customer buys more credits, or adds a key.
 Knowledge-base embeddings are counted but never blocked, because a refused one would mark an
 entry as failed. Self-hosted installs (enforcement off) have no cap.
 
-Adjust the numbers to your costs: a Free workspace that maxes out costs you its allowance in
-tokens, so keep the Free figure small. The tokens are the provider's own count; if a provider
+Adjust the numbers to your costs: a workspace that maxes out costs you its allowance in
+tokens. The tokens are the provider's own count; if a provider
 reports none, the call is estimated from text length so an allowance cannot be dodged.
 
 ### What you see
 
-The page shows this month's Mailforge AI tokens, calls and failed calls, a split by feature, the
+The page shows this month's Loomail AI tokens, calls and failed calls, a split by feature, the
 ten heaviest workspaces, and (separately, as "not your cost") tokens spent on customers' own
 keys. A failed-call rate that climbs usually means a revoked key or a provider outage. Each
 workspace's page has an **AI** card: which source it uses, its tokens against its allowance.
@@ -296,28 +295,28 @@ plans are enforced. The customer's own usage meter follows it.
 
 **Failure alert.** If at least half of the calls on your provider fail over the last 15 minutes
 (and there were at least 10), the AI providers page shows a red banner and every address in
-`MAILFORGE_PLATFORM_ADMINS` is emailed from the platform sender (`PLATFORM_*` settings must be
+`LOOMAIL_PLATFORM_ADMINS` is emailed from the platform sender (`PLATFORM_*` settings must be
 configured). One email per incident, a reminder an hour later while it lasts, nothing once it
 recovers; the state survives restarts. Only your own provider counts: a customer's broken key never
 alerts you. The check runs every 5 minutes inside the server. Tune it with
-`MAILFORGE_AI_ALERT_MIN_CALLS`, `MAILFORGE_AI_ALERT_FAIL_RATE` (0 to 1),
-`MAILFORGE_AI_ALERT_WINDOW_MINUTES` and `MAILFORGE_AI_ALERT_COOLDOWN_MINUTES`.
+`LOOMAIL_AI_ALERT_MIN_CALLS`, `LOOMAIL_AI_ALERT_FAIL_RATE` (0 to 1),
+`LOOMAIL_AI_ALERT_WINDOW_MINUTES` and `LOOMAIL_AI_ALERT_COOLDOWN_MINUTES`.
 
 ### Monthly dollar budget (a hard cap)
 
-On the AI providers page, *Monthly budget* sets the most Mailforge AI may cost you in a calendar
+On the AI providers page, *Monthly budget* sets the most Loomail AI may cost you in a calendar
 month (UTC), measured from the prices you entered on your providers. It needs those prices to
 mean anything: with none set, cost is $0 and the budget never trips.
 
 - **At 80%** every platform admin is emailed a warning.
-- **At 100%** Mailforge AI pauses for every workspace that has no AI key of its own, and a second
+- **At 100%** Loomail AI pauses for every workspace that has no AI key of its own, and a second
   email says so. Drafting and compiling answer with a clear "temporarily unavailable, add your own
   key or try again later" message (HTTP 503); emails already waiting for AI-written content stay
   queued and carry on by themselves once it resumes. The customer is never told a dollar figure.
 - **Customers on their own key are never affected**, and neither are knowledge-base embeddings
   (they are not priced).
 - **Raising or removing the budget resumes AI immediately.** It resets by itself on the 1st.
-- **When it is back on, every platform admin is emailed** ("Mailforge AI is back on"): once per pause,
+- **When it is back on, every platform admin is emailed** ("Loomail AI is back on"): once per pause,
   saying why (budget raised to $X, budget removed, or a new month began) and that queued work is
   carrying on by itself. It goes out within 5 minutes of the change. If you raise the budget and put it
   back before the next check, nothing is sent, because AI never actually came back. A pause that began

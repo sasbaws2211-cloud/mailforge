@@ -1,5 +1,5 @@
 /**
- * Mailforge dashboard SPA entry point.
+ * Loomail dashboard SPA entry point.
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */

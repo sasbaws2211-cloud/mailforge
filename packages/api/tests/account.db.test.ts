@@ -12,7 +12,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { purgeDueWorkspaces, purgeWorkspace, tenantTablesInDeleteOrder, KEPT_DETACHED } from "@mailforge/db/purge";
+import { purgeDueWorkspaces, purgeWorkspace, tenantTablesInDeleteOrder, KEPT_DETACHED } from "@loomail/db/purge";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
 import { resetExportLimit } from "../src/routes/account.js";
@@ -153,7 +153,7 @@ beforeAll(async () => {
     return;
   }
   await cleanup();
-  process.env.MAILFORGE_PLATFORM_ADMINS = ADMIN_EMAIL;
+  process.env.LOOMAIL_PLATFORM_ADMINS = ADMIN_EMAIL;
   const opts = { logger: false as const, db, baseUrl: "http://localhost:3000", dashboardUrl: "http://localhost:3000" };
   app = await buildApp(opts);
 });
@@ -168,8 +168,8 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  delete process.env.MAILFORGE_PLATFORM_ADMINS;
-  delete process.env.MAILFORGE_DELETION_GRACE_DAYS;
+  delete process.env.LOOMAIL_PLATFORM_ADMINS;
+  delete process.env.LOOMAIL_DELETION_GRACE_DAYS;
   if (app) await app.close();
   if (lockClient) {
     await lockClient.query("SELECT pg_advisory_unlock(7770001)");
@@ -326,9 +326,9 @@ describe("asking to delete a workspace", () => {
 
   it("the grace period is configurable, within 1 to 90 days", () => {
     expect(deletionGraceDays({} as NodeJS.ProcessEnv)).toBe(7);
-    expect(deletionGraceDays({ MAILFORGE_DELETION_GRACE_DAYS: "30" } as NodeJS.ProcessEnv)).toBe(30);
+    expect(deletionGraceDays({ LOOMAIL_DELETION_GRACE_DAYS: "30" } as NodeJS.ProcessEnv)).toBe(30);
     for (const bad of ["0", "-3", "91", "abc", "", "2.5x"]) {
-      const v = deletionGraceDays({ MAILFORGE_DELETION_GRACE_DAYS: bad } as NodeJS.ProcessEnv);
+      const v = deletionGraceDays({ LOOMAIL_DELETION_GRACE_DAYS: bad } as NodeJS.ProcessEnv);
       expect(v === 7 || (bad === "2.5x" && v === 2), bad).toBe(true);
     }
   });

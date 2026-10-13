@@ -12,16 +12,20 @@
 import type { FastifyPluginAsync } from "fastify";
 import {
   BILLING_GRACE_DAYS,
+  chargeAmountMinor,
   PLANS,
+  ADDONS,
+  ADDON_KINDS,
   PLAN_IDS,
   limitFor,
   startOfNextMonthUtc,
   usageFraction,
   type LimitKind,
   isPaidPlanId,
-} from "@mailforge/core";
+} from "@loomail/core";
 import type { Db } from "../plugins/db.js";
-import { loadEntitlements, loadUsage } from "../plan/usage.js";
+import { loadAddonTotals, loadEntitlements, loadUsage } from "../plan/usage.js";
+import { listAddonRenewals } from "../billing/addon-renewals.js";
 import type { BillingRuntime } from "../billing/config.js";
 import { chargeCents, subscriptionSummary } from "../billing/service.js";
 import { loadAiStatus } from "../ai/resolver.js";
@@ -45,11 +49,13 @@ const planRoutes: FastifyPluginAsync<{ billing?: BillingRuntime }> = async (app,
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
     const now = new Date();
-    const [ent, usage, subscription, ai] = await Promise.all([
+    const [ent, usage, subscription, ai, topups, renewals] = await Promise.all([
       loadEntitlements(db, tenantId, now),
       loadUsage(db, tenantId, now),
       subscriptionSummary(db, tenantId, now),
       loadAiStatus(db, tenantId, now),
+      loadAddonTotals(db, tenantId, now),
+      listAddonRenewals(db, tenantId),
     ]);
 
     const used: Record<LimitKind, number> = {
@@ -71,7 +77,7 @@ const planRoutes: FastifyPluginAsync<{ billing?: BillingRuntime }> = async (app,
       stored_plan: ent.storedPlan,
       shows_powered_by: ent.showsPoweredBy,
       // Where a customer asks to change plan until self-serve billing exists.
-      support_email: process.env.MAILFORGE_SUPPORT_EMAIL?.trim() || null,
+      support_email: process.env.LOOMAIL_SUPPORT_EMAIL?.trim() || null,
       // Money: whether the customer can pay online here, and their subscription if any.
       billing: {
         enabled: billing?.enabled === true,
@@ -109,11 +115,46 @@ const planRoutes: FastifyPluginAsync<{ billing?: BillingRuntime }> = async (app,
         contacts: meter("contacts"),
         emails: { ...meter("emails"), resets_at: startOfNextMonthUtc(now).toISOString() },
         seats: { ...meter("seats"), members: usage.members, pending_invites: usage.pendingInvites },
-        // Mailforge AI tokens. Only calls served by the platform's provider count; a workspace on
+        // Loomail AI tokens. Only calls served by the platform's provider count; a workspace on
         // its own key is never capped (source: "byok").
         ai: { ...meter("ai"), source: ai.source, resets_at: startOfNextMonthUtc(now).toISOString() },
       },
-      plans: PLAN_IDS.map((id) => {
+      // Top-ups bought this calendar month, and when they stop counting (the first of next month, UTC).
+      topups: {
+        profiles: topups.contacts ?? 0,
+        emails: topups.emailsPerMonth ?? 0,
+        ai: topups.aiTokensPerMonth ?? 0,
+        expires_at: startOfNextMonthUtc(now).toISOString(),
+      },
+      // Top-ups that renew themselves each month, with the card they use (brand and last four only).
+      auto_renewals: renewals.map((r) => {
+        const kind = r.kind as keyof typeof ADDONS;
+        const def = ADDONS[kind];
+        return {
+          kind: r.kind,
+          label: def?.label ?? r.kind,
+          packs: r.packs,
+          units: def ? def.packUnits * r.packs : 0,
+          price_usd: def ? (def.packPriceCents * r.packs) / 100 : 0,
+          card: r.cardLast4 ? `${r.cardBrand ? r.cardBrand.charAt(0).toUpperCase() + r.cardBrand.slice(1) : "Card"} ending ${r.cardLast4}` : null,
+          enabled: r.enabled,
+          last_error: r.lastError,
+        };
+      }),
+      // Prepaid top-ups: what one pack is, what it costs, and the charge in the charge currency.
+      addons: ADDON_KINDS.map((kind) => {
+        const a = ADDONS[kind];
+        const usd = a.packPriceCents / 100;
+        return {
+          kind,
+          label: a.label,
+          rate: a.rateLabel,
+          pack_units: a.packUnits,
+          pack_price_usd: usd,
+          pack_charge: !billing?.enabled || billing.currency === "USD" ? null : chargeAmountMinor(usd, billing.currency, billing.usdRate) / 100,
+        };
+      }),
+      plans: PLAN_IDS.filter((id) => id !== "free").map((id) => {
         const p = PLANS[id];
         return {
           id,

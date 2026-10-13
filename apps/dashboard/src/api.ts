@@ -26,7 +26,7 @@ export interface MeResponse {
     role: string;
     tenantId: string;
   };
-  /** True for operators listed in MAILFORGE_PLATFORM_ADMINS: shows the Admin console. */
+  /** True for operators listed in LOOMAIL_PLATFORM_ADMINS: shows the Admin console. */
   platformAdmin?: boolean;
   /** True when a platform admin has suspended this workspace. */
   suspended?: boolean;
@@ -57,7 +57,7 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
     // survives the navigation and dies with the tab; LoginPage clears it on
     // read so a later manual visit to /login shows no stale notice.
     try {
-      sessionStorage.setItem("mailforge-session-expired", "1");
+      sessionStorage.setItem("loomail-session-expired", "1");
     } catch {
       // storage unavailable; the redirect still works, the notice is lost
     }
@@ -615,16 +615,16 @@ export interface LlmConfig {
   created_at: string;
 }
 
-/** Where a workspace's AI comes from: its own key, Mailforge AI (the operator's), or nothing yet. */
+/** Where a workspace's AI comes from: its own key, Loomail AI (the operator's), or nothing yet. */
 export type AiSource = "byok" | "platform" | "none";
 
 export interface LlmAiInfo {
   source: AiSource;
   /** What customers call the operator's AI. */
   name: string;
-  /** The operator has paused Mailforge AI for everyone on it. Own-key workspaces never see this as true. */
+  /** The operator has paused Loomail AI for everyone on it. Own-key workspaces never see this as true. */
   unavailable: boolean;
-  /** Mailforge AI tokens this month against the plan (limit null = no cap). A workspace on its own key is never capped. */
+  /** Loomail AI tokens this month against the plan (limit null = no cap). A workspace on its own key is never capped. */
   allowance: { plan: string; limit: number | null; used: number; spent: boolean; resets_at: string };
 }
 
@@ -730,7 +730,7 @@ export async function putLlm(
   return body;
 }
 
-/** DELETE /v1/settings/llm - remove the workspace's own key; it then uses Mailforge AI if the operator has set it up. */
+/** DELETE /v1/settings/llm - remove the workspace's own key; it then uses Loomail AI if the operator has set it up. */
 export async function deleteLlm(): Promise<{ ok: true; removed: number; ai: LlmAiInfo }> {
   const res = await apiFetch("/v1/settings/llm", { method: "DELETE" });
   const body = await res.json().catch(() => null);
@@ -1277,8 +1277,20 @@ export interface LibraryFlowEntry {
   id: string;
   name: string;
   description: string;
+  /** One line for the gallery card. */
+  tagline: string;
+  /** What starts it, in words. */
+  when: string;
+  /** An event the app must send for it to start, or null when no event is needed. */
+  needs_event: string | null;
+  /** How long the sequence runs, e.g. "over 7 days". */
+  span: string;
   emails: number;
   trigger: string;
+  /** This workspace already has it (as a flow). */
+  installed: boolean;
+  flow_id: string | null;
+  flow_status: string | null;
   templates: LibraryFlowTemplate[];
 }
 
@@ -1302,9 +1314,13 @@ export async function fetchLibraryFlows(): Promise<LibraryFlowsResponse> {
   return res.json() as Promise<LibraryFlowsResponse>;
 }
 
-/** POST /v1/library/install - install the welcome flow set. */
-export async function installLibraryFlow(): Promise<LibraryInstallResponse> {
-  const res = await apiFetch(`/v1/library/install`, { method: "POST" });
+/** POST /v1/library/install - install one ready-made flow (the welcome flow when no id is given). */
+export async function installLibraryFlow(id?: string): Promise<LibraryInstallResponse> {
+  const res = await apiFetch(`/v1/library/install`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(id ? { id } : {}),
+  });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `Install failed (${res.status})`);
@@ -1687,7 +1703,57 @@ export interface BillingSubscription {
 
 export type PaymentStatus = "none" | "current" | "overdue" | "lapsed";
 
+/** One kind of prepaid top-up (extra profiles, emails or AI credits). */
+export interface AddonCatalogEntry {
+  kind: "profiles" | "emails" | "ai";
+  label: string;
+  /** The rate as a customer reads it, e.g. "$0.009 per profile". */
+  rate: string;
+  pack_units: number;
+  pack_price_usd: number;
+  /** What one pack really charges, in the charge currency's major units. Null when that is USD or billing is off. */
+  pack_charge: number | null;
+}
+
+/** One successful payment, for the billing history. */
+export interface BillingPayment {
+  reference: string;
+  paid_at: string;
+  description: string;
+  /** In the charge currency's major units. */
+  amount: number;
+  currency: string;
+  receipt_url: string;
+}
+
+export const CANCEL_REASONS: Array<{ value: string; label: string }> = [
+  { value: "too_expensive", label: "It costs too much" },
+  { value: "missing_feature", label: "It is missing something I need" },
+  { value: "not_using", label: "I am not using it enough" },
+  { value: "switched_tool", label: "I switched to another tool" },
+  { value: "just_testing", label: "I was only testing" },
+  { value: "other", label: "Something else" },
+];
+
+export interface AutoRenewal {
+  kind: "profiles" | "emails" | "ai";
+  label: string;
+  packs: number;
+  units: number;
+  price_usd: number;
+  /** "Visa ending 4242", or null when the provider gave no card details. */
+  card: string | null;
+  enabled: boolean;
+  last_error: string | null;
+}
+
 export interface PlanInfo {
+  /** Prepaid top-ups a workspace can buy for the current month. */
+  addons: AddonCatalogEntry[];
+  /** Top-ups bought this calendar month (units) and when they stop counting. */
+  topups: { profiles: number; emails: number; ai: number; expires_at: string };
+  /** Top-ups that renew themselves each month. */
+  auto_renewals: AutoRenewal[];
   /** False on self-hosted installs: nothing is limited and the UI should say nothing. */
   enforced: boolean;
   /** Whether the customer can pay online here, and their subscription if they have one. */
@@ -1703,7 +1769,7 @@ export interface PlanInfo {
     contacts: PlanMeter;
     emails: PlanMeter & { resets_at: string };
     seats: PlanMeter & { members: number; pending_invites: number };
-    /** Mailforge AI tokens. Only counts calls served by the operator's provider. */
+    /** Loomail AI tokens. Only counts calls served by the operator's provider. */
     ai: PlanMeter & { source: AiSource; resets_at: string };
   };
   plans: PlanCatalogEntry[];
@@ -1741,6 +1807,20 @@ export async function startBillingCheckout(plan: string, interval: BillingInterv
   return res.json() as Promise<BillingCheckoutStart>;
 }
 
+/** POST /v1/billing/addons/checkout - buy `packs` packs of extra profiles, emails or AI credits. */
+export async function startAddonCheckout(kind: string, packs: number, repeat = false): Promise<BillingCheckoutStart> {
+  const res = await apiFetch("/v1/billing/addons/checkout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, packs, repeat }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Could not start checkout (${res.status})`);
+  }
+  return res.json() as Promise<BillingCheckoutStart>;
+}
+
 /** GET /v1/billing/checkouts/:reference - where one of this workspace's payments stands. The server checks with Paystack. */
 export async function fetchCheckoutStatus(reference: string): Promise<{ status: "pending" | "paid" | "failed" | "cancelled"; plan: string; interval: BillingInterval }> {
   const res = await apiFetch(`/v1/billing/checkouts/${encodeURIComponent(reference)}`);
@@ -1749,8 +1829,12 @@ export async function fetchCheckoutStatus(reference: string): Promise<{ status: 
 }
 
 /** POST /v1/billing/cancel - stop future charges; the plan keeps working until the period ends. */
-export async function cancelBillingSubscription(): Promise<{ subscription: BillingSubscription }> {
-  const res = await apiFetch("/v1/billing/cancel", { method: "POST" });
+export async function cancelBillingSubscription(feedback?: { reason?: string; note?: string }): Promise<{ subscription: BillingSubscription }> {
+  const res = await apiFetch("/v1/billing/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(feedback ?? {}),
+  });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(err.error ?? `Could not cancel (${res.status})`);
@@ -1759,7 +1843,7 @@ export async function cancelBillingSubscription(): Promise<{ subscription: Billi
 }
 
 // ---------------------------------------------------------------------------
-// Managed sending (Mailforge sends your email for you)
+// Managed sending (Loomail sends your email for you)
 // ---------------------------------------------------------------------------
 
 export interface SendingDnsRecord {
@@ -1773,9 +1857,9 @@ export interface SendingDnsRecord {
 }
 
 export interface SendingView {
-  /** Is Mailforge Sending offered on this service at all? */
+  /** Is Loomail Sending offered on this service at all? */
   available: boolean;
-  /** What mail goes out through: the workspace's own provider wins, then Mailforge Sending. */
+  /** What mail goes out through: the workspace's own provider wins, then Loomail Sending. */
   uses: "own_transport" | "managed" | "nothing";
   shared: { offered: boolean; daily_limit: number | null };
   managed: null | {
@@ -1812,3 +1896,58 @@ export const patchSending = (b: { from_local?: string; from_name?: string | null
 export const putSendingDomain = (b: { domain: string; from_local?: string }) => sendingRequest("/domain", sendingJson("PUT", b));
 export const verifySendingDomain = () => sendingRequest("/domain/verify", { method: "POST" });
 export const deleteSendingDomain = () => sendingRequest("/domain", { method: "DELETE" });
+
+/** GET /v1/billing/payments - this workspace's successful payments, newest first. */
+export async function fetchBillingPayments(): Promise<BillingPayment[]> {
+  const res = await apiFetch("/v1/billing/payments");
+  if (!res.ok) throw new Error(`Could not load your payments (${res.status})`);
+  const body = (await res.json()) as { payments: BillingPayment[] };
+  return body.payments;
+}
+
+// ---------------------------------------------------------------------------
+// Flow stats (the flows list)
+// ---------------------------------------------------------------------------
+
+export type FlowHealthState = "draft" | "paused" | "waiting" | "quiet" | "attention" | "ok";
+
+export interface FlowStats {
+  sent_30d: number;
+  sent_7d: number;
+  opened_30d: number;
+  clicked_30d: number;
+  bounced_30d: number;
+  complained_30d: number;
+  /** People currently moving through the flow. */
+  in_flow: number;
+  entered_total: number;
+  last_sent_at: string | null;
+  health: FlowHealthState;
+  health_note: string | null;
+}
+
+/** GET /v1/flows/stats - what each flow has done lately, keyed by flow id. */
+export async function fetchFlowStats(): Promise<Record<string, FlowStats>> {
+  const res = await apiFetch("/v1/flows/stats");
+  if (!res.ok) throw new Error(`/v1/flows/stats returned ${res.status}`);
+  const body = (await res.json()) as { stats: Record<string, FlowStats> };
+  return body.stats;
+}
+
+/** POST /v1/flows/:id/steps/:order/test-send - send one step to the signed-in person's own address. */
+export async function testSendFlowStep(flowId: string, order: number): Promise<{ sent_to: string; subject: string }> {
+  const res = await apiFetch(`/v1/flows/${encodeURIComponent(flowId)}/steps/${order}/test-send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const body = (await res.json().catch(() => ({}))) as { error?: string; sent_to?: string; subject?: string };
+  if (!res.ok) throw new Error(body.error ?? `The test email could not be sent (${res.status}).`);
+  return { sent_to: body.sent_to ?? "", subject: body.subject ?? "" };
+}
+
+/** DELETE /v1/billing/addons/auto/:kind - stop a top-up that repeats every month. */
+export async function stopAutoRenewal(kind: string): Promise<void> {
+  const res = await apiFetch(`/v1/billing/addons/auto/${encodeURIComponent(kind)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Could not stop the repeat (${res.status})`);
+}

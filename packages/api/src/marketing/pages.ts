@@ -2,12 +2,12 @@
  * Public site pages: landing, pricing, signup, signup-sent.
  *
  * Copy only claims what the product does today. Plan names, prices and limits
- * come from @mailforge/core PLANS so this page can never disagree with what the
+ * come from @loomail/core PLANS so this page can never disagree with what the
  * product enforces.
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
-import { GOAL_INFO, ONBOARDING_GOALS, PLANS, PLAN_IDS, TRIAL_DAYS, TRIAL_PLAN, chargeAmountMinor, type OnboardingGoal, type PlanId, managedSendingConfigFromEnv } from "@mailforge/core";
+import { ADDONS, ADDON_KINDS, GOAL_INFO, ONBOARDING_GOALS, PLANS, TRIAL_DAYS, TRIAL_PLAN, chargeAmountMinor, type OnboardingGoal, type PlanId, managedSendingConfigFromEnv } from "@loomail/core";
 import { esc, renderPage, SITE_NAME, type SiteContext } from "./layout.js";
 
 const TRIAL_NOTE = `${TRIAL_DAYS} days of ${PLANS[TRIAL_PLAN].name}. No credit card.`;
@@ -20,7 +20,7 @@ const FEATURES: Array<{ ico: string; title: string; body: string }> = [
   {
     ico: "Aa",
     title: "Flows in plain language",
-    body: "Say what should happen and when. Mailforge turns it into a fixed plan you can read before it goes live, then runs it the same way every time.",
+    body: "Say what should happen and when. Loomail turns it into a fixed plan you can read before it goes live, then runs it the same way every time.",
   },
   {
     ico: "↻",
@@ -49,30 +49,58 @@ const FEATURES: Array<{ ico: string; title: string; body: string }> = [
   },
 ];
 
-const STEPS: Array<{ title: string; body: string }> = [
+/** What businesses use Loomail for. Each one has a ready-made flow in the library. */
+const USE_CASES: Array<{ ico: string; title: string; body: string; starts: string; flow: string }> = [
   {
-    title: "Send your product events",
-    body: "Post identify and track calls from your app. The endpoints are Segment-compatible, so the SDKs you already use work.",
+    ico: "1",
+    title: "Welcome emails",
+    body: "When someone registers on your website or app, Loomail sends a welcome email and a short series of onboarding messages, and stops the moment they get going.",
+    starts: "When someone signs up",
+    flow: "Welcome Onboarding",
   },
+  {
+    ico: "2",
+    title: "Recover abandoned purchases",
+    body: "When a customer adds a product to their cart but does not complete checkout, Loomail sends a reminder or two, and stops as soon as they buy.",
+    starts: "When a cart is left behind",
+    flow: "Abandoned cart",
+  },
+  {
+    ico: "3",
+    title: "Subscription reminders",
+    body: "Tell customers about an upcoming renewal, an expiring trial or a change to their plan, at the right moment and only to the people it applies to.",
+    starts: "About a week before a renewal or trial ends",
+    flow: "Renewal reminder",
+  },
+  {
+    ico: "4",
+    title: "Bring inactive users back",
+    body: "If someone has not logged in for 14 days, Loomail sends a re-engagement message, then one last note if they stay away.",
+    starts: "When an active person goes quiet",
+    flow: "At-risk check-in and Win-back",
+  },
+];
+
+const STEPS: Array<{ title: string; body: string }> = [
   {
     title: "Describe the flows",
     body: "Write what you want in plain language, or start from a ready-made flow like Welcome Onboarding. Review the plan, then switch it on.",
   },
   {
-    title: "Mailforge does the rest",
+    title: "Loomail does the rest",
     body: "Emails go out inside your quiet hours and frequency limits. Anyone who unsubscribes is never emailed again.",
   },
 ];
 
-/** Is Mailforge Sending (we send the email for you) offered on this service? The marketing copy follows. */
+/** Is Loomail Sending (we send the email for you) offered on this service? The marketing copy follows. */
 const managedOffered = (): boolean => managedSendingConfigFromEnv().enabled;
 
 const homeFaq = (): Array<{ q: string; a: string }> => [
   {
-    q: "Does Mailforge send the emails?",
+    q: "Does Loomail send the emails?",
     a: managedOffered()
-      ? "Yes. Mailforge decides who gets what and when, and can send the email for you, so there is no email provider to sign up for. Add your own domain so messages come from you, or connect your own provider (Resend, or any SMTP server) if you prefer."
-      : "Mailforge decides who gets what and when, and sends through your own email provider: Resend, or any SMTP server. Messages come from your domain, so your sender reputation is yours.",
+      ? "Yes. Loomail decides who gets what and when, and can send the email for you, so there is no email provider to sign up for. Add your own domain so messages come from you, or connect your own provider (Resend, or any SMTP server) if you prefer."
+      : "Loomail decides who gets what and when, and sends through your own email provider: Resend, or any SMTP server. Messages come from your domain, so your sender reputation is yours.",
   },
   {
     q: "Do I need an AI key?",
@@ -80,7 +108,7 @@ const homeFaq = (): Array<{ q: string; a: string }> => [
   },
   {
     q: "What happens after the trial?",
-    a: `You get ${TRIAL_NOTE.toLowerCase()} When it ends you move to the Free plan unless you choose a paid one. Your data stays in your workspace.`,
+    a: `You get ${TRIAL_NOTE.toLowerCase()} When it ends your workspace is paused unless you subscribe to Essential. Your data stays in your workspace.`,
   },
   {
     q: "Who owns the contact data?",
@@ -92,6 +120,11 @@ export function homePage(ctx: SiteContext): string {
   const features = FEATURES.map(
     (f) =>
       `<div class="card"><div class="ico" aria-hidden="true">${f.ico}</div><h3>${esc(f.title)}</h3><p>${esc(f.body)}</p></div>`,
+  ).join("");
+  const useCases = USE_CASES.map(
+    (u) =>
+      `<div class="card usecase"><div class="ico" aria-hidden="true">${esc(u.ico)}</div><h3>${esc(u.title)}</h3><p>${esc(u.body)}</p>` +
+      `<dl class="uc-meta"><div><dt>Starts</dt><dd>${esc(u.starts)}</dd></div><div><dt>Ready-made flow</dt><dd>${esc(u.flow)}</dd></div></dl></div>`,
   ).join("");
   const steps = STEPS.map(
     (s) => `<div class="step"><h3>${esc(s.title)}</h3><p>${esc(s.body)}</p></div>`,
@@ -127,6 +160,12 @@ export function homePage(ctx: SiteContext): string {
   </div>
 </div></section>
 
+<section id="use-cases"><div class="wrap">
+  <div class="center"><p class="eyebrow">Use cases</p><h2>What businesses use ${SITE_NAME} for</h2>
+  <p class="lead">Four jobs most teams start with. Each has a ready-made flow you can add in one click and make your own.</p></div>
+  <div class="cards two">${useCases}</div>
+</div></section>
+
 <section id="features" class="band"><div class="wrap">
   <div class="center"><p class="eyebrow">Features</p><h2>Everything lifecycle email needs, nothing it does not</h2>
   <p class="lead">One engine for onboarding, activation, retention and win-back, so you stop stitching scripts and cron jobs together.</p></div>
@@ -134,8 +173,14 @@ export function homePage(ctx: SiteContext): string {
 </div></section>
 
 <section id="how"><div class="wrap">
-  <div class="center"><p class="eyebrow">How it works</p><h2>From first event to first email in an afternoon</h2></div>
-  <div class="steps">${steps}</div>
+  <div class="center"><p class="eyebrow">How it works</p><h2>From first flow to first email in an afternoon</h2></div>
+  <div class="how">
+    <div class="shots">
+      <img class="back" src="/landing/lifecycle-grid.png" width="1920" height="1200" loading="lazy" alt="The Loomail retention grid: customers grouped by how long they have been around and how long they have been quiet.">
+      <img class="front" src="/landing/flow-editor.png" width="1920" height="1200" loading="lazy" alt="A Loomail flow: the event that starts it, the emails in order, and what ends it early.">
+    </div>
+    <div class="steps">${steps}</div>
+  </div>
 </div></section>
 
 <section class="band"><div class="wrap">
@@ -154,7 +199,7 @@ export function homePage(ctx: SiteContext): string {
     {
       title: `${SITE_NAME}: lifecycle email for software products`,
       description:
-        `Describe an email flow in plain language and Mailforge runs it. Follow every user from signup to churn and ${managedOffered() ? "send from one place" : "send through your own email provider"}.`,
+        `Describe an email flow in plain language and Loomail runs it. Follow every user from signup to churn and ${managedOffered() ? "send from one place" : "send through your own email provider"}.`,
       path: "/",
       headExtra: jsonLd({
         "@context": "https://schema.org",
@@ -178,21 +223,25 @@ export function homePage(ctx: SiteContext): string {
 const pricingFaq = (): Array<{ q: string; a: string }> => [
   {
     q: "How is usage counted?",
-    a: "Plans are sized by contacts, the people your product tells Mailforge about. The monthly email allowance is a guardrail against runaway sends, not something you should hit in normal use.",
+    a: "Essential includes up to 6,000 customer profiles, the people your product tells Loomail about. The monthly email allowance is a guardrail against runaway sends, not something you should hit in normal use.",
   },
   {
-    q: "Why are there no per-email fees?",
+    q: "Do you charge per email?",
     a: managedOffered()
-      ? "Sending is included, up to your plan's monthly email allowance. Prefer your own email provider? Connect it and pay them directly at their rates: Mailforge only charges for the engine that decides who gets what."
-      : "You send through your own email provider, so you pay them directly at their rates. Mailforge only charges for the engine that decides who gets what.",
+      ? "Sending is included, up to your plan's monthly email allowance. Need more? Buy extra emails at $0.12 per 1,000. Prefer your own email provider? Connect it and pay them directly at their rates: Loomail only charges for the engine that decides who gets what."
+      : "You send through your own email provider, so you pay them directly at their rates. Loomail only charges for the engine that decides who gets what.",
+  },
+  {
+    q: "What if I need more than Essential includes?",
+    a: "Buy extra usage for the month in a few clicks: more customer profiles, more emails or more AI credits, at the rates above. It is prepaid, so nothing is ever charged unless you choose it.",
   },
   {
     q: "What happens after the trial?",
-    a: `${TRIAL_NOTE} When it ends you move to the Free plan unless you pick a paid plan. Nothing is deleted.`,
+    a: `${TRIAL_NOTE} The clock restarts once, when your first event arrives (up to 14 days in total), so setup time does not eat your trial. We email you two days before it ends. When it ends your workspace is paused until you subscribe to Essential. Nothing is deleted.`,
   },
   {
     q: "Can I change or cancel my plan?",
-    a: "Yes. You can move up or down between plans, and annual billing gives you two months free compared with paying monthly.",
+    a: "Yes. There is one plan, billed monthly, and you can cancel at any time. It stays active until the end of the period you paid for.",
   },
   {
     q: "Do you offer discounts for startups or nonprofits?",
@@ -201,7 +250,7 @@ const pricingFaq = (): Array<{ q: string; a: string }> => [
 ];
 
 function usd(n: number): string {
-  return `$${n.toLocaleString("en-US")}`;
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 })}`;
 }
 
 /** A whole-unit amount with the currency's own symbol ("GH₵760"); the code after it if the symbol is unknown. */
@@ -217,27 +266,18 @@ export function pricingPage(ctx: SiteContext): string {
   // What a checkout really charges, when that is not US dollars: the same rounding the server uses.
   const local = (usdPrice: number): string | null =>
     ctx.chargeCurrency && ctx.usdRate ? localMoney(chargeAmountMinor(usdPrice, ctx.chargeCurrency, ctx.usdRate) / 100, ctx.chargeCurrency) : null;
-  const cards = PLAN_IDS.map((id) => {
+  const cards = (["essential"] as const).map((id) => {
     const p = PLANS[id];
-    const paid = p.priceMonthlyUsd > 0;
-    const localMonthly = paid ? local(p.priceMonthlyUsd) : null;
-    const localAnnual = paid ? local(p.priceAnnualUsd) : null;
-    const price = paid
-      ? `<div class="price" data-monthly="${usd(p.priceMonthlyUsd)}" data-annual="${usd(p.priceAnnualMonthlyUsd)}"><span class="amt">${usd(p.priceMonthlyUsd)}</span><small> / month</small></div>
-         <div class="billed" data-monthly="Billed monthly" data-annual="${usd(p.priceAnnualUsd)} billed yearly">Billed monthly</div>${
-           localMonthly && localAnnual
-             ? `
-         <div class="billed" data-monthly="Charged as ${esc(localMonthly)} a month" data-annual="Charged as ${esc(localAnnual)} a year">Charged as ${esc(localMonthly)} a month</div>`
-             : ""
-         }`
-      : `<div class="price"><span class="amt">$0</span><small> / month</small></div><div class="billed">Free forever</div>`;
-    const cta =
-      id === "free"
-        ? `<a class="btn ghost block" href="/signup?plan=free">Start free</a>`
-        : `<a class="btn block${p.recommended ? "" : " ghost"}" href="/signup?plan=${id}">Start ${TRIAL_DAYS}-day trial</a>`;
+    const localMonthly = local(p.priceMonthlyUsd);
+    const price = `<div class="price"><span class="amt">${usd(p.priceMonthlyUsd)}</span><small> / month</small></div>
+         <div class="billed">Billed monthly</div>${
+           localMonthly ? `
+         <div class="billed">Charged as ${esc(localMonthly)} a month</div>` : ""
+         }`;
+    const cta = `<a class="btn block" href="/signup?plan=${id}">Start ${TRIAL_DAYS}-day free trial</a>`;
     return `<div class="plan-card${p.recommended ? " rec" : ""}">
-${p.recommended ? '<span class="badge">Most popular</span>' : ""}
-<h3>${esc(p.name)}</h3><p class="muted" style="margin:6px 0 0;min-height:3em">${esc(p.tagline)}</p>
+
+<h3>${esc(p.name)}</h3><p class="muted" style="margin:6px 0 0">${esc(p.tagline)}</p>
 ${price}
 <ul>${p.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
 ${cta}
@@ -252,29 +292,28 @@ ${cta}
 <section><div class="wrap">
   <div class="center">
     <p class="eyebrow">Pricing</p>
-    <h1 style="font-size:clamp(2rem,4.4vw,3rem)">Simple pricing that grows with your audience</h1>
-    <p class="lead">Priced by contacts, not by email. ${esc(TRIAL_NOTE)}</p>
-    <div class="toggle" role="group" aria-label="Billing period">
-      <button type="button" data-period="monthly" aria-pressed="true">Monthly</button>
-      <button type="button" data-period="annual" aria-pressed="false">Yearly<span class="save">2 months free</span></button>
-    </div>
+    <h1 style="font-size:clamp(2rem,4.4vw,3rem)">One plan. Everything included.</h1>
+    <p class="lead">One simple price, every feature. ${esc(TRIAL_NOTE)}</p>
   </div>
-  <div class="plans">${cards}</div>
-  <p class="note">${ctx.chargeCurrency && ctx.usdRate ? `Prices are listed in US dollars and charged in ${esc(ctx.chargeCurrency)} at a fixed exchange rate, shown under each price.` : "Prices are in US dollars."} Need more than 50,000 contacts, a security review or an invoice? <a href="mailto:${esc(ctx.supportEmail)}">Talk to us</a>.</p>
+  <div class="plans single">${cards}</div>
+  <div class="center" style="margin-top:56px">
+    <h2>Extra usage</h2>
+    <p class="lead">Need more than Essential includes in a month? Add it when you need it. Nothing is charged unless you choose to buy.</p>
+  </div>
+  <div class="faq" style="max-width:640px">
+    ${ADDON_KINDS.map((k) => `<details open><summary>${esc(ADDONS[k].label)}: ${esc(ADDONS[k].rateLabel)}</summary><p>${esc(
+      `Buy in packs of ${ADDONS[k].packUnits.toLocaleString("en-US")} for ${usd(ADDONS[k].packPriceCents / 100)}. A top-up raises this month's limit.`,
+    )}</p></details>`).join("")}
+  </div>
+  <p class="note">${ctx.chargeCurrency && ctx.usdRate ? `Prices are listed in US dollars and charged in your local currency at a fixed exchange rate, shown under the price.` : "Prices are in US dollars."} Need more than 6,000 customer profiles, a security review or an invoice? <a href="mailto:${esc(ctx.supportEmail)}">Talk to us</a>.</p>
 </div></section>
 <section class="band"><div class="wrap">
   <div class="center"><h2>Pricing questions</h2></div>
   <div class="faq">${faq}</div>
 </div></section>
-<script>
-(function(){var b=document.querySelectorAll('.toggle button');
-function set(p){b.forEach(function(x){x.setAttribute('aria-pressed',String(x.dataset.period===p))});
-document.querySelectorAll('.price[data-monthly]').forEach(function(e){e.querySelector('.amt').textContent=e.dataset[p]});
-document.querySelectorAll('.billed[data-monthly]').forEach(function(e){e.textContent=e.dataset[p]})}
-b.forEach(function(x){x.addEventListener('click',function(){set(x.dataset.period)})})})();
-</script>`;
+`;
 
-  const offers = PLAN_IDS.map((id) => ({
+  const offers = (["essential"] as const).map((id) => ({
     "@type": "Offer",
     name: PLANS[id].name,
     price: String(PLANS[id].priceMonthlyUsd),
@@ -285,7 +324,7 @@ b.forEach(function(x){x.addEventListener('click',function(){set(x.dataset.period
     ctx,
     {
       title: `Pricing: ${SITE_NAME}`,
-      description: `${SITE_NAME} plans from free to ${usd(PLANS.scale.priceMonthlyUsd)} a month, priced by contacts. ${TRIAL_NOTE}`,
+      description: `${SITE_NAME} Essential: every feature for ${usd(PLANS.essential.priceMonthlyUsd)} a month. ${TRIAL_NOTE}`,
       path: "/pricing",
       headExtra: jsonLd({
         "@context": "https://schema.org",
@@ -315,10 +354,10 @@ export function signupPage(ctx: SiteContext, state: SignupFormState = {}): strin
   const plan = state.plan ?? TRIAL_PLAN;
   const planName = PLANS[plan].name;
   const heading =
-    plan === "free" ? "Create your free workspace" : `Start your ${TRIAL_DAYS}-day free trial`;
+    `Start your ${TRIAL_DAYS}-day free trial`;
   const err = state.error ? `<div class="err" role="alert">${esc(state.error)}</div>` : "";
   const perks = [
-    plan === "free" ? "Free forever for up to 500 contacts" : `${TRIAL_NOTE}`,
+    `${TRIAL_NOTE}`,
     managedOffered() ? "We can send your email for you, or use your own provider" : "Send through your own email provider",
     "Ready-made onboarding flow to start from",
     "Unsubscribe and compliance handled for you",
@@ -327,7 +366,7 @@ export function signupPage(ctx: SiteContext, state: SignupFormState = {}): strin
   const body = `
 <div class="wrap signup">
   <div>
-    <p class="eyebrow">${plan === "free" ? "Free plan" : `${esc(planName)} trial`}</p>
+    <p class="eyebrow">${esc(planName)} trial</p>
     <h1 style="font-size:clamp(2rem,4vw,2.8rem)">${esc(heading)}</h1>
     <p class="lead">Create a workspace in under a minute. We will email you a link to open it. There is no password to remember.</p>
     <ul class="perks">${perks.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>
@@ -348,7 +387,7 @@ export function signupPage(ctx: SiteContext, state: SignupFormState = {}): strin
     </fieldset>
     <label class="check" for="terms"><input type="checkbox" id="terms" name="terms" value="yes" required>
       <span>I agree to the <a href="/terms" target="_blank" rel="noopener">Terms</a> and the <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
-    <button class="btn block" type="submit">${plan === "free" ? "Create free workspace" : "Start free trial"}</button>
+    <button class="btn block" type="submit">Start free trial</button>
     <p class="muted" style="font-size:.88rem;margin:14px 0 0;text-align:center">Already have a workspace? <a href="/login">Sign in</a></p>
   </form>
 </div>`;
@@ -365,13 +404,31 @@ export function signupPage(ctx: SiteContext, state: SignupFormState = {}): strin
   );
 }
 
-export function signupSentPage(ctx: SiteContext, email: string): string {
+export function signupSentPage(ctx: SiteContext, email: string, opts: { resent?: boolean; notice?: string } = {}): string {
+  const showResend = email.includes("@");
+  const lead = opts.resent
+    ? `We sent another link to <b>${esc(email)}</b>. The earlier one stops working once you use the new one.`
+    : `If we can send to <b>${esc(email)}</b>, a link to open your workspace is on its way. It usually arrives within a minute and expires in 10 minutes.`;
   const body = `
 <div class="wrap" style="max-width:560px;padding:72px 20px;text-align:center">
   <p class="eyebrow">One more step</p>
   <h1 style="font-size:clamp(1.9rem,4vw,2.6rem)">Check your email</h1>
-  <p class="lead">If we can send to <b>${esc(email)}</b>, a link to open your workspace is on its way. It expires in 10 minutes.</p>
-  <p class="muted" style="margin-top:28px">Nothing yet? Check your spam folder, or <a href="/signup">try again</a> with a different address.</p>
+  <p class="lead">${lead}</p>
+  ${opts.notice ? `<p class="err" role="alert" style="margin-top:20px">${esc(opts.notice)}</p>` : ""}
+  <p class="muted" style="margin-top:28px">Nothing yet? Look in your spam or promotions folder first.</p>
+  ${
+    showResend
+      ? `<form method="post" action="/signup/resend" style="margin-top:14px">
+    <input type="hidden" name="email" value="${esc(email)}">
+    <button class="btn ghost" type="submit" id="resend" disabled>Send the link again <span id="resend-wait"></span></button>
+  </form>
+  <script>
+  (function(){var b=document.getElementById('resend'),w=document.getElementById('resend-wait'),n=30;
+  function t(){if(n<=0){b.disabled=false;w.textContent='';return}w.textContent='('+n+'s)';n--;setTimeout(t,1000)}t();})();
+  </script>`
+      : ""
+  }
+  <p class="muted" style="margin-top:20px">Wrong address? <a href="/signup">Start again</a> with a different one.</p>
 </div>`;
   return renderPage(
     ctx,

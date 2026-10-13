@@ -47,6 +47,7 @@ export const EXPORT_TABLES: readonly ExportTable[] = [
   { key: "managed_sending", table: "managed_sending", orderBy: "created_at" },
   { key: "subscriptions", table: "subscriptions" },
   { key: "payment_attempts", table: "billing_checkouts", drop: ["checkout_url"] },
+  { key: "usage_top_ups", table: "addon_purchases" },
 ];
 
 /** Tenant tables not exported on purpose, with the reason. */
@@ -55,6 +56,7 @@ export const EXPORT_EXCLUDED: Readonly<Record<string, string>> = {
   magic_link_tokens: "sign-in tokens: credentials, not customer data",
   scan_checkpoints: "internal bookkeeping for background jobs",
   billing_events: "operator-side payment log, kept by the service for accounting",
+  addon_auto_renewals: "holds an encrypted card authorization: a credential, not customer data",
   admin_audit_log: "operator-side record of admin actions, kept by the service",
   llm_usage: "operator-side AI usage metering (token counts only, no prompts or replies); erased with the workspace",
 };

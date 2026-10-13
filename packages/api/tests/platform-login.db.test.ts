@@ -11,7 +11,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
-import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
+import { encrypt, parseEncryptionKey } from "@loomail/adapters";
 import { buildApp } from "../src/index.js";
 
 const TEST_DB_URL = process.env.DATABASE_URL;

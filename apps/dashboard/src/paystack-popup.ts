@@ -40,7 +40,7 @@ export function loadPaystackInline(timeoutMs = 10_000): Promise<PaystackPopConst
   if (loading) return loading;
   loading = new Promise<PaystackPopConstructor>((resolve, reject) => {
     const script = document.createElement("script");
-    const timer = window.setTimeout(() => fail(new Error("Paystack's script took too long to load.")), timeoutMs);
+    const timer = window.setTimeout(() => fail(new Error("The payment script took too long to load.")), timeoutMs);
     function fail(err: Error) {
       window.clearTimeout(timer);
       script.remove();
@@ -52,9 +52,9 @@ export function loadPaystackInline(timeoutMs = 10_000): Promise<PaystackPopConst
     script.onload = () => {
       window.clearTimeout(timer);
       if (window.PaystackPop) resolve(window.PaystackPop);
-      else fail(new Error("Paystack's script loaded but did not provide the payment popup."));
+      else fail(new Error("The payment script loaded but did not provide the payment popup."));
     };
-    script.onerror = () => fail(new Error("Could not load Paystack's script."));
+    script.onerror = () => fail(new Error("Could not load the payment script."));
     document.head.appendChild(script);
   });
   return loading;

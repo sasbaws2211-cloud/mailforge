@@ -24,8 +24,8 @@ const iso = (d: Date) => d.toISOString();
 
 describe("paid plans and prices", () => {
   it("only the plans that cost money are paid plans", () => {
-    for (const p of ["starter", "growth", "scale"]) expect(isPaidPlanId(p), p).toBe(true);
-    for (const v of ["free", "trial", "enterprise", "", null, undefined, 3]) expect(isPaidPlanId(v), String(v)).toBe(false);
+    expect(isPaidPlanId("essential")).toBe(true);
+    for (const v of ["free", "trial", "starter", "growth", "scale", "enterprise", "", null, undefined, 3]) expect(isPaidPlanId(v), String(v)).toBe(false);
   });
 
   it("recognizes only monthly and yearly as billing intervals", () => {
@@ -35,12 +35,8 @@ describe("paid plans and prices", () => {
   });
 
   it("the billed amount is the exact monthly price or the exact yearly total", () => {
-    expect(planPriceUsd("starter", "monthly")).toBe(19);
-    expect(planPriceUsd("growth", "monthly")).toBe(49);
-    expect(planPriceUsd("scale", "monthly")).toBe(129);
-    expect(planPriceUsd("starter", "yearly")).toBe(190);
-    expect(planPriceUsd("growth", "yearly")).toBe(490);
-    expect(planPriceUsd("scale", "yearly")).toBe(1290);
+    expect(planPriceUsd("essential", "monthly")).toBe(100);
+    expect(planPriceUsd("essential", "yearly")).toBe(1000);
   });
 });
 
@@ -90,25 +86,25 @@ describe("paymentStatus and the grace period", () => {
   it("has no status for free, trial, unknown or hand-granted plans", () => {
     expect(paymentStatus("free", new Date(NOW.getTime() - 99 * DAY), NOW)).toBe("none");
     expect(paymentStatus("trial", new Date(NOW.getTime() - 99 * DAY), NOW)).toBe("none");
-    expect(paymentStatus("growth", null, NOW)).toBe("none"); // granted by hand: no paid-through date
+    expect(paymentStatus("essential", null, NOW)).toBe("none"); // granted by hand: no paid-through date
     expect(paymentStatus(null, null, NOW)).toBe("none");
   });
 
   it("is current while paid through a future date", () => {
-    expect(paymentStatus("growth", new Date(NOW.getTime() + 1), NOW)).toBe("current");
-    expect(paymentStatus("growth", new Date(NOW.getTime() + 30 * DAY), NOW)).toBe("current");
+    expect(paymentStatus("essential", new Date(NOW.getTime() + 1), NOW)).toBe("current");
+    expect(paymentStatus("essential", new Date(NOW.getTime() + 30 * DAY), NOW)).toBe("current");
   });
 
   it("is overdue the instant the date passes, and for the whole grace period", () => {
-    expect(paymentStatus("growth", new Date(NOW.getTime()), NOW)).toBe("overdue"); // exactly now
-    expect(paymentStatus("growth", new Date(NOW.getTime() - 1), NOW)).toBe("overdue");
-    expect(paymentStatus("growth", new Date(NOW.getTime() - grace + 1), NOW)).toBe("overdue"); // 1 ms inside
+    expect(paymentStatus("essential", new Date(NOW.getTime()), NOW)).toBe("overdue"); // exactly now
+    expect(paymentStatus("essential", new Date(NOW.getTime() - 1), NOW)).toBe("overdue");
+    expect(paymentStatus("essential", new Date(NOW.getTime() - grace + 1), NOW)).toBe("overdue"); // 1 ms inside
   });
 
   it("is lapsed exactly when the grace period ends", () => {
-    expect(paymentStatus("growth", new Date(NOW.getTime() - grace), NOW)).toBe("lapsed"); // boundary
-    expect(paymentStatus("growth", new Date(NOW.getTime() - grace - 1), NOW)).toBe("lapsed");
-    expect(paymentStatus("growth", new Date(NOW.getTime() - 60 * DAY), NOW)).toBe("lapsed");
+    expect(paymentStatus("essential", new Date(NOW.getTime() - grace), NOW)).toBe("lapsed"); // boundary
+    expect(paymentStatus("essential", new Date(NOW.getTime() - grace - 1), NOW)).toBe("lapsed");
+    expect(paymentStatus("essential", new Date(NOW.getTime() - 60 * DAY), NOW)).toBe("lapsed");
   });
 });
 
@@ -116,24 +112,24 @@ describe("effectivePlan with a paid-through date", () => {
   const grace = BILLING_GRACE_DAYS * DAY;
 
   it("keeps a paid plan while current and during grace", () => {
-    expect(effectivePlan("growth", null, NOW, new Date(NOW.getTime() + DAY))).toBe("growth");
-    expect(effectivePlan("growth", null, NOW, new Date(NOW.getTime() - DAY))).toBe("growth");
-    expect(effectivePlan("growth", null, NOW, new Date(NOW.getTime() - grace + 1))).toBe("growth");
+    expect(effectivePlan("essential", null, NOW, new Date(NOW.getTime() + DAY))).toBe("essential");
+    expect(effectivePlan("essential", null, NOW, new Date(NOW.getTime() - DAY))).toBe("essential");
+    expect(effectivePlan("essential", null, NOW, new Date(NOW.getTime() - grace + 1))).toBe("essential");
   });
 
   it("drops to free the moment the grace period ends", () => {
-    expect(effectivePlan("growth", null, NOW, new Date(NOW.getTime() - grace))).toBe("free");
-    expect(effectivePlan("scale", null, NOW, new Date(NOW.getTime() - 90 * DAY))).toBe("free");
+    expect(effectivePlan("essential", null, NOW, new Date(NOW.getTime() - grace))).toBe("free");
+    expect(effectivePlan("essential", null, NOW, new Date(NOW.getTime() - 90 * DAY))).toBe("free");
   });
 
   it("a paid plan with no paid-through date is never dropped (granted by hand)", () => {
-    expect(effectivePlan("scale", null, NOW, null)).toBe("scale");
-    expect(effectivePlan("scale", null, NOW)).toBe("scale");
+    expect(effectivePlan("essential", null, NOW, null)).toBe("essential");
+    expect(effectivePlan("essential", null, NOW)).toBe("essential");
   });
 
   it("does not affect free, trials or unknown plans", () => {
     expect(effectivePlan("free", null, NOW, new Date(NOW.getTime() - 90 * DAY))).toBe("free");
-    expect(effectivePlan("trial", new Date(NOW.getTime() + DAY), NOW, new Date(NOW.getTime() - 90 * DAY))).toBe("growth");
+    expect(effectivePlan("trial", new Date(NOW.getTime() + DAY), NOW, new Date(NOW.getTime() - 90 * DAY))).toBe("essential");
     expect(effectivePlan("enterprise", null, NOW, new Date(NOW.getTime() + DAY))).toBe("free");
   });
 });
@@ -143,25 +139,25 @@ describe("entitlements with a paid-through date", () => {
     entitlementsFor({ plan, trialEndsAt: null, paidThrough: new Date(NOW.getTime() + offsetMs), now: NOW, enforced: true });
 
   it("a current subscription has the limits of its plan and is not overdue", () => {
-    const e = through("growth", 10 * DAY);
-    expect(e.plan).toBe("growth");
+    const e = through("essential", 10 * DAY);
+    expect(e.plan).toBe("essential");
     expect(e.paymentStatus).toBe("current");
-    expect(e.limits).toEqual(PLANS.growth.limits);
+    expect(e.limits).toEqual(PLANS.essential.limits);
     expect(e.showsPoweredBy).toBe(false);
     expect(e.paidThrough?.getTime()).toBe(NOW.getTime() + 10 * DAY);
   });
 
   it("during the grace period the paid plan still works but is flagged overdue", () => {
-    const e = through("growth", -DAY);
-    expect(e.plan).toBe("growth");
+    const e = through("essential", -DAY);
+    expect(e.plan).toBe("essential");
     expect(e.paymentStatus).toBe("overdue");
-    expect(e.limits).toEqual(PLANS.growth.limits);
+    expect(e.limits).toEqual(PLANS.essential.limits);
   });
 
   it("once lapsed it is Free: Free limits, the credit line, and status lapsed", () => {
-    const e = through("growth", -4 * DAY);
+    const e = through("essential", -4 * DAY);
     expect(e.plan).toBe("free");
-    expect(e.storedPlan).toBe("growth");
+    expect(e.storedPlan).toBe("essential");
     expect(e.paymentStatus).toBe("lapsed");
     expect(e.limits).toEqual(PLANS.free.limits);
     expect(e.showsPoweredBy).toBe(true);
@@ -169,14 +165,14 @@ describe("entitlements with a paid-through date", () => {
   });
 
   it("a hand-granted plan with no date is never lapsed", () => {
-    const e = entitlementsFor({ plan: "scale", trialEndsAt: null, now: NOW, enforced: true });
+    const e = entitlementsFor({ plan: "essential", trialEndsAt: null, now: NOW, enforced: true });
     expect(e.paymentStatus).toBe("none");
-    expect(e.plan).toBe("scale");
+    expect(e.plan).toBe("essential");
     expect(e.paidThrough).toBeNull();
   });
 
   it("lapsing changes nothing when enforcement is off", () => {
-    const e = entitlementsFor({ plan: "growth", trialEndsAt: null, paidThrough: new Date(NOW.getTime() - 99 * DAY), now: NOW, enforced: false });
+    const e = entitlementsFor({ plan: "essential", trialEndsAt: null, paidThrough: new Date(NOW.getTime() - 99 * DAY), now: NOW, enforced: false });
     expect(e.limits).toEqual({ contacts: null, emailsPerMonth: null, seats: null, aiTokensPerMonth: null });
     expect(e.showsPoweredBy).toBe(false);
   });

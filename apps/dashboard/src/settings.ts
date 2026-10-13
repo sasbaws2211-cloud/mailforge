@@ -101,7 +101,7 @@ export function useTemplates() {
   return useQuery({ queryKey: TEMPLATES_QUERY_KEY, queryFn: fetchTemplates });
 }
 
-/** Remove the workspace's own AI key; it then falls back to Mailforge AI. */
+/** Remove the workspace's own AI key; it then falls back to Loomail AI. */
 export function useDeleteLlm() {
   const qc = useQueryClient();
   return useMutation({
@@ -145,9 +145,9 @@ export function useSetupState() {
   const isError = llm.isError || transport.isError || tenant.isError;
 
   const checks = {
-    // AI is set up when the workspace has its own key OR Mailforge AI is available to it.
+    // AI is set up when the workspace has its own key OR Loomail AI is available to it.
     llm: llm.data !== undefined && (llm.data.llm !== null || (llm.data.ai?.source ?? "none") !== "none"),
-    // Email can go out when the workspace connected a provider of its own OR Mailforge Sending is in use.
+    // Email can go out when the workspace connected a provider of its own OR Loomail Sending is in use.
     transport: (transport.data?.transport !== null && transport.data !== undefined) || sending.data?.uses === "managed",
     postalAddress:
       tenant.data !== undefined && (tenant.data.tenant.postal_address ?? "") !== "",

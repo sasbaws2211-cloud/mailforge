@@ -23,7 +23,7 @@ file says so at the top.
 3. After the grace period (7 days by default) the worker erases everything. It runs on
    the hourly background tick, so erasure happens within about an hour of the date.
 
-Set the grace period with `MAILFORGE_DELETION_GRACE_DAYS` (1 to 90).
+Set the grace period with `LOOMAIL_DELETION_GRACE_DAYS` (1 to 90).
 
 **The emails.** Three, each to every active owner of the workspace (not only whoever
 clicked, and also when a platform admin did it):
@@ -35,7 +35,7 @@ clicked, and also when a platform admin did it):
   security alert: a second owner cannot quietly undo a deletion you wanted.
 - *Deleted*, sent after a platform admin uses **Erase immediately**: which workspace, which
   administrator, the day, and that it cannot be recovered. No sign-in link, because there
-  is nothing left to sign in to. It includes `MAILFORGE_SUPPORT_EMAIL` as the place to write
+  is nothing left to sign in to. It includes `LOOMAIL_SUPPORT_EMAIL` as the place to write
   if you have set one. The admin's written reason is not included (it is an internal note).
   The owners, their email transport and the name are gone once the erase finishes, so the
   server looks them up first and sends afterwards, and only if the erase really happened.

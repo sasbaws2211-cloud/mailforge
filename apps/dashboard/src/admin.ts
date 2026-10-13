@@ -93,7 +93,7 @@ export function useAdminAiTest() {
 const DAY = 86_400_000;
 
 export function planLabel(id: string | null | undefined): string {
-  if (!id) return "Free";
+  if (!id) return "No plan";
   return id.charAt(0).toUpperCase() + id.slice(1);
 }
 
@@ -111,7 +111,7 @@ export function workspaceBadge(w: AdminWorkspace, now: Date = new Date()): { lab
     return { label: `Trial, ${days} ${days === 1 ? "day" : "days"} left`, variant: "accent" };
   }
   if (w.stored_plan === "trial") return { label: "Trial ended", variant: "muted" };
-  if (w.effective_plan.id === "free") return { label: "Free", variant: "neutral" };
+  if (w.effective_plan.id === "free") return { label: "No plan", variant: "neutral" };
   return { label: w.effective_plan.name, variant: "success" };
 }
 

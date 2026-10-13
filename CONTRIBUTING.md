@@ -1,8 +1,8 @@
-# Contributing to Mailforge
+# Contributing to Loomail
 
 ## How this project works
 
-Mailforge uses an open source, not open contribution model. Development happens in a private
+Loomail uses an open source, not open contribution model. Development happens in a private
 repository. Releases are assembled, verified, and published here as squashed commits. This
 repository is output, not a collaboration space.
 

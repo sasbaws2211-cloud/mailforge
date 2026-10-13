@@ -3,18 +3,18 @@
 How a new customer of the hosted product gets from signup to their first delivered email, what the
 product does at each point, and how to see where people stall.
 
-Onboarding only exists on a hosted install (`MAILFORGE_ENFORCE_PLANS=true`). A self-hosted install
+Onboarding only exists on a hosted install (`LOOMAIL_ENFORCE_PLANS=true`). A self-hosted install
 keeps its own setup screen, which asks about environment variables and key files.
 
 ## The journey
 
 | # | Moment | What the customer sees | What makes it done |
 |---|--------|------------------------|--------------------|
-| 1 | `/signup` | Workspace name + work email. 14-day Growth trial, no card | Workspace created |
+| 1 | `/signup` | Workspace name + work email. 7-day Essential trial, no card | Workspace created |
 | 2 | Signup email | "Your login link" (platform sender) | Link clicked, **Sign in** pressed |
 | 3 | First sign-in | **Welcome email** (once) with the three first steps; Home opens on the onboarding panel | n/a |
 | 4 | Add business address | Settings > Postal address | An address is saved |
-| 5 | Choose how email is sent | Settings > Email sending | An active own transport, **or** Mailforge Sending switched on |
+| 5 | Choose how email is sent | Settings > Email sending | An active own transport, **or** Loomail Sending switched on |
 | 6 | Turn on first flow | Welcome flow card on Home: install, review, activate | At least one flow is active |
 | 7 | Send first event | Integrate: create a key, **Send test event** (a real `signed_up`) | At least one event received |
 | 8 | First email delivered | Home shows **You are live** card for 3 days | At least one email has status `sent` |
@@ -92,15 +92,15 @@ The admin funnel shows how many signups chose each goal. Mapping: `GOAL_INFO` in
 
 ## Sending works from minute one
 
-When the operator offers Mailforge Sending (`MAILFORGE_MANAGED_RESEND_API_KEY`) **and** a shared sender address
-(`MAILFORGE_MANAGED_SHARED_FROM`), every new signup gets Mailforge Sending switched on automatically. Their first
-email goes out from the shared address (capped by `MAILFORGE_MANAGED_SHARED_DAILY_LIMIT`, default 100 a day) with no
+When the operator offers Loomail Sending (`LOOMAIL_MANAGED_RESEND_API_KEY`) **and** a shared sender address
+(`LOOMAIL_MANAGED_SHARED_FROM`), every new signup gets Loomail Sending switched on automatically. Their first
+email goes out from the shared address (capped by `LOOMAIL_MANAGED_SHARED_DAILY_LIMIT`, default 100 a day) with no
 provider or SMTP setup, and the "Choose how email is sent" step shows as done. They can add their own domain later.
 
 - Without a shared address nothing is auto-enabled: it would wait for a verified domain and the workspace would
   look set up when it is not.
-- `MAILFORGE_SIGNUP_AUTO_SENDING=false` turns auto-enable off while keeping Mailforge Sending available.
-- The "sender" step counts as done only when mail can really go out: an own transport, or Mailforge Sending that is
+- `LOOMAIL_SIGNUP_AUTO_SENDING=false` turns auto-enable off while keeping Loomail Sending available.
+- The "sender" step counts as done only when mail can really go out: an own transport, or Loomail Sending that is
   on and has the shared address or a verified domain.
 - Existing workspaces are never changed. Abuse limits still apply (bounce and complaint auto-pause, daily cap).
 
@@ -112,8 +112,8 @@ Approved email that cannot go out is shown on Home instead of sitting silent. `G
 | Reason | Meaning | Link |
 |--------|---------|------|
 | `no_sender` | Nothing set up to send through | Settings > Email sending |
-| `needs_domain` | Mailforge Sending is on but has no shared address or verified domain | Settings > Email sending |
-| `paused` | Mailforge Sending is paused for the workspace | Settings > Email sending |
+| `needs_domain` | Loomail Sending is on but has no shared address or verified domain | Settings > Email sending |
+| `paused` | Loomail Sending is paused for the workspace | Settings > Email sending |
 | `no_address` | Sender is fine but no postal address (the drain refuses to send) | Settings > Postal address |
 
 No warning when nothing is waiting, or when the setup is fine and mail is simply queued for its send window.

@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import { tenants } from "./tenants.js";
 
 /**
- * A workspace's managed sending: Mailforge sends its email through the operator's
+ * A workspace's managed sending: Loomail sends its email through the operator's
  * Resend account. One row per workspace that turned it on. A workspace with a
  * transport of its own (transport_configs) uses that instead; this row waits.
  *

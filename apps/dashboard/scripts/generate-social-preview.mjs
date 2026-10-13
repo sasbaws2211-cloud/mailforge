@@ -2,7 +2,7 @@
 /**
  * Generate the GitHub social preview image (1280x640, 2x = 2560x1280).
  *
- * Composites the Mailforge brand over a cropped section of the lifecycle grid
+ * Composites the Loomail brand over a cropped section of the lifecycle grid
  * screenshot. The result is a dark card that shows the product is real.
  *
  * Usage:
@@ -147,7 +147,7 @@ const html = `<!DOCTYPE html>
           <path d="M5 5 H19 A3 3 0 0 1 22 8 V16 A3 3 0 0 1 19 19 H5 A3 3 0 0 1 2 16 V8 A3 3 0 0 1 5 5 Z M4.4 8.1 L12 13.7 L19.6 8.1 L19.6 10.7 L12 16.3 L4.4 10.7 Z" fill="currentColor" fill-rule="evenodd"/>
         </svg>
       </span>
-      <span class="wordmark">mailforge</span>
+      <span class="wordmark">loomail</span>
     </div>
     <p class="tagline">
       The <strong>open-source lifecycle email engine.</strong><br>

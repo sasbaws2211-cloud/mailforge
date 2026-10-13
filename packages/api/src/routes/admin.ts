@@ -13,7 +13,7 @@
  *   POST /v1/admin/tenants/:id/cancel-subscription   stop a customer's charges
  *   GET  /v1/admin/audit?tenant_id&limit        what admins have changed
  *
- * Access: only signed-in users listed in MAILFORGE_PLATFORM_ADMINS. Everyone else,
+ * Access: only signed-in users listed in LOOMAIL_PLATFORM_ADMINS. Everyone else,
  * including workspace owners, gets a plain 404 so the console does not advertise
  * itself. The console reads across tenants by design; it never shows message
  * bodies, contact lists or API keys, only counts and account facts.
@@ -34,10 +34,10 @@ import {
   entitlementsFor,
   isPlanId,
   startOfMonthUtc,
-} from "@mailforge/core";
+} from "@loomail/core";
 import { Readable } from "node:stream";
-import { adminAuditLog, managedSending, subscriptions, tenants } from "@mailforge/db/schema";
-import { purgeWorkspace } from "@mailforge/db/purge";
+import { adminAuditLog, managedSending, subscriptions, tenants } from "@loomail/db/schema";
+import { purgeWorkspace } from "@loomail/db/purge";
 import type { Db } from "../plugins/db.js";
 import type { BillingRuntime } from "../billing/config.js";
 import { BillingError, cancelSubscriptionForTenant, subscriptionUsd } from "../billing/service.js";
@@ -126,7 +126,7 @@ function shapeTenant(r: TenantRow, now: Date) {
     suspended_reason: r.suspended_reason,
     deletion_scheduled_at: iso(r.deletion_scheduled_at),
     deletion_requested_by: r.deletion_requested_by,
-    // A hand-set Mailforge AI token allowance: null = the plan's, -1 = no cap.
+    // A hand-set Loomail AI token allowance: null = the plan's, -1 = no cap.
     ai_allowance_override: r.ai_allowance_override,
     contacts: Number(r.contacts),
     emails_this_month: Number(r.emails_this_month),
@@ -195,7 +195,7 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
     request.platformAdmin = actor;
   });
 
-  // The operator's own AI provider (Mailforge AI): same gate, same audit log.
+  // The operator's own AI provider (Loomail AI): same gate, same audit log.
   await app.register(adminAiRoutes);
 
   /** Find a workspace or answer 404. */
@@ -252,9 +252,7 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
                count(*) FILTER (WHERE plan = ${TRIAL_PLAN_VALUE} AND trial_ends_at > ${t}::timestamptz)::text AS on_trial,
                count(*) FILTER (WHERE plan = ${TRIAL_PLAN_VALUE} AND (trial_ends_at IS NULL OR trial_ends_at <= ${t}::timestamptz))::text AS trial_ended,
                count(*) FILTER (WHERE plan = 'free' OR plan IS NULL)::text AS free,
-               count(*) FILTER (WHERE plan = 'starter')::text AS starter,
-               count(*) FILTER (WHERE plan = 'growth')::text AS growth,
-               count(*) FILTER (WHERE plan = 'scale')::text AS scale
+               count(*) FILTER (WHERE plan = 'essential')::text AS essential
         FROM tenants`),
       db.execute<Record<string, string>>(sql`
         SELECT count(*) FILTER (WHERE status = 'active')::text AS active,
@@ -264,10 +262,10 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
         SELECT (SELECT count(*) FROM contacts)::text AS contacts,
                (SELECT count(*) FROM lifecycle_messages WHERE status = 'sent' AND sent_at >= ${monthStart}::timestamptz)::text AS emails_this_month`),
       db.execute<Record<string, string>>(sql`
-        SELECT count(*) FILTER (WHERE plan IN ('starter','growth','scale') AND plan_paid_through IS NOT NULL
+        SELECT count(*) FILTER (WHERE plan = 'essential' AND plan_paid_through IS NOT NULL
                                   AND plan_paid_through <= ${t}::timestamptz
                                   AND plan_paid_through + (${BILLING_GRACE_DAYS} * interval '1 day') > ${t}::timestamptz)::text AS overdue,
-               count(*) FILTER (WHERE plan IN ('starter','growth','scale') AND plan_paid_through IS NOT NULL
+               count(*) FILTER (WHERE plan = 'essential' AND plan_paid_through IS NOT NULL
                                   AND plan_paid_through + (${BILLING_GRACE_DAYS} * interval '1 day') <= ${t}::timestamptz)::text AS lapsed,
                count(*) FILTER (WHERE plan = ${TRIAL_PLAN_VALUE} AND trial_ends_at > ${t}::timestamptz
                                   AND trial_ends_at <= ${t}::timestamptz + interval '3 days')::text AS trials_ending
@@ -297,9 +295,7 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
           trial_running: n(c.on_trial),
           trial_ended: n(c.trial_ended),
           free: n(c.free),
-          starter: n(c.starter),
-          growth: n(c.growth),
-          scale: n(c.scale),
+          essential: n(c.essential),
         },
       },
       revenue: {
@@ -355,7 +351,7 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
       }
       if (status === "trial") conds.push(sql`t.plan = ${TRIAL_PLAN_VALUE}`);
       if (status === "free") conds.push(sql`(t.plan = 'free' OR t.plan IS NULL)`);
-      if (status === "paid") conds.push(sql`t.plan IN ('starter','growth','scale')`);
+      if (status === "paid") conds.push(sql`t.plan = 'essential'`);
       if (status === "suspended") conds.push(sql`t.suspended_at IS NOT NULL`);
       const where = sql.join(conds, sql` AND `);
 
@@ -435,12 +431,12 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
           }
         : null,
       ai: {
-        // byok = the workspace's own key; platform = Mailforge AI (or nothing, if none is set up)
+        // byok = the workspace's own key; platform = Loomail AI (or nothing, if none is set up)
         source: aiUse.rows[0]?.own_key ? "byok" : "platform",
         platform_tokens_this_month: Number(aiUse.rows[0]?.platform_tokens ?? 0),
         byok_tokens_this_month: Number(aiUse.rows[0]?.byok_tokens ?? 0),
         calls_this_month: Number(aiUse.rows[0]?.calls ?? 0),
-        // What this workspace's Mailforge AI use cost you this month.
+        // What this workspace's Loomail AI use cost you this month.
         platform_cost_usd: Number(aiUse.rows[0]?.cost_micros ?? 0) / 1_000_000,
         // A hand-set allowance, or null when the plan's applies; -1 means no cap.
         allowance_override: row.ai_allowance_override,
@@ -781,7 +777,7 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
       if (result) {
         await notifyWorkspaceErased(noticeCtx, {
           erasedBy: request.platformAdmin!.email,
-          supportEmail: process.env.MAILFORGE_SUPPORT_EMAIL?.trim() || null,
+          supportEmail: process.env.LOOMAIL_SUPPORT_EMAIL?.trim() || null,
           log: request.log,
         });
       }

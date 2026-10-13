@@ -1,5 +1,5 @@
 /**
- * Platform admin console: AI providers (Mailforge AI).
+ * Platform admin console: AI providers (Loomail AI).
  *
  * The operator's own AI provider, shared by every workspace that has not saved
  * a key of its own. A primary and an optional fallback (used when the primary
@@ -276,7 +276,7 @@ function ReasonAction({
   );
 }
 
-/** The monthly dollar budget: a hard stop for Mailforge AI, with alerts at 80% and 100%. */
+/** The monthly dollar budget: a hard stop for Loomail AI, with alerts at 80% and 100%. */
 function BudgetCard({ budget }: { budget: AdminAiOverview["budget"] }) {
   const change = useAdminAiChange();
   const [editing, setEditing] = useState(false);
@@ -305,7 +305,7 @@ function BudgetCard({ budget }: { budget: AdminAiOverview["budget"] }) {
   return (
     <Section
       title="Monthly budget"
-      description="A hard limit on what Mailforge AI may cost you each calendar month. You are emailed at 80%. At 100% Mailforge AI pauses for every workspace without its own key (nothing is lost; queued work waits). Customers on their own key are never affected."
+      description="A hard limit on what Loomail AI may cost you each calendar month. You are emailed at 80%. At 100% Loomail AI pauses for every workspace without its own key (nothing is lost; queued work waits). Customers on their own key are never affected."
       configured={null}
       actions={set ? <Badge variant={budget.state === "reached" ? "danger" : budget.state === "near" ? "warning" : "success"}>{budget.state === "reached" ? "paused" : budget.state === "near" ? "nearly used" : "on"}</Badge> : <Badge variant="neutral">no limit</Badge>}
     >
@@ -329,7 +329,7 @@ function BudgetCard({ budget }: { budget: AdminAiOverview["budget"] }) {
           </div>
         </div>
       )}
-      {!set && <p className="text-[14px] text-muted-foreground">No budget is set, so Mailforge AI is never paused for cost. Set one to protect yourself from a runaway bill.</p>}
+      {!set && <p className="text-[14px] text-muted-foreground">No budget is set, so Loomail AI is never paused for cost. Set one to protect yourself from a runaway bill.</p>}
 
       {!editing ? (
         <div className="mt-4 flex gap-2">
@@ -367,7 +367,7 @@ function BudgetCard({ budget }: { budget: AdminAiOverview["budget"] }) {
         </form>
       )}
       {budget.state === "reached" && !editing && (
-        <p className="mt-3 text-[13px] text-muted-foreground">Raising the budget resumes Mailforge AI immediately.</p>
+        <p className="mt-3 text-[13px] text-muted-foreground">Raising the budget resumes Loomail AI immediately.</p>
       )}
     </Section>
   );
@@ -424,7 +424,7 @@ function SlotCard({ p }: { p: AdminAiProvider }) {
 
       {!p.readable && (
         <Notice className="mt-4">
-          The saved key can no longer be read (the encryption key changed). Replace it, or workspaces on Mailforge AI will fail.
+          The saved key can no longer be read (the encryption key changed). Replace it, or workspaces on Loomail AI will fail.
         </Notice>
       )}
 
@@ -471,7 +471,7 @@ export default function AdminAiPage() {
       <PageHeader
         eyebrow="Platform"
         title="AI providers"
-        subtitle="Mailforge AI: the provider every workspace uses until it adds a key of its own. Workspaces on their own key never use these."
+        subtitle="Loomail AI: the provider every workspace uses until it adds a key of its own. Workspaces on their own key never use these."
       />
 
       {isError && <Notice>{errorMessage(error)}</Notice>}
@@ -479,18 +479,18 @@ export default function AdminAiPage() {
 
       {data?.budget.state === "reached" && (
         <Notice>
-          <span className="font-medium">Mailforge AI is paused.</span> It has cost {formatCost(data.budget.spent_usd)} this month and reached your {formatCost(data.budget.monthly_usd ?? 0)} budget. Workspaces
+          <span className="font-medium">Loomail AI is paused.</span> It has cost {formatCost(data.budget.spent_usd)} this month and reached your {formatCost(data.budget.monthly_usd ?? 0)} budget. Workspaces
           without their own key cannot use AI until you raise the budget or the month rolls over. Customers on their own key are unaffected.
         </Notice>
       )}
       {data?.budget.state === "near" && (
         <Notice>
-          Mailforge AI has cost {formatCost(data.budget.spent_usd)} of your {formatCost(data.budget.monthly_usd ?? 0)} monthly budget. At 100% it pauses.
+          Loomail AI has cost {formatCost(data.budget.spent_usd)} of your {formatCost(data.budget.monthly_usd ?? 0)} monthly budget. At 100% it pauses.
         </Notice>
       )}
       {data?.health.unhealthy && (
         <Notice>
-          <span className="font-medium">Mailforge AI is failing.</span> {nf(data.health.failed)} of {nf(data.health.calls)} calls failed in the last{" "}
+          <span className="font-medium">Loomail AI is failing.</span> {nf(data.health.failed)} of {nf(data.health.calls)} calls failed in the last{" "}
           {data.health.window_minutes} minutes ({Math.round(data.health.rate * 100)}%). Workspaces without their own key are affected. Test each key below, and add a
           fallback from a different vendor if you have none. Platform admins are emailed about this.
         </Notice>
@@ -500,7 +500,7 @@ export default function AdminAiPage() {
       )}
       {data && data.encryption_configured && !data.available && (
         <Notice>
-          Mailforge AI is off: no provider is switched on. Workspaces without their own key cannot compile flows or use AI drafting.
+          Loomail AI is off: no provider is switched on. Workspaces without their own key cannot compile flows or use AI drafting.
         </Notice>
       )}
 
@@ -521,12 +521,12 @@ export default function AdminAiPage() {
           <section>
             <h2 className="text-[20px] font-semibold leading-[28px] tracking-[-0.015em] text-foreground">This month</h2>
             <p className="mt-1 text-[14px] text-muted-foreground">
-              Tokens spent on Mailforge AI since the 1st (UTC). This is your cost. Calls made with customers' own keys are counted
+              Tokens spent on Loomail AI since the 1st (UTC). This is your cost. Calls made with customers' own keys are counted
               separately and cost you nothing.
             </p>
             <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
               <Stat label="Cost this month" value={formatCost(data.usage.platform_cost_usd)} hint="chat calls, from your prices" />
-              <Stat label="Mailforge AI tokens" value={nf(data.usage.platform_tokens)} hint={`${nf(data.usage.platform_workspaces)} ${data.usage.platform_workspaces === 1 ? "workspace" : "workspaces"}, ${nf(data.usage.platform_calls)} calls`} />
+              <Stat label="Loomail AI tokens" value={nf(data.usage.platform_tokens)} hint={`${nf(data.usage.platform_workspaces)} ${data.usage.platform_workspaces === 1 ? "workspace" : "workspaces"}, ${nf(data.usage.platform_calls)} calls`} />
               <Stat
                 label="Failed calls"
                 value={nf(data.usage.platform_failed_calls)}
@@ -552,7 +552,7 @@ export default function AdminAiPage() {
           <section>
             <h2 className="text-[20px] font-semibold leading-[28px] tracking-[-0.015em] text-foreground">Heaviest workspaces</h2>
             {data.top_workspaces.length === 0 ? (
-              <p className="mt-3 text-[14px] text-muted-foreground">No Mailforge AI use yet this month.</p>
+              <p className="mt-3 text-[14px] text-muted-foreground">No Loomail AI use yet this month.</p>
             ) : (
               <div className="mt-3 overflow-x-auto rounded-lg border border-border bg-card">
                 <Table>

@@ -1,5 +1,5 @@
 /**
- * Managed sending: Mailforge sends a workspace's email through the operator's own
+ * Managed sending: Loomail sends a workspace's email through the operator's own
  * Resend account, so a customer does not need an email provider of their own.
  *
  * Which sending a workspace uses (same layering idea as AI):
@@ -43,16 +43,16 @@ export const RESEND_API_BASE = "https://api.resend.com";
 
 /** The operator's managed sending settings from the environment. */
 export function managedSendingConfigFromEnv(env: Record<string, string | undefined> = process.env): ManagedSendingConfig {
-  const apiKey = env.MAILFORGE_MANAGED_RESEND_API_KEY?.trim() || null;
-  const sharedFrom = env.MAILFORGE_MANAGED_SHARED_FROM?.trim().toLowerCase() || null;
-  const limitRaw = Number(env.MAILFORGE_MANAGED_SHARED_DAILY_LIMIT);
+  const apiKey = env.LOOMAIL_MANAGED_RESEND_API_KEY?.trim() || null;
+  const sharedFrom = env.LOOMAIL_MANAGED_SHARED_FROM?.trim().toLowerCase() || null;
+  const limitRaw = Number(env.LOOMAIL_MANAGED_SHARED_DAILY_LIMIT);
   return {
-    enabled: apiKey !== null && env.MAILFORGE_MANAGED_SENDING !== "false",
+    enabled: apiKey !== null && env.LOOMAIL_MANAGED_SENDING !== "false",
     apiKey,
-    webhookSecret: env.MAILFORGE_MANAGED_RESEND_WEBHOOK_SECRET?.trim() || null,
+    webhookSecret: env.LOOMAIL_MANAGED_RESEND_WEBHOOK_SECRET?.trim() || null,
     sharedFrom: sharedFrom && SENDER_ADDRESS_RE.test(sharedFrom) ? sharedFrom : null,
     sharedDailyLimit: Number.isInteger(limitRaw) && limitRaw >= 1 ? limitRaw : DEFAULT_SHARED_DAILY_LIMIT,
-    baseUrl: (env.MAILFORGE_MANAGED_RESEND_BASE_URL?.trim() || RESEND_API_BASE).replace(/\/+$/, ""),
+    baseUrl: (env.LOOMAIL_MANAGED_RESEND_BASE_URL?.trim() || RESEND_API_BASE).replace(/\/+$/, ""),
   };
 }
 

@@ -49,8 +49,8 @@
  */
 import { eq, and } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { kbEntries } from "@mailforge/db/schema";
-import type { KbEmbedJobData } from "@mailforge/core";
+import { kbEntries } from "@loomail/db/schema";
+import type { KbEmbedJobData } from "@loomail/core";
 import {
   resolveEmbeddingProvider,
   callEmbedding,

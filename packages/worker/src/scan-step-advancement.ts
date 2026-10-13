@@ -36,8 +36,8 @@ import {
   flowMemberships,
   lifecycleMessages,
   scanCheckpoints,
-} from "@mailforge/db/schema";
-import { parseDelay, delayToMs, type CompiledStep, type PlanExitCondition } from "@mailforge/core";
+} from "@loomail/db/schema";
+import { parseDelay, delayToMs, type CompiledStep, type PlanExitCondition } from "@loomail/core";
 import {
   evaluateStepCondition,
   evaluatePlanExitCondition,

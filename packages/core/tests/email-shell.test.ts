@@ -1,6 +1,6 @@
 /**
  * Tests for the email shell accent: the top bar and the link color follow the
- * tenant accent, with the Mailforge default when none is set.
+ * tenant accent, with the Loomail default when none is set.
  */
 import { describe, it, expect } from "vitest";
 import { wrapInShell, wrapInTextShell, brandLinkStyle, DEFAULT_ACCENT } from "../src/index.js";
@@ -26,7 +26,7 @@ function barColor(html: string): string | undefined {
 }
 
 describe("email shell accent", () => {
-  it("defaults to the Mailforge accent for the bar and for links", () => {
+  it("defaults to the Loomail accent for the bar and for links", () => {
     const html = shell(LINK_DEFAULT("https://a.test"));
     expect(DEFAULT_ACCENT).toBe("#b8541a");
     expect(barColor(html)).toBe("#b8541a");
@@ -151,24 +151,24 @@ describe("powered-by credit line", () => {
   });
 
   it("adds a small link under the compliance footer in HTML", () => {
-    const html = withCredit({ name: "Mailforge", url: "https://mailforge.example" });
-    expect(html).toContain('<a href="https://mailforge.example"');
-    expect(html).toContain("Sent with Mailforge");
-    expect(html.indexOf("footer")).toBeLessThan(html.indexOf("Sent with Mailforge"));
+    const html = withCredit({ name: "Loomail", url: "https://loomail.example" });
+    expect(html).toContain('<a href="https://loomail.example"');
+    expect(html).toContain("Sent with Loomail");
+    expect(html.indexOf("footer")).toBeLessThan(html.indexOf("Sent with Loomail"));
     // It lives inside the footer cell, so the dark-mode footer link color applies.
     const footerCell = html.slice(html.indexOf("email-footer"));
-    expect(footerCell).toContain("Sent with Mailforge");
+    expect(footerCell).toContain("Sent with Loomail");
   });
 
   it("adds a plain line in the text version", () => {
-    const text = textWith({ name: "Mailforge", url: "https://mailforge.example" });
-    expect(text.endsWith("footer\n\nSent with Mailforge: https://mailforge.example")).toBe(true);
+    const text = textWith({ name: "Loomail", url: "https://loomail.example" });
+    expect(text.endsWith("footer\n\nSent with Loomail: https://loomail.example")).toBe(true);
   });
 
   it("refuses any link that is not http(s): no javascript:, data: or relative links", () => {
-    for (const url of ["javascript:alert(1)", "data:text/html,x", "/relative", "ftp://x.test", "", "mailforge.example"]) {
-      expect(withCredit({ name: "Mailforge", url }), url).not.toContain("Sent with");
-      expect(textWith({ name: "Mailforge", url }), url).not.toContain("Sent with");
+    for (const url of ["javascript:alert(1)", "data:text/html,x", "/relative", "ftp://x.test", "", "loomail.example"]) {
+      expect(withCredit({ name: "Loomail", url }), url).not.toContain("Sent with");
+      expect(textWith({ name: "Loomail", url }), url).not.toContain("Sent with");
     }
   });
 

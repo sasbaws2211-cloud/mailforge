@@ -2,7 +2,7 @@
  * Settings / AI provider.
  *
  * A workspace's AI comes from one of two places:
- *   - Mailforge AI: the operator's provider, included in the plan, nothing to
+ *   - Loomail AI: the operator's provider, included in the plan, nothing to
  *     set up, counted against a monthly token allowance
  *   - the customer's own key: used instead whenever one is saved, never capped
  *     here, billed by their provider
@@ -32,7 +32,7 @@ const LLM_PROVIDERS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "custom", label: "Custom (OpenAI-compatible)" },
 ];
 
-/** The Mailforge AI allowance as a bar. Only shown for a workspace on Mailforge AI with a cap. */
+/** The Loomail AI allowance as a bar. Only shown for a workspace on Loomail AI with a cap. */
 function AllowanceMeter({ ai }: { ai: LlmAiInfo }) {
   const { limit, used, resets_at } = ai.allowance;
   if (limit === null) return null;
@@ -41,14 +41,14 @@ function AllowanceMeter({ ai }: { ai: LlmAiInfo }) {
   return (
     <div className="mt-4">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-[14px] font-medium text-foreground">Mailforge AI tokens this month</h3>
+        <h3 className="text-[14px] font-medium text-foreground">Loomail AI tokens this month</h3>
         <p className="text-[14px] tabular-nums text-muted-foreground">
           <span className="font-medium text-foreground">{tokens(used)}</span> of {tokens(limit)}
         </p>
       </div>
       <div
         role="progressbar"
-        aria-label="Mailforge AI tokens this month"
+        aria-label="Loomail AI tokens this month"
         aria-valuemin={0}
         aria-valuemax={limit}
         aria-valuenow={Math.min(used, limit)}
@@ -114,7 +114,7 @@ export default function LlmSettings() {
       setSaved(false);
       setRemovedNote(
         r.ai.source === "platform"
-          ? "Your key was removed. This workspace now uses Mailforge AI."
+          ? "Your key was removed. This workspace now uses Loomail AI."
           : "Your key was removed. AI drafting and compiling are off until you add a key.",
       );
     } catch (err) {
@@ -163,7 +163,7 @@ export default function LlmSettings() {
             )}
           </SummaryList>
           <p className="mt-4 text-[13px] text-muted-foreground">
-            Drafts and compiles run on your own provider and are billed by them, so no Mailforge AI allowance is used.
+            Drafts and compiles run on your own provider and are billed by them, so no Loomail AI allowance is used.
             The key is stored encrypted and never displayed.
           </p>
         </>
@@ -172,7 +172,7 @@ export default function LlmSettings() {
       {confirmRemove && llm && (
         <div className="mt-4 rounded-md border border-border bg-sunken px-4 py-3" role="group" aria-label="Remove your key">
           <p className="text-[14px] text-foreground">
-            Remove your key? This workspace will use Mailforge AI instead, within your plan's monthly allowance, if it is available.
+            Remove your key? This workspace will use Loomail AI instead, within your plan's monthly allowance, if it is available.
             Otherwise AI drafting and compiling stop until you add a key.
           </p>
           <div className="mt-3 flex gap-2">
@@ -223,7 +223,7 @@ export default function LlmSettings() {
         <form onSubmit={handleSubmit} noValidate className="mt-2 space-y-4">
           {onPlatform && (
             <p className="text-[14px] text-muted-foreground">
-              Add your own provider key. Once it is saved, this workspace uses it instead of Mailforge AI.
+              Add your own provider key. Once it is saved, this workspace uses it instead of Loomail AI.
             </p>
           )}
           <div className="grid grid-cols-2 gap-4">
@@ -272,7 +272,7 @@ export default function LlmSettings() {
           )}
           {!isCustom && effectiveModel !== null && effectiveBaseUrl !== null && (
             <p className="text-[14px] text-muted-foreground">
-              Mailforge will use <span className="font-mono text-[13px]">{effectiveModel}</span>
+              Loomail will use <span className="font-mono text-[13px]">{effectiveModel}</span>
               {" via "}
               <span className="font-mono text-[13px]">{effectiveBaseUrl}</span>.
             </p>

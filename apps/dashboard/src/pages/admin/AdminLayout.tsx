@@ -49,7 +49,7 @@ function AdminFrame({ email, onSignOut, signingOut, back, showSecurity, banner }
 
   useEffect(() => {
     const before = document.title;
-    document.title = "Admin console · Mailforge";
+    document.title = "Admin console · Loomail";
     return () => {
       document.title = before;
     };

@@ -1,5 +1,5 @@
 /**
- * Platform admin: the operator's own AI provider ("Mailforge AI").
+ * Platform admin: the operator's own AI provider ("Loomail AI").
  *
  *   GET  /v1/admin/ai                      both slots (never the key), this month's usage, heaviest workspaces
  *   PUT  /v1/admin/ai/:slot                set or change a provider (primary | fallback)
@@ -22,10 +22,10 @@
  */
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { eq, sql } from "drizzle-orm";
-import { MAX_AI_BUDGET_USD, PLATFORM_LLM_SLOTS, aiBudgetState, isPlatformLlmSlot, isValidAiBudgetUsd, isValidPriceUsdPerMtok, microsToUsd, startOfMonthUtc, type PlatformLlmSlot } from "@mailforge/core";
-import { decrypt, encrypt, parseEncryptionKey } from "@mailforge/adapters";
-import { adminAuditLog, platformLlmConfigs, platformSettings } from "@mailforge/db/schema";
-import { AI_BUDGET_KEY, loadAiBudgetUsd } from "@mailforge/db/llm";
+import { MAX_AI_BUDGET_USD, PLATFORM_LLM_SLOTS, aiBudgetState, isPlatformLlmSlot, isValidAiBudgetUsd, isValidPriceUsdPerMtok, microsToUsd, startOfMonthUtc, type PlatformLlmSlot } from "@loomail/core";
+import { decrypt, encrypt, parseEncryptionKey } from "@loomail/adapters";
+import { adminAuditLog, platformLlmConfigs, platformSettings } from "@loomail/db/schema";
+import { AI_BUDGET_KEY, loadAiBudgetUsd } from "@loomail/db/llm";
 import type { Db } from "../plugins/db.js";
 import { loadAiHealth } from "../ai/alerts.js";
 import {
@@ -166,7 +166,7 @@ const adminAiRoutes: FastifyPluginAsync = async (app) => {
       providers,
       // At least one switched-on provider is what lets workspaces without their own key use AI.
       available: providers.some((p) => p.configured && p.enabled),
-      // The monthly dollar budget: at 100% Mailforge AI pauses for every workspace on it (own-key workspaces carry on).
+      // The monthly dollar budget: at 100% Loomail AI pauses for every workspace on it (own-key workspaces carry on).
       budget: { monthly_usd: budgetUsd, spent_usd: spentUsd, state: aiBudgetState(budgetUsd, spentUsd), max_usd: MAX_AI_BUDGET_USD },
       // True when a switched-on provider has no prices, so the dollar figures below undercount.
       prices_missing: providers.some((p) => p.configured && p.enabled && (p.input_price === null || p.output_price === null)),
@@ -184,7 +184,7 @@ const adminAiRoutes: FastifyPluginAsync = async (app) => {
         platform_calls: n(t.platform_calls),
         platform_failed_calls: n(t.platform_failed),
         platform_workspaces: n(t.platform_workspaces),
-        // What Mailforge AI cost you this month, from the prices set on each provider. Chat calls only:
+        // What Loomail AI cost you this month, from the prices set on each provider. Chat calls only:
         // knowledge-base embeddings are counted in tokens but not priced.
         platform_cost_usd: microsToUsd(n(t.platform_cost_micros)),
         // Tokens on customers' own keys: not our cost, shown so the picture is complete.

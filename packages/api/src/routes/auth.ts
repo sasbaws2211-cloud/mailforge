@@ -29,11 +29,11 @@ import {
   magicLinkTokens,
   transportConfigs,
   tenants,
-} from "@mailforge/db/schema";
+} from "@loomail/db/schema";
 import {
   resolveTransportAdapter,
   type TransportAdapter,
-} from "@mailforge/adapters";
+} from "@loomail/adapters";
 import { buildLoginEmail, type TransactionalEmailInput } from "../transactional-email.js";
 import { getPlatformTransport } from "../platform-mailer.js";
 import { sendWelcomeEmailOnce } from "../onboarding/welcome.js";
@@ -48,7 +48,7 @@ const TOKEN_TTL_MINUTES = 10;
 const SESSION_TTL_DAYS = 30;
 
 /** Cookie name for session ID. */
-export const SESSION_COOKIE_NAME = "mailforge_session";
+export const SESSION_COOKIE_NAME = "loomail_session";
 
 /**
  * Generate a cryptographically random token (URL-safe base64).
@@ -90,7 +90,7 @@ export interface AuthRouteOptions {
    * Base URL of the API server (no trailing slash). Retained for interface
    * compatibility but not currently used in auth route logic. The magic link
    * verify URL is built from dashboardUrl (see below), not baseUrl, because
-   * in Cloud the verify link must point at app.mailforge.org where the SPA lives
+   * in Cloud the verify link must point at app.loomail.org where the SPA lives
    * and the Vite dev proxy forwards /auth/* to Fastify.
    */
   baseUrl: string;
@@ -160,7 +160,7 @@ export async function resolveAuthTransport(
   const row = rows.rows[0]!;
 
   // Delegate credential decryption + adapter construction to the shared function
-  // in @mailforge/adapters. Same code path as the drain worker.
+  // in @loomail/adapters. Same code path as the drain worker.
   const result = resolveTransportAdapter(row.provider, row.config);
   if (!result.ok) return null;
 
@@ -180,7 +180,7 @@ function buildLoginEmailHtml(loginUrl: string, _brand?: unknown): string {
   // Returns a minimal branded HTML through the shell with defaults.
   const { html } = buildLoginEmail(loginUrl, TOKEN_TTL_MINUTES, {
     brand: {},
-    tenantName: "Mailforge",
+    tenantName: "Loomail",
   });
   return html;
 }
@@ -188,7 +188,7 @@ function buildLoginEmailHtml(loginUrl: string, _brand?: unknown): string {
 function buildLoginEmailText(loginUrl: string): string {
   const { text } = buildLoginEmail(loginUrl, TOKEN_TTL_MINUTES, {
     brand: {},
-    tenantName: "Mailforge",
+    tenantName: "Loomail",
   });
   return text;
 }
@@ -221,7 +221,7 @@ function renderVerifyPage(email: string, token: string): string {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex" />
-    <title>Sign in to Mailforge</title>
+    <title>Sign in to Loomail</title>
     <style>
       body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f7f7f9; color: #26282e; font-family: system-ui, sans-serif; }
       main { width: 100%; max-width: 360px; padding: 24px; text-align: center; }
@@ -234,7 +234,7 @@ function renderVerifyPage(email: string, token: string): string {
   <body>
     <main>
       <span style="display:inline-flex;color:#b8541a">${MARK_SVG}</span>
-      <h1>Sign in to Mailforge</h1>
+      <h1>Sign in to Loomail</h1>
       <p>You are signing in as <strong>${escapeHtml(email)}</strong>.</p>
       <form method="post" action="/auth/verify">
         <input type="hidden" name="token" value="${escapeHtmlAttr(token)}" />
@@ -411,7 +411,7 @@ const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (app, opts) => {
       const brand = (tenantSettings.brand as Record<string, unknown> | undefined) ?? {};
       const emailInput: TransactionalEmailInput = {
         brand: brand as TransactionalEmailInput["brand"],
-        tenantName: tenantRow?.name ?? "Mailforge",
+        tenantName: tenantRow?.name ?? "Loomail",
       };
       const { html: brandedHtml, text: brandedText } = buildLoginEmail(
         loginUrl, TOKEN_TTL_MINUTES, emailInput,

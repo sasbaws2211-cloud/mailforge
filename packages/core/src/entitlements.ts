@@ -3,7 +3,7 @@
  * checking usage against it. Pure functions, no I/O: callers fetch the tenant
  * plan row and the usage counts, then ask here.
  *
- * Enforcement is OFF unless MAILFORGE_ENFORCE_PLANS=true. With it off every
+ * Enforcement is OFF unless LOOMAIL_ENFORCE_PLANS=true. With it off every
  * tenant is unlimited and nothing is gated, so self-hosted installs behave as
  * they always did. Turn it on only for a hosted service that sells plans.
  *
@@ -26,7 +26,7 @@ export type LimitKind = "contacts" | "emails" | "seats" | "ai";
 
 /** True when plan limits are enforced for this process. */
 export function plansEnforced(env: Record<string, string | undefined> = process.env): boolean {
-  return env.MAILFORGE_ENFORCE_PLANS === "true";
+  return env.LOOMAIL_ENFORCE_PLANS === "true";
 }
 
 export interface Entitlements {
@@ -59,16 +59,37 @@ function applyAiOverride(limits: PlanLimits, override: number | null | undefined
   return { ...limits, aiTokensPerMonth: override < 0 ? null : override };
 }
 
+/** Extra units bought this month on top of the plan, per limit. Omitted kinds mean none. */
+export interface AddonTotals {
+  contacts?: number;
+  emailsPerMonth?: number;
+  aiTokensPerMonth?: number;
+}
+
+/** Adds bought top-ups to the limits. A kind with no cap stays uncapped. */
+function applyAddons(limits: PlanLimits, extra: AddonTotals | undefined): PlanLimits {
+  if (!extra) return limits;
+  const add = (cap: number | null, n: number | undefined) => (cap === null || !n || n < 0 ? cap : cap + n);
+  return {
+    ...limits,
+    contacts: add(limits.contacts, extra.contacts),
+    emailsPerMonth: add(limits.emailsPerMonth, extra.emailsPerMonth),
+    aiTokensPerMonth: add(limits.aiTokensPerMonth, extra.aiTokensPerMonth),
+  };
+}
+
 export function entitlementsFor(input: {
   plan: string | null | undefined;
   trialEndsAt: Date | null | undefined;
   /** When a paid plan runs out of paid time. Omit for plans granted by hand. */
   paidThrough?: Date | null | undefined;
   /**
-   * A platform admin's own Mailforge AI token allowance for this workspace.
+   * A platform admin's own Loomail AI token allowance for this workspace.
    * null/omitted = the plan's; negative = no cap; 0 or more = exactly that many.
    */
   aiTokensOverride?: number | null | undefined;
+  /** Prepaid top-ups bought this calendar month, added on top of the plan's limits. */
+  addons?: AddonTotals | undefined;
   now?: Date;
   enforced?: boolean;
 }): Entitlements {
@@ -90,7 +111,7 @@ export function entitlementsFor(input: {
     trialExpired,
     paidThrough,
     paymentStatus: paymentStatus(input.plan, paidThrough, now),
-    limits: enforced ? applyAiOverride(PLANS[plan].limits, input.aiTokensOverride) : UNLIMITED,
+    limits: enforced ? applyAddons(applyAiOverride(PLANS[plan].limits, input.aiTokensOverride), input.addons) : UNLIMITED,
     showsPoweredBy: enforced && Boolean(PLANS[plan].showsPoweredBy),
   };
 }
@@ -127,19 +148,26 @@ export function startOfNextMonthUtc(now: Date): Date {
 
 /** Singular and plural wording for each kind, so "1 team member" never reads "1 team members". */
 const KIND_NOUN: Record<LimitKind, { one: string; many: string }> = {
-  contacts: { one: "contact", many: "contacts" },
+  contacts: { one: "customer profile", many: "customer profiles" },
   emails: { one: "email this month", many: "emails this month" },
   seats: { one: "team member", many: "team members" },
-  ai: { one: "Mailforge AI token this month", many: "Mailforge AI tokens this month" },
+  ai: { one: "Loomail AI token this month", many: "Loomail AI tokens this month" },
 };
 
 /** Human-readable explanation, safe to show to the customer. */
 export function planLimitMessage(kind: LimitKind, limit: number, planName: string): string {
   const noun = limit === 1 ? KIND_NOUN[kind].one : KIND_NOUN[kind].many;
-  if (kind === "ai") {
-    return `Your ${planName} plan includes ${limit.toLocaleString("en-US")} ${noun}, and they are used up. Upgrade your plan or add your own AI key in Settings.`;
+  // No plan: the trial ended (or the subscription lapsed) and the allowance is zero.
+  if (planName === PLANS.free.name) {
+    return "Your free trial has ended. Subscribe to Essential to keep going. Your data is safe.";
   }
-  return `Your ${planName} plan allows up to ${limit.toLocaleString("en-US")} ${noun}. Upgrade your plan to add more.`;
+  if (kind === "ai") {
+    return `Your ${planName} plan includes ${limit.toLocaleString("en-US")} ${noun}, and they are used up. Buy extra AI credits in Settings, or add your own AI key.`;
+  }
+  if (kind === "seats") {
+    return `Your ${planName} plan allows up to ${limit.toLocaleString("en-US")} ${noun}.`;
+  }
+  return `Your ${planName} plan allows up to ${limit.toLocaleString("en-US")} ${noun}. Buy extra usage in Settings, under Plan, to add more.`;
 }
 
 /** Thrown when an action would take a tenant past a plan limit. */
@@ -173,8 +201,8 @@ export function assertWithinLimit(ent: Entitlements, kind: LimitKind, used: numb
 }
 
 /**
- * The "Sent with Mailforge" credit for plans that carry it, or undefined for
- * plans that do not. Needs a public site URL (MAILFORGE_SITE_URL, else
+ * The "Sent with Loomail" credit for plans that carry it, or undefined for
+ * plans that do not. Needs a public site URL (LOOMAIL_SITE_URL, else
  * BASE_URL); without one there is nothing to link to, so no credit is added.
  * Shared by the email drain and the public unsubscribe pages.
  */
@@ -183,6 +211,6 @@ export function poweredByFor(
   env: Record<string, string | undefined> = process.env,
 ): PoweredBy | undefined {
   if (!ent.showsPoweredBy) return undefined;
-  const url = (env.MAILFORGE_SITE_URL || env.BASE_URL || "").trim();
-  return /^https?:\/\//i.test(url) ? { name: "Mailforge", url } : undefined;
+  const url = (env.LOOMAIL_SITE_URL || env.BASE_URL || "").trim();
+  return /^https?:\/\//i.test(url) ? { name: "Loomail", url } : undefined;
 }

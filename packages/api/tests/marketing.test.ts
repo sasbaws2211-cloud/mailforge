@@ -4,14 +4,14 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { PLANS, PLAN_IDS, TRIAL_DAYS } from "@mailforge/core";
+import { PLANS, TRIAL_DAYS } from "@loomail/core";
 import { buildApp } from "../src/index.js";
 
 let app: FastifyInstance;
 let off: FastifyInstance;
 
 beforeAll(async () => {
-  app = await buildApp({ publicSite: true, baseUrl: "https://mailforge.test", logger: false });
+  app = await buildApp({ publicSite: true, baseUrl: "https://loomail.test", logger: false });
   off = await buildApp({ logger: false });
 });
 afterAll(async () => {
@@ -45,7 +45,7 @@ describe("landing page", () => {
     expect(res.body).toContain("<h1>");
     expect(res.body).toContain('href="/signup"');
     expect(res.body).toContain("Start free trial");
-    expect(res.body).toContain('<link rel="canonical" href="https://mailforge.test/">');
+    expect(res.body).toContain('<link rel="canonical" href="https://loomail.test/">');
     expect(res.body).toMatch(/<meta name="description" content="[^"]{40,}"/);
     expect(res.body).toContain('property="og:title"');
     expect(res.headers.vary).toMatch(/cookie/i);
@@ -53,8 +53,19 @@ describe("landing page", () => {
 
   it("states the trial in the plan terms, from the plans config", async () => {
     const res = await get("/");
-    expect(res.body).toContain(`${TRIAL_DAYS} days of ${PLANS.growth.name}`);
+    expect(res.body).toContain(`${TRIAL_DAYS} days of ${PLANS.essential.name}`);
     expect(res.body).toContain("No credit card");
+  });
+
+  it("shows the four use cases, in Loomail's own words, each tied to a ready-made flow", async () => {
+    const body = (await get("/")).body;
+    expect(body).toContain('id="use-cases"');
+    for (const t of ["Welcome emails", "Recover abandoned purchases", "Subscription reminders", "Bring inactive users back"]) {
+      expect(body).toContain(t);
+    }
+    for (const f of ["Welcome Onboarding", "Abandoned cart", "Renewal reminder"]) expect(body).toContain(f);
+    expect(body.toLowerCase()).not.toContain("customer.io");
+    expect(body).toContain('href="/#use-cases"');
   });
 
   it("emits valid JSON-LD", async () => {
@@ -70,53 +81,40 @@ describe("landing page", () => {
   });
 
   it("without the dashboard built, a visitor with a session cookie still gets a page", async () => {
-    const res = await get("/", { cookie: "mailforge_session=abc" });
+    const res = await get("/", { cookie: "loomail_session=abc" });
     expect(res.statusCode).toBe(200);
   });
 });
 
 describe("pricing page", () => {
-  it("shows every plan with its price and limits from the plans config", async () => {
+  it("shows only the Essential plan with its price and features from the plans config", async () => {
     const res = await get("/pricing");
     expect(res.statusCode).toBe(200);
-    for (const id of PLAN_IDS) {
-      const p = PLANS[id];
-      expect(res.body).toContain(`<h3>${p.name}</h3>`);
-      for (const f of p.features) expect(res.body).toContain(f);
+    const p = PLANS.essential;
+    expect(res.body).toContain(`<h3>${p.name}</h3>`);
+    for (const f of p.features) expect(res.body).toContain(f);
+    expect(res.body).toContain("$100");
+    expect(res.body.match(/<div class="plan-card/g)).toHaveLength(1);
+    for (const gone of ["Starter", "Growth", "Scale", "Free forever", "Start free</a>", "billed yearly"]) {
+      expect(res.body, gone).not.toContain(gone);
     }
-    expect(res.body).toContain(`$${PLANS.starter.priceMonthlyUsd}`);
-    expect(res.body).toContain(`$${PLANS.growth.priceMonthlyUsd}`);
-    expect(res.body).toContain(`$${PLANS.scale.priceMonthlyUsd}`);
   });
 
-  it("recommends exactly one plan", async () => {
+  it("has no billing-period toggle", async () => {
     const res = await get("/pricing");
-    expect(res.body.match(/Most popular/g)).toHaveLength(1);
+    expect(res.body).not.toContain('class="toggle"');
   });
 
-  it("annual prices are present for the toggle and are lower than monthly", async () => {
+  it("the button starts a free trial of Essential", async () => {
     const res = await get("/pricing");
-    for (const id of ["starter", "growth", "scale"] as const) {
-      const p = PLANS[id];
-      expect(res.body).toContain(`data-monthly="$${p.priceMonthlyUsd}" data-annual="$${p.priceAnnualMonthlyUsd}"`);
-      expect(p.priceAnnualMonthlyUsd).toBeLessThan(p.priceMonthlyUsd);
-      // The yearly total shown is the exact amount that would be billed, not 12 x a rounded figure.
-      expect(res.body).toContain(`data-annual="$${p.priceAnnualUsd.toLocaleString("en-US")} billed yearly"`);
-    }
-    expect(res.body).toContain('data-annual="$190 billed yearly"');
-    expect(res.body).toContain('data-annual="$490 billed yearly"');
-    expect(res.body).toContain('data-annual="$1,290 billed yearly"');
+    expect(res.body).toContain('href="/signup?plan=essential"');
+    expect(res.body).toContain(`Start ${TRIAL_DAYS}-day free trial`);
+    expect(res.body).not.toContain('href="/signup?plan=free"');
   });
 
-  it("each plan's button starts signup for that plan", async () => {
-    const res = await get("/pricing");
-    for (const id of PLAN_IDS) expect(res.body).toContain(`href="/signup?plan=${id}"`);
-  });
-
-  it("JSON-LD lists one offer per plan", async () => {
+  it("JSON-LD lists the single Essential offer", async () => {
     const [ld] = jsonLd((await get("/pricing")).body) as Array<{ offers: Array<{ name: string; price: string }> }>;
-    expect(ld!.offers.map((o) => o.name)).toEqual(PLAN_IDS.map((id) => PLANS[id].name));
-    expect(ld!.offers.map((o) => o.price)).toEqual(PLAN_IDS.map((id) => String(PLANS[id].priceMonthlyUsd)));
+    expect(ld!.offers).toEqual([{ "@type": "Offer", name: "Essential", price: "100", priceCurrency: "USD" }]);
   });
 });
 
@@ -126,7 +124,7 @@ describe("legal pages", () => {
       const res = await get(path);
       expect(res.statusCode, path).toBe(200);
       expect(res.body).toContain("Last updated");
-      expect(res.body).toContain("support@mailforge.test");
+      expect(res.body).toContain("support@loomail.test");
       expect(res.body.toLowerCase()).not.toContain("claros");
     }
   });
@@ -150,10 +148,15 @@ describe("signup page", () => {
   });
 
   it("carries the chosen plan, and ignores an invalid one", async () => {
-    expect((await get("/signup?plan=starter")).body).toContain('name="plan" value="starter"');
-    expect((await get("/signup?plan=free")).body).toContain("Create your free workspace");
+    expect((await get("/signup?plan=essential")).body).toContain('name="plan" value="essential"');
+    // The old plans and the internal free state are not offered any more.
+    for (const old of ["starter", "growth", "scale", "free"]) {
+      const body = (await get(`/signup?plan=${old}`)).body;
+      expect(body).toContain('name="plan" value="essential"');
+      expect(body).toContain(`Start your ${TRIAL_DAYS}-day free trial`);
+    }
     const bad = await get("/signup?plan=%3Cscript%3E");
-    expect(bad.body).toContain('name="plan" value="growth"');
+    expect(bad.body).toContain('name="plan" value="essential"');
     expect(bad.body).not.toContain("<script>");
   });
 
@@ -184,7 +187,7 @@ describe("robots.txt and sitemap.xml", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toMatch(/text\/plain/);
     for (const p of ["/v1/", "/auth/", "/invite/", "/unsubscribe"]) expect(res.body).toContain(`Disallow: ${p}`);
-    expect(res.body).toContain("Sitemap: https://mailforge.test/sitemap.xml");
+    expect(res.body).toContain("Sitemap: https://loomail.test/sitemap.xml");
   });
 
   it("sitemap.xml lists the public pages with absolute URLs", async () => {
@@ -192,7 +195,7 @@ describe("robots.txt and sitemap.xml", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toMatch(/xml/);
     for (const p of ["/", "/pricing", "/signup", "/terms", "/privacy"]) {
-      expect(res.body).toContain(`<loc>https://mailforge.test${p}</loc>`);
+      expect(res.body).toContain(`<loc>https://loomail.test${p}</loc>`);
     }
   });
 });

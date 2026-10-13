@@ -12,8 +12,8 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@mailforge/adapters";
-import { tenantTablesInDeleteOrder } from "@mailforge/db/purge";
+import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@loomail/adapters";
+import { tenantTablesInDeleteOrder } from "@loomail/db/purge";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
 import { buildDeletionCancelledEmail, buildDeletionScheduledEmail } from "../src/account/deletion-email.js";
@@ -96,13 +96,13 @@ beforeAll(async () => {
     return;
   }
   await cleanup();
-  process.env.MAILFORGE_PLATFORM_ADMINS = ADMIN_EMAIL;
+  process.env.LOOMAIL_PLATFORM_ADMINS = ADMIN_EMAIL;
   const opts = { logger: false as const, db, baseUrl: "http://localhost:3000", dashboardUrl: "http://localhost:3000" };
   app = await buildApp(opts);
   appMail = await buildApp({
     ...opts,
     noticeTransports: [
-      { adapter: outbox, fromEmail: "no-reply@platform.example", fromName: "Mailforge" },
+      { adapter: outbox, fromEmail: "no-reply@platform.example", fromName: "Loomail" },
       { adapter: backup, fromEmail: "backup@platform.example", fromName: null },
     ],
   });
@@ -120,7 +120,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  delete process.env.MAILFORGE_PLATFORM_ADMINS;
+  delete process.env.LOOMAIL_PLATFORM_ADMINS;
   for (const a of [app, appMail]) if (a) await a.close();
   await pool?.end();
 });
@@ -147,7 +147,7 @@ describe("the email body", () => {
 
   it("an admin request says so", () => {
     const m = buildDeletionScheduledEmail({ ...input, byAdmin: true, requestedBy: "root@svc.test" }, { brand: {}, tenantName: "Acme" });
-    expect(m.text).toContain("A Mailforge administrator (root@svc.test) asked for");
+    expect(m.text).toContain("A Loomail administrator (root@svc.test) asked for");
   });
 
   it("escapes HTML in the name and the link, and flattens line breaks in the subject", () => {
@@ -303,7 +303,7 @@ describe("the cancellation email body", () => {
 
   it("an admin cancellation says so", () => {
     const m = buildDeletionCancelledEmail({ ...input, byAdmin: true, cancelledBy: "root@svc.test" }, { brand: {}, tenantName: "Acme" });
-    expect(m.text).toContain("A Mailforge administrator (root@svc.test) cancelled");
+    expect(m.text).toContain("A Loomail administrator (root@svc.test) cancelled");
   });
 
   it("escapes the name and flattens subject line breaks", () => {

@@ -6,7 +6,7 @@ import { describe, it, expect } from "vitest";
 import { localMoney, pricingPage } from "../src/marketing/pages.js";
 import type { SiteContext } from "../src/marketing/layout.js";
 
-const base: SiteContext = { siteUrl: "https://mailforge.example", supportEmail: "support@mailforge.example", legalName: "Mailforge" };
+const base: SiteContext = { siteUrl: "https://loomail.example", supportEmail: "support@loomail.example", legalName: "Loomail" };
 const page = (over: Partial<SiteContext> = {}): string => {
   const out = pricingPage({ ...base, ...over }) as unknown;
   return typeof out === "string" ? out : String((out as { html?: string }).html ?? JSON.stringify(out));
@@ -15,22 +15,18 @@ const page = (over: Partial<SiteContext> = {}): string => {
 describe("pricing page in GHS", () => {
   const ghs = page({ chargeCurrency: "GHS", usdRate: 15.5 });
 
-  it("keeps the dollar price and adds what is really charged under every paid plan", () => {
-    expect(ghs).toContain("$49");
-    expect(ghs).toContain("Charged as GH₵760 a month");
-    expect(ghs).toContain("Charged as GH₵7,595 a year"); // Growth yearly, from the yearly price as a whole
-    expect(ghs).toContain("Charged as GH₵295 a month"); // Starter 19 x 15.5 = 294.5, rounded up
-    expect(ghs).toContain("Charged as GH₵2,000 a month"); // Scale 129 x 15.5 = 1999.5, rounded up
+  it("keeps the dollar price and adds what is really charged under the plan", () => {
+    expect(ghs).toContain("$100");
+    expect(ghs).toContain("Charged as GH₵1,550 a month"); // 100 x 15.5
+    expect(ghs).not.toContain("a year");
   });
 
-  it("shows the cedi line for the three paid plans only, not for Free", () => {
-    expect(ghs.match(/Charged as/g)?.length).toBe(9); // 3 paid plans x (visible text + monthly + yearly toggle data)
-    const freeCard = ghs.slice(ghs.indexOf("Free forever") - 400, ghs.indexOf("Free forever") + 50);
-    expect(freeCard).not.toContain("Charged as");
+  it("shows the cedi line once, for the single paid plan", () => {
+    expect(ghs.match(/Charged as/g)?.length).toBe(1);
   });
 
   it("says prices are listed in dollars and charged in cedis", () => {
-    expect(ghs).toContain("charged in GHS at a fixed exchange rate");
+    expect(ghs).toContain("charged in your local currency at a fixed exchange rate");
     expect(ghs).not.toContain("Prices are in US dollars.");
   });
 });

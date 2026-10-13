@@ -16,7 +16,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { eq, and, isNull } from "drizzle-orm";
-import { invites, users, sessions, tenants } from "@mailforge/db/schema";
+import { invites, users, sessions, tenants } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import { MARK_SVG } from "../marketing/layout.js";
 
@@ -24,7 +24,7 @@ import { MARK_SVG } from "../marketing/layout.js";
 const SESSION_TTL_DAYS = 30;
 
 /** Cookie name for session ID (same as auth.ts). */
-const SESSION_COOKIE_NAME = "mailforge_session";
+const SESSION_COOKIE_NAME = "loomail_session";
 
 function hashToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
@@ -49,7 +49,7 @@ function renderAcceptPage(email: string, tenantName: string, token: string): str
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex" />
-    <title>Join ${escapeHtml(tenantName)} on Mailforge</title>
+    <title>Join ${escapeHtml(tenantName)} on Loomail</title>
     <style>
       body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f7f7f9; color: #26282e; font-family: system-ui, sans-serif; }
       main { width: 100%; max-width: 360px; padding: 24px; text-align: center; }

@@ -108,8 +108,8 @@ const planOf = async (t: Tenant) =>
   (await app.inject({ method: "GET", url: "/v1/plan", cookies: asOwner(t) })).json();
 
 function enforce(on: boolean): void {
-  if (on) process.env.MAILFORGE_ENFORCE_PLANS = "true";
-  else delete process.env.MAILFORGE_ENFORCE_PLANS;
+  if (on) process.env.LOOMAIL_ENFORCE_PLANS = "true";
+  else delete process.env.LOOMAIL_ENFORCE_PLANS;
 }
 
 beforeAll(async () => {
@@ -469,22 +469,22 @@ describe("credit line on the public unsubscribe pages", () => {
   let savedSite: string | undefined;
 
   const pageFor = async (t: Tenant) => {
-    const { generateUnsubscribeToken } = await import("@mailforge/adapters");
+    const { generateUnsubscribeToken } = await import("@loomail/adapters");
     const token = generateUnsubscribeToken(t.id, "00000000-0000-4000-8000-000000000000", SIGNING_KEY);
     return app.inject({ method: "GET", url: `/unsubscribe?token=${encodeURIComponent(token)}` });
   };
 
   beforeAll(() => {
     savedKey = process.env.UNSUBSCRIBE_SIGNING_KEY;
-    savedSite = process.env.MAILFORGE_SITE_URL;
+    savedSite = process.env.LOOMAIL_SITE_URL;
     process.env.UNSUBSCRIBE_SIGNING_KEY = SIGNING_KEY;
-    process.env.MAILFORGE_SITE_URL = "https://mailforge.example";
+    process.env.LOOMAIL_SITE_URL = "https://loomail.example";
   });
   afterAll(() => {
     if (savedKey === undefined) delete process.env.UNSUBSCRIBE_SIGNING_KEY;
     else process.env.UNSUBSCRIBE_SIGNING_KEY = savedKey;
-    if (savedSite === undefined) delete process.env.MAILFORGE_SITE_URL;
-    else process.env.MAILFORGE_SITE_URL = savedSite;
+    if (savedSite === undefined) delete process.env.LOOMAIL_SITE_URL;
+    else process.env.LOOMAIL_SITE_URL = savedSite;
   });
 
   it("a Free workspace's page links back to the site", async () => {
@@ -493,8 +493,8 @@ describe("credit line on the public unsubscribe pages", () => {
     const res = await pageFor(await newTenant("free"));
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain('class="credit"');
-    expect(res.body).toContain('href="https://mailforge.example"');
-    expect(res.body).toContain("Sent with Mailforge");
+    expect(res.body).toContain('href="https://loomail.example"');
+    expect(res.body).toContain("Sent with Loomail");
   });
 
   it("a paid or trial workspace's page does not", async () => {

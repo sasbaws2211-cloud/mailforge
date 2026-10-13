@@ -1,7 +1,7 @@
 /**
  * BrandMark component.
  *
- * The Mailforge mark: a solid envelope with the flap cut out as a chevron.
+ * The Loomail mark: a solid envelope with the flap cut out as a chevron.
  * The envelope is the message; the chevron is the fold being forged into
  * shape.
  *

@@ -66,9 +66,9 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { eq, and, sql } from "drizzle-orm";
-import { lifecycleMessages, suppressions, tenants } from "@mailforge/db/schema";
-import { verifyUnsubscribeToken } from "@mailforge/adapters";
-import { DEFAULT_ACCENT, entitlementsFor, poweredByFor, type BrandSettings, type PoweredBy } from "@mailforge/core";
+import { lifecycleMessages, suppressions, tenants } from "@loomail/db/schema";
+import { verifyUnsubscribeToken } from "@loomail/adapters";
+import { DEFAULT_ACCENT, entitlementsFor, poweredByFor, type BrandSettings, type PoweredBy } from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 
 // ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ async function resolveAndSuppress(
 /**
  * What the public pages show about the sender. Comes from the brand settings
  * of the tenant that sent the email (the same ones the email shell uses);
- * every field falls back to the Mailforge defaults so a page always renders,
+ * every field falls back to the Loomail defaults so a page always renders,
  * even if the lookup fails.
  */
 interface PageBrand {
@@ -201,7 +201,7 @@ interface PageBrand {
 }
 
 const DEFAULT_BRAND: PageBrand = {
-  name: "Mailforge",
+  name: "Loomail",
   accent: DEFAULT_ACCENT,
   logoUrl: null,
   logoHeight: 28,
@@ -284,7 +284,7 @@ async function loadPageBrand(db: Db | undefined, tenantId: string): Promise<Page
   }
 }
 
-/** The Mailforge envelope mark (same geometry as the dashboard brand mark). */
+/** The Loomail envelope mark (same geometry as the dashboard brand mark). */
 const MARK_SVG =
   '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
   '<path d="M5 5 H19 A3 3 0 0 1 22 8 V16 A3 3 0 0 1 19 19 H5 A3 3 0 0 1 2 16 V8 A3 3 0 0 1 5 5 Z ' +

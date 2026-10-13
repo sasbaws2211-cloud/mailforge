@@ -13,7 +13,7 @@
  *
  * Mirror side: PUBLIC (packages/brain-oss is mirrored).
  */
-import { costMicros, estimateTokens, type LlmSource, type PlatformLlmSlot } from "@mailforge/core";
+import { costMicros, estimateTokens, type LlmSource, type PlatformLlmSlot } from "@loomail/core";
 import { LlmProviderError, OpenAICompatibleProvider } from "./openai-compatible.js";
 import type { CompletionOptions, CompletionResult, LlmProvider, LlmProviderConfig } from "./types.js";
 
@@ -119,7 +119,7 @@ export class FailoverProvider implements LlmProvider {
 // Building the provider for a workspace
 // ---------------------------------------------------------------------------
 
-/** A stored provider config, still encrypted. Same shape as @mailforge/db/llm LlmCandidate. */
+/** A stored provider config, still encrypted. Same shape as @loomail/db/llm LlmCandidate. */
 export interface ProviderCandidate {
   source: LlmSource;
   slot: PlatformLlmSlot | null;

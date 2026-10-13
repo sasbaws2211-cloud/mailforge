@@ -25,7 +25,7 @@
  *     by the API client. If prompt_source changes (draft/paused only), compiled_plan and
  *     compiled_at are cleared to signal the plan is now stale.
  *   - status starts as 'draft' on create; transitions are validated against the table in
- *     @mailforge/core (validateStatusTransition). archived is terminal.
+ *     @loomail/core (validateStatusTransition). archived is terminal.
  *
  * Cross-tenant isolation: any flow that exists but belongs to a different tenant
  * returns 404 (not 403) to avoid leaking information about other tenants.
@@ -34,8 +34,8 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { eq, and, ne } from "drizzle-orm";
-import { flows, tenants, templates } from "@mailforge/db/schema";
+import { eq, and, ne, sql } from "drizzle-orm";
+import { flows, tenants, templates } from "@loomail/db/schema";
 import {
   isValidDelay,
   validateStatusTransition,
@@ -49,11 +49,18 @@ import {
   QUEUE,
   compiledPlanSchema,
   type FlowStatus,
-} from "@mailforge/core";
-import { draft } from "@mailforge/brain-oss";
+  flowHealth,
+  renderTemplate,
+  wrapInShell,
+  wrapInTextShell,
+} from "@loomail/core";
+import { draft } from "@loomail/brain-oss";
 import type { Db } from "../plugins/db.js";
 import { loadAiStatus, resolveProviderForRequest } from "../ai/resolver.js";
-import { AI_UNAVAILABLE_MESSAGE, aiAllowanceMessage, NO_AI_PROVIDER_MESSAGE } from "@mailforge/core";
+import { createLimiter } from "../marketing/signup-logic.js";
+import { resolveAuthTransport } from "./auth.js";
+import { getPlatformTransport } from "../platform-mailer.js";
+import { AI_UNAVAILABLE_MESSAGE, aiAllowanceMessage, NO_AI_PROVIDER_MESSAGE } from "@loomail/core";
 
 // ---------------------------------------------------------------------------
 // Zod schemas
@@ -153,6 +160,7 @@ function validateStepOrders(steps: Array<{ order: number }>): string | null {
 // ---------------------------------------------------------------------------
 
 const flowsRoutes: FastifyPluginAsync = async (app) => {
+  const testSendLimiter = createLimiter({ windowMs: 3_600_000, max: 10 });
   /**
    * POST /v1/flows
    * Create a new flow. Always starts with status = 'draft'.
@@ -236,6 +244,183 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
       return { flows: rows.map(serializeFlow) };
     },
   );
+
+  /**
+   * POST /v1/flows/:id/steps/:order/test-send
+   *
+   * Sends one step of a flow, as it would read, to the signed-in person's own address. It uses
+   * the workspace's own email sender when it has one (so a test also proves the sender works),
+   * and the platform sender otherwise. Only steps with fixed copy (a template) can be tested:
+   * an AI-written step has no text until it is sent, so use the draft preview for those.
+   *
+   * It can never go to anyone else, bypasses nothing a real send relies on (no contact is
+   * created, no flow is entered), and is limited to a few per workspace per hour.
+   */
+  app.post<{ Params: { id: string; order: string } }>(
+    "/:id/steps/:order/test-send",
+    { config: { minRole: "member" } },
+    async (request, reply) => {
+      const db: Db = request.server.db;
+      const tenantId = request.tenant!.id;
+      const order = Number.parseInt(request.params.order, 10);
+      if (!Number.isInteger(order) || order < 1) return reply.status(400).send({ error: "Invalid step.", code: "invalid_step" });
+
+      const [flow] = await db.select().from(flows).where(and(eq(flows.id, request.params.id), eq(flows.tenantId, tenantId))).limit(1);
+      if (!flow) return reply.status(404).send({ error: "Flow not found.", code: "flow_not_found" });
+
+      const planSteps = (flow.compiledPlan as { steps?: Array<{ order: number; template_ref?: string }> } | null)?.steps;
+      const rawSteps = Array.isArray(planSteps) ? planSteps : (flow.steps as Array<{ order: number; template_ref?: string }> | null) ?? [];
+      const step = rawSteps.find((s) => s.order === order);
+      if (!step) return reply.status(404).send({ error: "That step does not exist in this flow.", code: "step_not_found" });
+      if (!step.template_ref) {
+        return reply.status(422).send({
+          error: "This step is written by AI at send time, so there is no fixed text to test. Use the draft preview to see an example.",
+          code: "ai_step",
+        });
+      }
+
+      const rl = testSendLimiter.hit(tenantId);
+      if (!rl.allowed) {
+        reply.header("Retry-After", String(rl.retryAfterSec));
+        return reply.status(429).send({ error: "That is enough test emails for now. Try again in a while.", retry_after_seconds: rl.retryAfterSec });
+      }
+
+      const [tmpl] = await db
+        .select()
+        .from(templates)
+        .where(and(eq(templates.tenantId, tenantId), eq(templates.slug, step.template_ref)))
+        .limit(1);
+      if (!tmpl) return reply.status(422).send({ error: `The template "${step.template_ref}" no longer exists.`, code: "template_missing" });
+
+      const who = await db.execute<{ email: string; name: string | null; tenant_name: string; settings: Record<string, unknown> | null }>(sql`
+        SELECT u.email, u.name, t.name AS tenant_name, t.settings
+        FROM users u JOIN tenants t ON t.id = u.tenant_id WHERE u.id = ${request.tenant!.userId}::uuid LIMIT 1`);
+      const me = who.rows[0];
+      if (!me) return reply.status(404).send({ error: "User not found." });
+      const [first, ...rest] = (me.name ?? "").trim().split(/\s+/);
+
+      const rendered = renderTemplate(tmpl.subject, tmpl.bodyHtml, tmpl.bodyText ?? null, {
+        contact: { first_name: first || null, last_name: rest.join(" ") || null, email: me.email, external_id: "test-send", properties: null },
+        tenant: { name: me.tenant_name },
+        flow: { name: flow.name },
+      });
+      if (!rendered.ok) return reply.status(422).send({ error: rendered.reason, code: "render_failed" });
+
+      const transport = (await resolveAuthTransport(db, tenantId)) ?? getPlatformTransport();
+      if (!transport) {
+        return reply.status(503).send({ error: "No email sender is set up yet. Connect one in Settings, under Email sending, then try again.", code: "no_sender" });
+      }
+
+      const note = `This is a test of step ${order} of "${flow.name}". Nothing was sent to anyone else.`;
+      const brand = ((me.settings ?? {}).brand as Record<string, string> | undefined) ?? {};
+      const html = wrapInShell({
+        bodyHtml: `${rendered.bodyHtml}<hr style="border:0;border-top:1px solid #e3e5ea;margin:24px 0" /><p style="font-size:12px;color:#585d68;">${note}</p>`,
+        brand,
+        tenantName: me.tenant_name,
+        complianceFooterHtml: "",
+      });
+      const text = wrapInTextShell({
+        bodyText: `${rendered.bodyText}
+
+---
+${note}`,
+        brand,
+        tenantName: me.tenant_name,
+        complianceFooterText: "",
+      });
+      const r = await transport.adapter.send({
+        to: me.email,
+        from: transport.fromEmail,
+        fromName: transport.fromName ?? undefined,
+        subject: `[Test] ${rendered.subject}`,
+        bodyHtml: html,
+        bodyText: text,
+        headers: {},
+        messageId: `flow-test-${flow.id}-${order}-${Date.now()}`,
+      });
+      if (!r.success) {
+        request.log.warn({ tenantId, flowId: flow.id, error: r.error }, "flow test send not delivered");
+        return reply.status(502).send({ error: "The email could not be sent. Check your sender settings and try again.", code: "send_failed" });
+      }
+      return { ok: true, sent_to: me.email, subject: `[Test] ${rendered.subject}` };
+    },
+  );
+
+  /**
+   * GET /v1/flows/stats
+   * What each flow has done lately, for the flows list: emails sent (7 and 30 days), opens,
+   * clicks, bounces, spam complaints, people currently in the flow, when it last sent, and a
+   * one-word health with its reason. Keyed by flow id.
+   */
+  app.get("/stats", { config: { minRole: "member" } }, async (request) => {
+    const db: Db = request.server.db;
+    const tenantId = request.tenant!.id;
+    const now = new Date();
+
+    const msgs = await db.execute<{
+      flow_id: string;
+      sent30: number;
+      sent7: number;
+      opened30: number;
+      clicked30: number;
+      bounced30: number;
+      complained30: number;
+      last_sent_at: Date | string | null;
+    }>(sql`
+      SELECT flow_id,
+             count(*) FILTER (WHERE sent_at IS NOT NULL AND sent_at >= now() - interval '30 days')::int AS sent30,
+             count(*) FILTER (WHERE sent_at IS NOT NULL AND sent_at >= now() - interval '7 days')::int AS sent7,
+             count(*) FILTER (WHERE feedback IN ('opened','clicked') AND created_at >= now() - interval '30 days')::int AS opened30,
+             count(*) FILTER (WHERE feedback = 'clicked' AND created_at >= now() - interval '30 days')::int AS clicked30,
+             count(*) FILTER (WHERE feedback = 'bounced' AND created_at >= now() - interval '30 days')::int AS bounced30,
+             count(*) FILTER (WHERE feedback = 'complained' AND created_at >= now() - interval '30 days')::int AS complained30,
+             max(sent_at) AS last_sent_at
+      FROM lifecycle_messages
+      WHERE tenant_id = ${tenantId}::uuid AND flow_id IS NOT NULL
+      GROUP BY flow_id`);
+    const members = await db.execute<{ flow_id: string; active: number; total: number }>(sql`
+      SELECT flow_id,
+             count(*) FILTER (WHERE status = 'active')::int AS active,
+             count(*)::int AS total
+      FROM flow_memberships
+      WHERE tenant_id = ${tenantId}::uuid
+      GROUP BY flow_id`);
+    const flowRows = await db
+      .select({ id: flows.id, status: flows.status, createdAt: flows.createdAt, updatedAt: flows.updatedAt })
+      .from(flows)
+      .where(and(eq(flows.tenantId, tenantId), ne(flows.status, "archived")));
+
+    const mBy = new Map(msgs.rows.map((r) => [r.flow_id, r]));
+    const pBy = new Map(members.rows.map((r) => [r.flow_id, r]));
+    const stats: Record<string, unknown> = {};
+    for (const f of flowRows) {
+      const m = mBy.get(f.id);
+      const p = pBy.get(f.id);
+      const health = flowHealth({
+        status: f.status ?? "draft",
+        sent30: m?.sent30 ?? 0,
+        sent7: m?.sent7 ?? 0,
+        bounced30: m?.bounced30 ?? 0,
+        complained30: m?.complained30 ?? 0,
+        activeSince: f.updatedAt ?? f.createdAt ?? null,
+        now,
+      });
+      stats[f.id] = {
+        sent_30d: m?.sent30 ?? 0,
+        sent_7d: m?.sent7 ?? 0,
+        opened_30d: m?.opened30 ?? 0,
+        clicked_30d: m?.clicked30 ?? 0,
+        bounced_30d: m?.bounced30 ?? 0,
+        complained_30d: m?.complained30 ?? 0,
+        in_flow: p?.active ?? 0,
+        entered_total: p?.total ?? 0,
+        last_sent_at: m?.last_sent_at ? new Date(m.last_sent_at).toISOString() : null,
+        health: health.state,
+        health_note: health.note,
+      };
+    }
+    return { stats };
+  });
 
   /**
    * GET /v1/flows/:id
@@ -502,7 +687,7 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
       return { error: "Flow has no prompt_source. Set a prompt before compiling." };
     }
 
-    // Precondition: the workspace has AI to use: its own key, or Mailforge AI
+    // Precondition: the workspace has AI to use: its own key, or Loomail AI
     // with tokens left this month. These are user-resolvable errors (go to
     // Settings, add a key or upgrade), not async job failures, so they are
     // checked synchronously and the operator learns immediately.
@@ -771,7 +956,7 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
 
       const flow = flowRows[0]!;
 
-      // Resolve the AI provider: the workspace's own key, else Mailforge AI.
+      // Resolve the AI provider: the workspace's own key, else Loomail AI.
       const resolved = await resolveProviderForRequest(db, tenantId, "ai_draft");
       if (!resolved.ok) {
         reply.status(resolved.status);

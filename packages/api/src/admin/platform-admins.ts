@@ -2,7 +2,7 @@
  * Who runs the platform.
  *
  * A platform admin is a signed-in user whose email appears in
- * MAILFORGE_PLATFORM_ADMINS (comma separated, case-insensitive). It is an env
+ * LOOMAIL_PLATFORM_ADMINS (comma separated, case-insensitive). It is an env
  * setting, not a database flag, on purpose: there is no screen, API or SQL path
  * inside the app through which a customer could grant it to themselves.
  *
@@ -14,7 +14,7 @@
  */
 
 export function platformAdminEmails(env: NodeJS.ProcessEnv = process.env): string[] {
-  return (env.MAILFORGE_PLATFORM_ADMINS ?? "")
+  return (env.LOOMAIL_PLATFORM_ADMINS ?? "")
     .split(",")
     .map((e) => e.trim().toLowerCase())
     .filter((e) => e.length > 0);

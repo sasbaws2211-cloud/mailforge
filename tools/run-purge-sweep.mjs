@@ -6,13 +6,13 @@
  *   docker compose exec -T app sh -c "cd /app/packages/worker && node --input-type=module" < tools/run-purge-sweep.mjs
  *
  * (Piped in because the tools folder is not mounted in the container, and it must run
- * from a package that can resolve @mailforge/db.) Needs DATABASE_URL, which the compose
+ * from a package that can resolve @loomail/db.) Needs DATABASE_URL, which the compose
  * app container already has. Prints what was erased. The worker does this by itself
  * every hour; this is for checking it, or for running it right after a legal request.
  */
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { purgeDueWorkspaces } from "@mailforge/db/purge";
+import { purgeDueWorkspaces } from "@loomail/db/purge";
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 try {

@@ -23,8 +23,8 @@
 import { randomBytes, createHash } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { eq, and, sql } from "drizzle-orm";
-import { users, sessions, tenants, transportConfigs } from "@mailforge/db/schema";
-import { resolveTransportAdapter } from "@mailforge/adapters";
+import { users, sessions, tenants, transportConfigs } from "@loomail/db/schema";
+import { resolveTransportAdapter } from "@loomail/adapters";
 import { buildEmailChangeEmail, type TransactionalEmailInput } from "../transactional-email.js";
 import type { Db } from "../plugins/db.js";
 

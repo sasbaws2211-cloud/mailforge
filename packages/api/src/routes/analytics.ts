@@ -57,7 +57,7 @@ import {
   RETENTION_RECENCY_BUCKETS,
   RETENTION_TENURE_THRESHOLDS_DAYS,
   type LifecycleConfig,
-} from "@mailforge/core";
+} from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 
 const daysQuerySchema = z.object({

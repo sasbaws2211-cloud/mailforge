@@ -35,6 +35,8 @@ import {
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Button } from "../components/ui/button.js";
 import { PageHeader } from "../components/page-header.js";
+import { DemoDataButton } from "../components/sample-event.js";
+import { useOnboarding } from "../onboarding.js";
 import { cn } from "../lib/utils.js";
 
 // ---------------------------------------------------------------------------
@@ -467,6 +469,8 @@ function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
 export default function LifecyclePage() {
   const [tab, setTab] = useState<Tab>("grid");
   const [days, setDays] = useState<number>(30);
+  const onboarding = useOnboarding();
+  const demoShowing = onboarding.data?.has_demo_data === true;
   const gridQuery = useRetentionGrid();
   const movementQuery = useLifecycleAnalytics(days);
   const [selected, setSelected] = useState<{ tenure: Tenure; recency: Recency } | null>(null);
@@ -486,6 +490,13 @@ export default function LifecyclePage() {
             : "Who your contacts are, how long they have been quiet, and where to act."
         }
       />
+
+      {demoShowing && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-border bg-sunken px-4 py-3 text-[14px] text-foreground">
+          <span>You are looking at demo data: made-up customers that never count against your plan and never receive anything.</span>
+          <DemoDataButton present />
+        </div>
+      )}
 
       <TabBar tab={tab} onChange={setTab} />
 

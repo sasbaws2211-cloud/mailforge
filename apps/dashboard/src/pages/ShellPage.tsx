@@ -53,7 +53,7 @@ interface NavItem {
 }
 
 /**
- * Derived from docs/MAILFORGE_HANDOFF_V2.md Phase 5 tasks 35-43:
+ * Derived from docs/LOOMAIL_HANDOFF_V2.md Phase 5 tasks 35-43:
  *   35 - Flows list + detail
  *   37 - Lifecycle Overview
  *   38 - People (CRM)

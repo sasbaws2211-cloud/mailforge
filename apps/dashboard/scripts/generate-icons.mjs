@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Generate the raster icons from the Mailforge mark: favicon-16.png,
+ * Generate the raster icons from the Loomail mark: favicon-16.png,
  * favicon-32.png, favicon.ico (16 + 32 PNG frames) and apple-touch-icon.png.
  *
  * Usage:

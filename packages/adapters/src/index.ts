@@ -1,8 +1,8 @@
 /**
- * @mailforge/adapters - I/O adapters (database, transport, external services).
- * Depends on @mailforge/core.
+ * @loomail/adapters - I/O adapters (database, transport, external services).
+ * Depends on @loomail/core.
  */
-export const MAILFORGE_ADAPTERS_VERSION = "0.0.0";
+export const LOOMAIL_ADAPTERS_VERSION = "0.0.0";
 
 export {
   encrypt,

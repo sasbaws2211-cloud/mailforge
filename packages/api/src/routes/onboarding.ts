@@ -13,11 +13,14 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { sql } from "drizzle-orm";
-import { PlanLimitError, parseOnboardingPatch, plansEnforced } from "@mailforge/core";
+import { PlanLimitError, parseOnboardingPatch, plansEnforced } from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 import { createLimiter } from "../marketing/signup-logic.js";
 import { processIdentifyEvent, processTrackEvent } from "./ingest.js";
+import { getPlatformTransport } from "../platform-mailer.js";
+import { buildTestEmail, type TransactionalEmailInput } from "../transactional-email.js";
 import { loadOnboarding, markOnboardingCompleted, mergeOnboardingState } from "../onboarding/state.js";
+import { addDemoData, clearDemoData, hasDemoData } from "../onboarding/demo-data.js";
 
 /** The one contact every sample event is for, so repeated samples never pile up contacts. */
 export const SAMPLE_USER_ID = "sample-event-user";
@@ -26,6 +29,7 @@ const SAMPLES_PER_HOUR = 5;
 
 const onboardingRoutes: FastifyPluginAsync = async (app) => {
   const sampleLimiter = createLimiter({ windowMs: 3_600_000, max: SAMPLES_PER_HOUR });
+  const testEmailLimiter = createLimiter({ windowMs: 3_600_000, max: 3 });
 
   app.get("/", { config: { minRole: "member" } }, async (request, reply) => {
     const db: Db = request.server.db;
@@ -61,6 +65,7 @@ const onboardingRoutes: FastifyPluginAsync = async (app) => {
       waiting_reason: snap.waiting.reason,
       dismissed: Boolean(snap.state.dismissed_at),
       completed_at: snap.state.completed_at ?? null,
+      has_demo_data: await hasDemoData(db, tenantId),
     };
   });
 
@@ -120,6 +125,70 @@ const onboardingRoutes: FastifyPluginAsync = async (app) => {
       sender_ready: snap?.facts.hasSender ?? false,
       repeat: Number(prior.rows[0]?.n ?? 0) > 0,
     };
+  });
+
+  /**
+   * POST /v1/onboarding/test-email
+   *
+   * Sends one sample email to the signed-in person's own address from the platform sender, so a
+   * new customer can see how a message arrives before they have connected a sending domain. It
+   * can only ever go to the caller's own address. Limited to a few per workspace per hour.
+   */
+  app.post("/test-email", { config: { minRole: "member" } }, async (request, reply) => {
+    const db: Db = request.server.db;
+    const tenantId = request.tenant!.id;
+    const transport = getPlatformTransport();
+    if (!transport) return reply.status(503).send({ error: "Test email is not available on this install." });
+
+    const rl = testEmailLimiter.hit(tenantId);
+    if (!rl.allowed) {
+      reply.header("Retry-After", String(rl.retryAfterSec));
+      return reply.status(429).send({ error: "That is enough test emails for now. Try again in a while.", retry_after_seconds: rl.retryAfterSec });
+    }
+
+    const who = await db.execute<{ email: string; name: string; settings: Record<string, unknown> | null }>(sql`
+      SELECT u.email, t.name, t.settings FROM users u JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.id = ${request.tenant!.userId}::uuid LIMIT 1`);
+    const row = who.rows[0];
+    if (!row) return reply.status(404).send({ error: "User not found." });
+
+    const dashboardUrl = (process.env.DASHBOARD_URL ?? process.env.BASE_URL ?? "").replace(/\/+$/, "");
+    const email = buildTestEmail({
+      brand: ((row.settings ?? {}).brand as TransactionalEmailInput["brand"] | undefined) ?? {},
+      tenantName: row.name,
+      continueUrl: `${dashboardUrl}/home`,
+    });
+    const r = await transport.adapter.send({
+      to: row.email,
+      from: transport.fromEmail,
+      fromName: transport.fromName ?? undefined,
+      subject: email.subject,
+      bodyHtml: email.html,
+      bodyText: email.text,
+      headers: {},
+      messageId: `test-email-${tenantId}-${Date.now()}`,
+    });
+    if (!r.success) {
+      request.log.warn({ tenantId, error: r.error }, "test email not delivered");
+      return reply.status(502).send({ error: "We could not send the test email right now. Please try again in a moment." });
+    }
+    return { ok: true, sent_to: row.email };
+  });
+
+  /**
+   * POST   /v1/onboarding/demo-data   add made-up customers so the grid, People and Lifecycle have
+   *                                   something to show. They have no email address, never count
+   *                                   against plan limits, and never receive anything.
+   * DELETE /v1/onboarding/demo-data   remove exactly those customers.
+   */
+  app.post("/demo-data", { config: { minRole: "member" } }, async (request) => {
+    const added = await addDemoData(request.server.db as Db, request.tenant!.id);
+    return { ok: true, added };
+  });
+
+  app.delete("/demo-data", { config: { minRole: "member" } }, async (request) => {
+    const removed = await clearDemoData(request.server.db as Db, request.tenant!.id);
+    return { ok: true, removed };
   });
 
   app.patch("/", { config: { minRole: "member" } }, async (request, reply) => {

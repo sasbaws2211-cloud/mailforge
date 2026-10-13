@@ -25,12 +25,12 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
 import { randomBytes, createHash } from "node:crypto";
-import { buildApp } from "@mailforge/api";
+import { buildApp } from "@loomail/api";
 import {
   handleTriggerCheck,
   phaseStepAdvancement,
   processContentTick,
-} from "@mailforge/worker";
+} from "@loomail/worker";
 import {
   tenants,
   users,
@@ -41,8 +41,8 @@ import {
   flowMemberships,
   lifecycleMessages,
   templates,
-} from "@mailforge/db/schema";
-import { encrypt, parseEncryptionKey } from "@mailforge/adapters";
+} from "@loomail/db/schema";
+import { encrypt, parseEncryptionKey } from "@loomail/adapters";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -184,7 +184,7 @@ describe("end-to-end: fixed_content flow - no LLM required", () => {
       baseUrl: "http://localhost:3000",
     });
 
-    const cookie = `mailforge_session=${sessionId}`;
+    const cookie = `loomail_session=${sessionId}`;
 
     // === STEP 1: Create the fixed_content flow ===
     const createRes = await app.inject({
@@ -431,7 +431,7 @@ describe("end-to-end: fixed_content flow - no LLM required", () => {
   it("AI draft endpoint returns 422 with no LLM configured", async () => {
     if (!dbAvailable) return;
     const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
-    const cookie = `mailforge_session=${sessionId}`;
+    const cookie = `loomail_session=${sessionId}`;
 
     // Get the flow we created in the previous test
     const listRes = await app.inject({
@@ -494,7 +494,7 @@ describe("end-to-end: fixed_content flow - no LLM required", () => {
     });
 
     const app = await buildApp({ logger: false, db, baseUrl: "http://localhost:3000" });
-    const cookie = `mailforge_session=${sessionId}`;
+    const cookie = `loomail_session=${sessionId}`;
 
     const listRes = await app.inject({
       method: "GET",

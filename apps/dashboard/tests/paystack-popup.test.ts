@@ -151,12 +151,12 @@ describe("checkoutPhaseNotice", () => {
   it("tells the customer what to do while the popup is open", () => {
     const n = checkoutPhaseNotice("popup")!;
     expect(n.tone).toBe("info");
-    expect(n.message).toMatch(/Paystack window/);
+    expect(n.message).toMatch(/payment window/);
     expect(n.message).toMatch(/updates by itself/);
   });
 
   it("confirms a paid plan, warns on a failure, and explains a closed popup and a long wait", () => {
-    expect(checkoutPhaseNotice("paid")).toMatchObject({ tone: "success", message: expect.stringContaining("Your plan is active") });
+    expect(checkoutPhaseNotice("paid")).toMatchObject({ tone: "success", message: expect.stringContaining("Payment confirmed") });
     expect(checkoutPhaseNotice("failed")).toMatchObject({ tone: "warning", message: expect.stringContaining("have not been charged") });
     expect(checkoutPhaseNotice("closed")).toMatchObject({ tone: "info", message: expect.stringContaining("Nothing was charged") });
     expect(checkoutPhaseNotice("timeout")).toMatchObject({ tone: "info", message: expect.stringContaining("confirming your payment") });

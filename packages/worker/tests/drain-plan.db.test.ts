@@ -1,6 +1,6 @@
 /**
  * Integration tests for plan enforcement in the drain: the monthly email
- * allowance and the "Sent with Mailforge" credit line for Free workspaces.
+ * allowance and the "Sent with Loomail" credit line for Free workspaces.
  *
  * Needs a reachable Postgres via DATABASE_URL, like the other *.db tests.
  */
@@ -8,7 +8,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
-import { tenants, contacts, flows, flowMemberships, lifecycleMessages } from "@mailforge/db/schema";
+import { tenants, contacts, flows, flowMemberships, lifecycleMessages } from "@loomail/db/schema";
 import type { TransportAdapter, TransportSendParams, TransportSendResult } from "../src/transport.js";
 import { makeDrainRunner } from "./drain-test-utils.js";
 
@@ -37,8 +37,8 @@ let bulkContactId: string;
 let bulkMembershipId: string;
 
 function enforce(on: boolean): void {
-  if (on) process.env.MAILFORGE_ENFORCE_PLANS = "true";
-  else delete process.env.MAILFORGE_ENFORCE_PLANS;
+  if (on) process.env.LOOMAIL_ENFORCE_PLANS = "true";
+  else delete process.env.LOOMAIL_ENFORCE_PLANS;
 }
 
 async function wipe(): Promise<void> {
@@ -111,7 +111,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   enforce(false);
-  delete process.env.MAILFORGE_SITE_URL;
+  delete process.env.LOOMAIL_SITE_URL;
 });
 
 afterAll(async () => {
@@ -283,7 +283,7 @@ describe("monthly email allowance in the drain", () => {
   });
 });
 
-describe("'Sent with Mailforge' credit line", () => {
+describe("'Sent with Loomail' credit line", () => {
   const sendOne = async (): Promise<TransportSendParams> => {
     await queueApproved(1);
     const a = new RecordingAdapter();
@@ -295,52 +295,52 @@ describe("'Sent with Mailforge' credit line", () => {
   it("a Free workspace's email carries the credit line, linked to the site, in HTML and text", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    process.env.MAILFORGE_SITE_URL = "https://mailforge.example";
+    process.env.LOOMAIL_SITE_URL = "https://loomail.example";
     const sent = await sendOne();
-    expect(sent.bodyHtml).toContain('<a href="https://mailforge.example"');
-    expect(sent.bodyHtml).toContain("Sent with Mailforge");
-    expect(sent.bodyText).toContain("Sent with Mailforge: https://mailforge.example");
+    expect(sent.bodyHtml).toContain('<a href="https://loomail.example"');
+    expect(sent.bodyHtml).toContain("Sent with Loomail");
+    expect(sent.bodyText).toContain("Sent with Loomail: https://loomail.example");
     // The compliance footer is still there, and comes first.
     expect(sent.bodyHtml).toContain("Unsubscribe");
-    expect(sent.bodyHtml!.indexOf("Unsubscribe")).toBeLessThan(sent.bodyHtml!.indexOf("Sent with Mailforge"));
+    expect(sent.bodyHtml!.indexOf("Unsubscribe")).toBeLessThan(sent.bodyHtml!.indexOf("Sent with Loomail"));
   });
 
   it("a paid workspace's email does not", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    process.env.MAILFORGE_SITE_URL = "https://mailforge.example";
+    process.env.LOOMAIL_SITE_URL = "https://loomail.example";
     await setPlan("starter");
     const sent = await sendOne();
-    expect(sent.bodyHtml).not.toContain("Sent with Mailforge");
-    expect(sent.bodyText).not.toContain("Sent with Mailforge");
+    expect(sent.bodyHtml).not.toContain("Sent with Loomail");
+    expect(sent.bodyText).not.toContain("Sent with Loomail");
   });
 
   it("a trial workspace (it has Growth) does not", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    process.env.MAILFORGE_SITE_URL = "https://mailforge.example";
+    process.env.LOOMAIL_SITE_URL = "https://loomail.example";
     await setPlan("trial", new Date(NOW.getTime() + 3 * DAY));
     const sent = await sendOne();
-    expect(sent.bodyHtml).not.toContain("Sent with Mailforge");
+    expect(sent.bodyHtml).not.toContain("Sent with Loomail");
   });
 
   it("with enforcement off nobody gets it, whatever the plan", async () => {
     if (!dbAvailable) return;
     enforce(false);
-    process.env.MAILFORGE_SITE_URL = "https://mailforge.example";
+    process.env.LOOMAIL_SITE_URL = "https://loomail.example";
     const sent = await sendOne(); // plan is free
-    expect(sent.bodyHtml).not.toContain("Sent with Mailforge");
+    expect(sent.bodyHtml).not.toContain("Sent with Loomail");
   });
 
   it("with no site URL configured there is nothing to link to, so no line is added", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    delete process.env.MAILFORGE_SITE_URL;
+    delete process.env.LOOMAIL_SITE_URL;
     const prev = process.env.BASE_URL;
     delete process.env.BASE_URL;
     try {
       const sent = await sendOne();
-      expect(sent.bodyHtml).not.toContain("Sent with Mailforge");
+      expect(sent.bodyHtml).not.toContain("Sent with Loomail");
     } finally {
       if (prev !== undefined) process.env.BASE_URL = prev;
     }

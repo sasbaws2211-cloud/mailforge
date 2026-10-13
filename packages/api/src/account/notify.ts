@@ -22,7 +22,7 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { and, eq, isNull } from "drizzle-orm";
-import { tenants, users } from "@mailforge/db/schema";
+import { tenants, users } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import { getPlatformTransport, type PlatformTransport } from "../platform-mailer.js";
 import { resolveAuthTransport } from "../routes/auth.js";

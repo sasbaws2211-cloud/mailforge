@@ -1,5 +1,5 @@
 /**
- * Operator alert: Mailforge AI is failing.
+ * Operator alert: Loomail AI is failing.
  *
  * When most calls on the operator's own provider fail (a revoked key, an unpaid
  * provider bill, an outage), every workspace without its own key loses AI at
@@ -27,9 +27,9 @@ import {
   startOfMonthUtc,
   shouldSendAiAlert,
   type AiHealth,
-} from "@mailforge/core";
-import { platformAlertState } from "@mailforge/db/schema";
-import { loadAiBudgetStatus } from "@mailforge/db/llm";
+} from "@loomail/core";
+import { platformAlertState } from "@loomail/db/schema";
+import { loadAiBudgetStatus } from "@loomail/db/llm";
 import type { Db } from "../plugins/db.js";
 import { getPlatformTransport, type PlatformTransport } from "../platform-mailer.js";
 import { platformAdminEmails } from "../admin/platform-admins.js";
@@ -42,13 +42,13 @@ function numberFromEnv(raw: string | undefined, fallback: number, min: number, m
   return Number.isFinite(n) && n >= min && n <= max ? n : fallback;
 }
 
-/** Thresholds, with optional overrides: MAILFORGE_AI_ALERT_MIN_CALLS, _FAIL_RATE (0 to 1), _WINDOW_MINUTES. */
+/** Thresholds, with optional overrides: LOOMAIL_AI_ALERT_MIN_CALLS, _FAIL_RATE (0 to 1), _WINDOW_MINUTES. */
 export function aiAlertSettings(env: NodeJS.ProcessEnv = process.env) {
   return {
-    minCalls: Math.round(numberFromEnv(env.MAILFORGE_AI_ALERT_MIN_CALLS, AI_ALERT_MIN_CALLS, 1, 100_000)),
-    failRate: numberFromEnv(env.MAILFORGE_AI_ALERT_FAIL_RATE, AI_ALERT_FAIL_RATE, 0.01, 1),
-    windowMinutes: Math.round(numberFromEnv(env.MAILFORGE_AI_ALERT_WINDOW_MINUTES, AI_ALERT_WINDOW_MINUTES, 1, 1440)),
-    cooldownMinutes: Math.round(numberFromEnv(env.MAILFORGE_AI_ALERT_COOLDOWN_MINUTES, AI_ALERT_COOLDOWN_MINUTES, 1, 10_080)),
+    minCalls: Math.round(numberFromEnv(env.LOOMAIL_AI_ALERT_MIN_CALLS, AI_ALERT_MIN_CALLS, 1, 100_000)),
+    failRate: numberFromEnv(env.LOOMAIL_AI_ALERT_FAIL_RATE, AI_ALERT_FAIL_RATE, 0.01, 1),
+    windowMinutes: Math.round(numberFromEnv(env.LOOMAIL_AI_ALERT_WINDOW_MINUTES, AI_ALERT_WINDOW_MINUTES, 1, 1440)),
+    cooldownMinutes: Math.round(numberFromEnv(env.LOOMAIL_AI_ALERT_COOLDOWN_MINUTES, AI_ALERT_COOLDOWN_MINUTES, 1, 10_080)),
   };
 }
 
@@ -68,9 +68,9 @@ export async function loadAiHealth(db: Db, now: Date = new Date(), env: NodeJS.P
 
 export function buildAiAlertEmail(health: AiHealth, consoleUrl: string): { subject: string; text: string; html: string } {
   const pct = Math.round(health.rate * 100);
-  const subject = `Mailforge AI is failing: ${pct}% of calls in the last ${health.windowMinutes} minutes`;
+  const subject = `Loomail AI is failing: ${pct}% of calls in the last ${health.windowMinutes} minutes`;
   const lines = [
-    `${health.failed} of ${health.calls} Mailforge AI calls failed in the last ${health.windowMinutes} minutes (${pct}%).`,
+    `${health.failed} of ${health.calls} Loomail AI calls failed in the last ${health.windowMinutes} minutes (${pct}%).`,
     "",
     "Every workspace that has no AI key of its own is affected: AI drafting and flow compiling are failing for them,",
     "and emails waiting for AI-written content are stuck. Customers on their own key are not affected.",
@@ -108,18 +108,18 @@ export function buildAiBudgetEmail(
   const pct = Math.round((spentUsd / budgetUsd) * 100);
   const subject =
     kind === "near"
-      ? `Mailforge AI spend: ${pct}% of your ${usd(budgetUsd)} monthly budget used`
-      : `Mailforge AI is paused: your ${usd(budgetUsd)} monthly budget is used up`;
+      ? `Loomail AI spend: ${pct}% of your ${usd(budgetUsd)} monthly budget used`
+      : `Loomail AI is paused: your ${usd(budgetUsd)} monthly budget is used up`;
   const lines =
     kind === "near"
       ? [
-          `Mailforge AI has cost ${usd(spentUsd)} this month, ${pct}% of your ${usd(budgetUsd)} budget.`,
+          `Loomail AI has cost ${usd(spentUsd)} this month, ${pct}% of your ${usd(budgetUsd)} budget.`,
           "",
-          "At 100% Mailforge AI pauses for every workspace that has no AI key of its own. Customers on their own key are not affected.",
+          "At 100% Loomail AI pauses for every workspace that has no AI key of its own. Customers on their own key are not affected.",
           `If you expect more use this month, raise the budget now. It resets on ${resetsOn}.`,
         ]
       : [
-          `Mailforge AI has cost ${usd(spentUsd)} this month and reached your ${usd(budgetUsd)} budget, so it is now paused.`,
+          `Loomail AI has cost ${usd(spentUsd)} this month and reached your ${usd(budgetUsd)} budget, so it is now paused.`,
           "",
           "Workspaces without their own AI key cannot draft, compile or generate emails until you raise the budget or the month rolls over.",
           "Nothing is lost: emails waiting for AI-written content stay queued and carry on automatically. Customers on their own key are not affected.",
@@ -134,7 +134,7 @@ export function buildAiBudgetEmail(
   return { subject, text: [...lines, "", consoleUrl].join("\n"), html };
 }
 
-/** Why Mailforge AI is back after a budget pause. */
+/** Why Loomail AI is back after a budget pause. */
 export type AiResumeCause = "raised" | "removed" | "new_month";
 
 export function buildAiResumedEmail(
@@ -145,10 +145,10 @@ export function buildAiResumedEmail(
 ): { subject: string; text: string; html: string } {
   const why =
     cause === "removed"
-      ? "The monthly budget was removed, so Mailforge AI is back on."
+      ? "The monthly budget was removed, so Loomail AI is back on."
       : cause === "new_month"
-        ? "A new month has begun, so the budget has reset and Mailforge AI is back on."
-        : `The monthly budget was raised to ${usd(budgetUsd ?? 0)} (${usd(spentUsd)} spent so far), so Mailforge AI is back on.`;
+        ? "A new month has begun, so the budget has reset and Loomail AI is back on."
+        : `The monthly budget was raised to ${usd(budgetUsd ?? 0)} (${usd(spentUsd)} spent so far), so Loomail AI is back on.`;
   const lines = [
     why,
     "",
@@ -156,18 +156,18 @@ export function buildAiResumedEmail(
   ];
   const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return {
-    subject: "Mailforge AI is back on",
+    subject: "Loomail AI is back on",
     text: [...lines, "", consoleUrl].join("\n"),
     html: `<p><strong>${esc(lines[0]!)}</strong></p><p>${esc(lines[2]!)}</p><p><a href="${esc(consoleUrl)}">Open AI providers</a></p>`,
   };
 }
 
-/** Set while Mailforge AI is paused for the budget, so the email that says it is back goes out exactly once. */
+/** Set while Loomail AI is paused for the budget, so the email that says it is back goes out exactly once. */
 export const AI_BUDGET_PAUSED_KEY = "ai_budget_paused";
 
 /**
  * Warn at 80% of the monthly dollar budget, again when it is used up (which is
- * also when Mailforge AI pauses), and say when it is back (budget raised or
+ * also when Loomail AI pauses), and say when it is back (budget raised or
  * removed, or the month rolled over). The two warnings fire once per month per
  * budget amount: raising the budget lets the next threshold alert again. The
  * "back on" email fires once per pause. Nothing is marked as sent unless an
@@ -184,7 +184,7 @@ export async function checkAiBudgetAlert(
     const { budgetUsd, spentUsd } = await loadAiBudgetStatus(db, startOfMonthUtc(now));
     const state = aiBudgetState(budgetUsd, spentUsd);
     const month = now.toISOString().slice(0, 7);
-    const base = (env.MAILFORGE_ADMIN_URL || env.BASE_URL || "").replace(/\/+$/, "");
+    const base = (env.LOOMAIL_ADMIN_URL || env.BASE_URL || "").replace(/\/+$/, "");
     const consoleUrl = `${base}/admin/ai`;
 
     const mark = (k: string, active: boolean, at: Date | null) =>
@@ -226,7 +226,7 @@ export async function checkAiBudgetAlert(
     let total = 0;
     let resumed = false;
 
-    // Is Mailforge AI paused for the budget right now, and was it before?
+    // Is Loomail AI paused for the budget right now, and was it before?
     const [paused] = await db.select().from(platformAlertState).where(eq(platformAlertState.key, AI_BUDGET_PAUSED_KEY)).limit(1);
     if (state === "reached") {
       // Remember when the pause began (once), whether or not anyone could be emailed about it.
@@ -306,11 +306,11 @@ export async function checkAiAlert(db: Db, now: Date = new Date(), opts: AiAlert
     const transport = opts.transport === undefined ? getPlatformTransport(env) : opts.transport;
     const admins = opts.admins ?? platformAdminEmails(env);
     if (!transport || admins.length === 0) {
-      opts.log?.warn({ health }, "Mailforge AI is failing but no alert was sent: no platform email sender or no platform admins configured");
+      opts.log?.warn({ health }, "Loomail AI is failing but no alert was sent: no platform email sender or no platform admins configured");
       return { health, sent: 0 };
     }
 
-    const base = (env.MAILFORGE_ADMIN_URL || env.BASE_URL || "").replace(/\/+$/, "");
+    const base = (env.LOOMAIL_ADMIN_URL || env.BASE_URL || "").replace(/\/+$/, "");
     const mail = buildAiAlertEmail(health, `${base}/admin/ai`);
     let sent = 0;
     for (const to of admins) {

@@ -4,7 +4,7 @@
  *
  *   POST /webhooks/resend-platform
  *
- * One signing secret for the whole account (MAILFORGE_MANAGED_RESEND_WEBHOOK_SECRET), because
+ * One signing secret for the whole account (LOOMAIL_MANAGED_RESEND_WEBHOOK_SECRET), because
  * one Resend account sends for every managed workspace. Unlike the per-workspace endpoint, the
  * workspace is not in the URL: it is found from the message the event is about, and only
  * messages from workspaces that use managed sending are considered, so this endpoint can
@@ -19,7 +19,7 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { sql } from "drizzle-orm";
-import { managedSendingConfigFromEnv } from "@mailforge/core";
+import { managedSendingConfigFromEnv } from "@loomail/core";
 import type { Db } from "../../plugins/db.js";
 import { processResendWebhookEvent, verifyResendWebhookSignature } from "./resend.js";
 

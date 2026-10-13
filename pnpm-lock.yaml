@@ -109,25 +109,25 @@ importers:
 
   apps/server:
     dependencies:
-      '@mailforge/adapters':
+      '@loomail/adapters':
         specifier: workspace:*
         version: link:../../packages/adapters
-      '@mailforge/api':
+      '@loomail/api':
         specifier: workspace:*
         version: link:../../packages/api
-      '@mailforge/brain-oss':
+      '@loomail/brain-oss':
         specifier: workspace:*
         version: link:../../packages/brain-oss
-      '@mailforge/core':
+      '@loomail/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@mailforge/db':
+      '@loomail/db':
         specifier: workspace:*
         version: link:../../drizzle
-      '@mailforge/scheduler':
+      '@loomail/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
-      '@mailforge/worker':
+      '@loomail/worker':
         specifier: workspace:*
         version: link:../../packages/worker
       drizzle-orm:
@@ -167,7 +167,7 @@ importers:
 
   packages/adapters:
     dependencies:
-      '@mailforge/core':
+      '@loomail/core':
         specifier: workspace:*
         version: link:../core
       nodemailer:
@@ -192,16 +192,16 @@ importers:
       '@fastify/static':
         specifier: 7.0.4
         version: 7.0.4
-      '@mailforge/adapters':
+      '@loomail/adapters':
         specifier: workspace:*
         version: link:../adapters
-      '@mailforge/brain-oss':
+      '@loomail/brain-oss':
         specifier: workspace:*
         version: link:../brain-oss
-      '@mailforge/core':
+      '@loomail/core':
         specifier: workspace:*
         version: link:../core
-      '@mailforge/db':
+      '@loomail/db':
         specifier: workspace:*
         version: link:../../drizzle
       '@simplewebauthn/server':
@@ -229,7 +229,7 @@ importers:
 
   packages/brain-oss:
     dependencies:
-      '@mailforge/core':
+      '@loomail/core':
         specifier: workspace:*
         version: link:../core
     devDependencies:
@@ -255,7 +255,7 @@ importers:
 
   packages/scheduler:
     dependencies:
-      '@mailforge/core':
+      '@loomail/core':
         specifier: workspace:*
         version: link:../core
       pg-boss:
@@ -271,16 +271,16 @@ importers:
 
   packages/worker:
     dependencies:
-      '@mailforge/adapters':
+      '@loomail/adapters':
         specifier: workspace:*
         version: link:../adapters
-      '@mailforge/brain-oss':
+      '@loomail/brain-oss':
         specifier: workspace:*
         version: link:../brain-oss
-      '@mailforge/core':
+      '@loomail/core':
         specifier: workspace:*
         version: link:../core
-      '@mailforge/db':
+      '@loomail/db':
         specifier: workspace:*
         version: link:../../drizzle
       drizzle-orm:

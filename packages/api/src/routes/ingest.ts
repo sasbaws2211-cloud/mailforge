@@ -39,7 +39,7 @@
  *
  * Task 9 additions (lifecycle state machine):
  * - After event insertion, evaluates whether the event triggers a lifecycle
- *   state transition. Transition evaluation uses pure functions from @mailforge/core.
+ *   state transition. Transition evaluation uses pure functions from @loomail/core.
  * - Transition is applied via atomic CAS (WHERE lifecycle_state = $expected).
  *   If CAS fails (concurrent write), no transition row is written - idempotent.
  * - lifecycle_transitions audit log is written on successful CAS.
@@ -56,10 +56,11 @@
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
+import { rebaseTrialOnFirstEvent } from "../onboarding/trial.js";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { eq, and, ne, sql, inArray } from "drizzle-orm";
-import { contacts, events, contactConflicts, lifecycleTransitions, tenants } from "@mailforge/db/schema";
+import { contacts, events, contactConflicts, lifecycleTransitions, tenants } from "@loomail/db/schema";
 import {
   evaluateEventTransition,
   isActivationRelevantEvent,
@@ -71,7 +72,7 @@ import {
   PlanLimitError,
   type LifecycleState,
   type LifecycleConfig,
-} from "@mailforge/core";
+} from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 import { assertCanCreateContact } from "../plan/usage.js";
 
@@ -79,7 +80,7 @@ import { assertCanCreateContact } from "../plan/usage.js";
 
 /**
  * Maximum hours of clock skew tolerated between client timestamp and server
- * time. Sourced from @mailforge/core so the worker's partition-pruning slack
+ * time. Sourced from @loomail/core so the worker's partition-pruning slack
  * and this ingest clamp share a single definition and cannot drift.
  */
 const TIMESTAMP_CLAMP_HOURS = INGEST_TIMESTAMP_CLAMP_HOURS;
@@ -615,6 +616,8 @@ export async function processTrackEvent(
   body: TrackBody,
 ): Promise<{ deduplicated: boolean }> {
   const now = new Date();
+  // A trial restarts once, when the customer's own app sends its first event.
+  void rebaseTrialOnFirstEvent(db, tenantId, body.userId, now);
   const rawTimestamp = body.timestamp ? new Date(body.timestamp) : now;
   const { timestamp: eventTimestamp, clamped } = clampTimestamp(rawTimestamp, now);
 
@@ -1090,7 +1093,7 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
    * Segment-compatible batch envelope: { batch: [...] } where each item is a
    * track or identify call with a "type" discriminator. This is the endpoint
    * Segment SDKs post to by default (analytics-node: host + /v1/batch), so
-   * its existence is what makes "point an existing Segment SDK at Mailforge"
+   * its existence is what makes "point an existing Segment SDK at Loomail"
    * true rather than aspirational.
    *
    * Semantics:

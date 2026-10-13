@@ -1,6 +1,6 @@
 /**
  * Tests for how the dashboard describes a workspace's AI: where it comes from,
- * how much of the Mailforge AI allowance is used, and what the admin console
+ * how much of the Loomail AI allowance is used, and what the admin console
  * says about changes to the operator's providers. Pure functions.
  */
 import { describe, it, expect } from "vitest";
@@ -14,7 +14,7 @@ function ai(over: Partial<LlmAiInfo> & { allowance?: Partial<LlmAiInfo["allowanc
   const { allowance, ...rest } = over;
   return {
     source: "platform",
-    name: "Mailforge AI",
+    name: "Loomail AI",
     unavailable: false,
     allowance: { plan: "Starter", limit: 300_000, used: 1_000, spent: false, resets_at: RESET, ...allowance },
     ...rest,
@@ -53,9 +53,9 @@ describe("number and date formatting", () => {
 });
 
 describe("describeAi", () => {
-  it("on Mailforge AI with room left: calm, with a meter, nothing to set up", () => {
+  it("on Loomail AI with room left: calm, with a meter, nothing to set up", () => {
     const s = describeAi(ai());
-    expect(s).toMatchObject({ heading: "Mailforge AI is on", tone: "success", showMeter: true });
+    expect(s).toMatchObject({ heading: "Loomail AI is on", tone: "success", showMeter: true });
     expect(s.body).toContain("Starter");
     expect(s.body).toMatch(/nothing to set up/i);
   });
@@ -92,14 +92,14 @@ describe("describeAi", () => {
     expect(s.body).toMatch(/add your own key/i);
   });
 
-  it("never names a vendor or model behind Mailforge AI", () => {
+  it("never names a vendor or model behind Loomail AI", () => {
     for (const a of [ai(), ai({ allowance: { spent: true, used: 300_000 } }), ai({ allowance: { used: 290_000 } })]) {
       expect(JSON.stringify(describeAi(a))).not.toMatch(/openai|anthropic|claude|gpt/i);
     }
   });
 
   it("labels each source", () => {
-    expect(AI_SOURCE_LABEL).toEqual({ byok: "Own key", platform: "Mailforge AI", none: "None" });
+    expect(AI_SOURCE_LABEL).toEqual({ byok: "Own key", platform: "Loomail AI", none: "None" });
   });
 });
 
@@ -149,7 +149,7 @@ describe("allowance and cost wording in the admin console", () => {
   });
 });
 
-describe("when the operator has paused Mailforge AI (budget used up)", () => {
+describe("when the operator has paused Loomail AI (budget used up)", () => {
   it("tells the customer it is paused, to add their own key or wait, and that nothing is lost - with no mention of money", () => {
     const s = describeAi(ai({ unavailable: true }));
     expect(s).toMatchObject({ tone: "warning", showMeter: false });

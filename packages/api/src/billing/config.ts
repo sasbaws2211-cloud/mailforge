@@ -18,7 +18,7 @@
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
-import { parseUsdRate } from "@mailforge/core";
+import { parseUsdRate } from "@loomail/core";
 import { createPaystackClient, type PaystackClient } from "./paystack.js";
 
 export interface BillingRuntime {

@@ -2,7 +2,7 @@
  * AI allowance gate for the worker.
  *
  * When a workspace has no AI key of its own it uses the operator's provider
- * (Mailforge AI), and that use is capped per plan per calendar month (UTC).
+ * (Loomail AI), and that use is capped per plan per calendar month (UTC).
  * The cap only applies when plan enforcement is on; with it off (the default,
  * and every self-hosted install) nothing here touches the database.
  *
@@ -15,8 +15,8 @@
  * Mirror side: PUBLIC (packages/worker is mirrored).
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { aiAllowanceSpent, aiBudgetState, plansEnforced, startOfMonthUtc, PLANS } from "@mailforge/core";
-import { loadAiBudgetStatus, loadLlmCandidates, platformTokensUsed } from "@mailforge/db/llm";
+import { aiAllowanceSpent, aiBudgetState, plansEnforced, startOfMonthUtc, PLANS } from "@loomail/core";
+import { loadAiBudgetStatus, loadLlmCandidates, platformTokensUsed } from "@loomail/db/llm";
 import { loadTenantEntitlements } from "./plan-gate.js";
 
 type Db = NodePgDatabase<Record<string, never>>;
@@ -40,7 +40,7 @@ export async function aiAllowanceFor(db: Db, tenantId: string, now: Date): Promi
 }
 
 /**
- * Has Mailforge AI used up the operator's monthly dollar budget? False when no
+ * Has Loomail AI used up the operator's monthly dollar budget? False when no
  * budget is set (one cheap query then). Applies to workspaces on the operator's
  * provider only; a customer's own key never runs through this.
  */

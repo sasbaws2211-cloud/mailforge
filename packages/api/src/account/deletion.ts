@@ -4,7 +4,7 @@
  * Deleting is two steps on purpose. Asking for it switches the workspace off
  * (nothing sends, the API refuses keys, only export and "cancel" still work) and
  * starts a grace period. When the period ends the worker erases everything for
- * good (see @mailforge/db/purge). Until then one click undoes it.
+ * good (see @loomail/db/purge). Until then one click undoes it.
  *
  * A live subscription is cancelled with the payment provider first, so a customer
  * is never charged for a workspace that is about to disappear. If that fails
@@ -13,16 +13,16 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { eq, sql } from "drizzle-orm";
-import { tenants } from "@mailforge/db/schema";
+import { tenants } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import type { BillingRuntime } from "../billing/config.js";
 import { BillingError, cancelSubscriptionForTenant } from "../billing/service.js";
 
 export const DEFAULT_DELETION_GRACE_DAYS = 7;
 
-/** Days between asking and erasure: MAILFORGE_DELETION_GRACE_DAYS (1 to 90), default 7. */
+/** Days between asking and erasure: LOOMAIL_DELETION_GRACE_DAYS (1 to 90), default 7. */
 export function deletionGraceDays(env: NodeJS.ProcessEnv = process.env): number {
-  const n = Number.parseInt(env.MAILFORGE_DELETION_GRACE_DAYS ?? "", 10);
+  const n = Number.parseInt(env.LOOMAIL_DELETION_GRACE_DAYS ?? "", 10);
   return Number.isInteger(n) && n >= 1 && n <= 90 ? n : DEFAULT_DELETION_GRACE_DAYS;
 }
 

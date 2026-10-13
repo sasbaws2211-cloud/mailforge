@@ -1,7 +1,7 @@
 /**
- * Settings / Mailforge Sending: let Mailforge send your email for you.
+ * Settings / Loomail Sending: let Loomail send your email for you.
  *
- * No email provider to set up. Email goes out from a shared Mailforge address straight
+ * No email provider to set up. Email goes out from a shared Loomail address straight
  * away (at a modest daily volume), and from your own domain once its DNS records are
  * added and verified, which is better for delivery and has no extra daily cap. If the
  * workspace connects a provider of its own, that is used instead and this waits.
@@ -130,8 +130,8 @@ export default function ManagedSendingSettings() {
 
   return (
     <Section
-      title="Mailforge Sending"
-      description="Let Mailforge send your email for you. Nothing to connect: there is no email provider to sign up for."
+      title="Loomail Sending"
+      description="Let Loomail send your email for you. Nothing to connect: there is no email provider to sign up for."
       configured={null}
       actions={<Badge variant={view.uses === "managed" ? "success" : m?.paused ? "danger" : "neutral"}>{view.uses === "managed" ? "in use" : m?.paused ? "paused" : on ? "on" : "off"}</Badge>}
     >
@@ -142,7 +142,7 @@ export default function ManagedSendingSettings() {
       {!on && (
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <Button onClick={() => void run(() => enable.mutateAsync())} disabled={busy || !isOwner}>
-            {enable.isPending ? "Turning on..." : "Turn on Mailforge Sending"}
+            {enable.isPending ? "Turning on..." : "Turn on Loomail Sending"}
           </Button>
           {!isOwner && <p className="text-[13px] text-muted-foreground">Only the workspace owner can turn this on.</p>}
         </div>
@@ -245,7 +245,7 @@ export default function ManagedSendingSettings() {
             </div>
             <p className="text-[13px] text-muted-foreground">
               {m.sender?.mode === "shared"
-                ? "Until your domain is verified, email is sent from a shared Mailforge address, with your name as the sender and your reply address so people can answer you directly."
+                ? "Until your domain is verified, email is sent from a shared Loomail address, with your name as the sender and your reply address so people can answer you directly."
                 : "Leave a field empty to use the default (your workspace name, and your account email for replies)."}
             </p>
           </form>
@@ -256,10 +256,10 @@ export default function ManagedSendingSettings() {
           <div className="border-t border-border pt-4">
             {!confirmOff ? (
               <Button variant="ghost" size="sm" onClick={() => setConfirmOff(true)} disabled={busy || !isOwner}>
-                Turn off Mailforge Sending
+                Turn off Loomail Sending
               </Button>
             ) : (
-              <div className="rounded-md border border-border bg-sunken px-4 py-3" role="group" aria-label="Turn off Mailforge Sending">
+              <div className="rounded-md border border-border bg-sunken px-4 py-3" role="group" aria-label="Turn off Loomail Sending">
                 <p className="text-[14px] text-foreground">
                   {ownTransport
                     ? "Turn it off? You are using your own email provider, so your email is not affected."

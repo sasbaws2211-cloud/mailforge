@@ -24,9 +24,9 @@
 import { randomBytes, createHash } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { eq, and, sql, ne, isNull } from "drizzle-orm";
-import { users, sessions, invites, tenants, transportConfigs } from "@mailforge/db/schema";
-import { resolveTransportAdapter } from "@mailforge/adapters";
-import { PlanLimitError } from "@mailforge/core";
+import { users, sessions, invites, tenants, transportConfigs } from "@loomail/db/schema";
+import { resolveTransportAdapter } from "@loomail/adapters";
+import { PlanLimitError } from "@loomail/core";
 import { buildInviteEmail, type TransactionalEmailInput } from "../transactional-email.js";
 import type { Db } from "../plugins/db.js";
 import { assertCanAddSeat } from "../plan/usage.js";

@@ -118,7 +118,7 @@ export default function AdminPage() {
   const attention = o
     ? [
         o.attention.payments_overdue > 0 && `${o.attention.payments_overdue} ${o.attention.payments_overdue === 1 ? "payment is" : "payments are"} overdue (still inside the 3 day grace period).`,
-        o.attention.subscriptions_lapsed > 0 && `${o.attention.subscriptions_lapsed} paid ${o.attention.subscriptions_lapsed === 1 ? "workspace has" : "workspaces have"} lapsed and ${o.attention.subscriptions_lapsed === 1 ? "is" : "are"} now on Free.`,
+        o.attention.subscriptions_lapsed > 0 && `${o.attention.subscriptions_lapsed} paid ${o.attention.subscriptions_lapsed === 1 ? "workspace has" : "workspaces have"} lapsed and ${o.attention.subscriptions_lapsed === 1 ? "is" : "are"} now without a plan.`,
         o.attention.trials_ending_in_3_days > 0 && `${o.attention.trials_ending_in_3_days} ${o.attention.trials_ending_in_3_days === 1 ? "trial ends" : "trials end"} within 3 days.`,
       ].filter((x): x is string => typeof x === "string")
     : [];
@@ -145,7 +145,7 @@ export default function AdminPage() {
             <Stat
               label="On a trial"
               value={nf(o.workspaces.by_stored_plan.trial_running)}
-              hint={`${nf(o.workspaces.by_stored_plan.free)} on Free, ${nf(o.workspaces.by_stored_plan.trial_ended)} trials ended`}
+              hint={`${nf(o.workspaces.by_stored_plan.free)} with no plan, ${nf(o.workspaces.by_stored_plan.trial_ended)} trials ended`}
             />
             <Stat label="Emails this month" value={nf(o.usage.emails_this_month)} hint={`${nf(o.usage.contacts)} contacts in total`} />
           </>
@@ -189,7 +189,7 @@ export default function AdminPage() {
             <Select value={status} onChange={(e) => setStatus(e.target.value as AdminListStatus)} aria-label="Filter by plan status">
               <option value="all">All workspaces</option>
               <option value="trial">On a trial</option>
-              <option value="free">Free</option>
+              <option value="free">No plan</option>
               <option value="paid">Paid plans</option>
               <option value="suspended">Suspended</option>
             </Select>

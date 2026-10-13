@@ -10,7 +10,7 @@ const good = { workspace: "Acme Inc", email: "Ama@Acme.com ", terms: "yes", webs
 describe("validateSignup", () => {
   it("accepts a good form and normalizes email and workspace", () => {
     const r = validateSignup({ ...good, workspace: "  Acme   Inc  " });
-    expect(r).toEqual({ ok: true, value: { workspace: "Acme Inc", email: "ama@acme.com", plan: "growth", goal: null } });
+    expect(r).toEqual({ ok: true, value: { workspace: "Acme Inc", email: "ama@acme.com", plan: "essential", goal: null } });
   });
 
   it("accepts JSON-style booleans for terms", () => {
@@ -56,11 +56,12 @@ describe("validateSignup", () => {
       const r = validateSignup({ ...good, plan });
       return r.ok ? r.value.plan : null;
     };
-    expect(ok("free")).toBe("free");
-    expect(ok("scale")).toBe("scale");
-    expect(ok("enterprise")).toBe("growth");
-    expect(ok(undefined)).toBe("growth");
-    expect(ok("<script>")).toBe("growth");
+    expect(ok("essential")).toBe("essential");
+    expect(ok("free")).toBe("essential");
+    expect(ok("scale")).toBe("essential");
+    expect(ok("enterprise")).toBe("essential");
+    expect(ok(undefined)).toBe("essential");
+    expect(ok("<script>")).toBe("essential");
   });
 
   it("copes with a non-object body", () => {

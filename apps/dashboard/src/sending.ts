@@ -1,5 +1,5 @@
 /**
- * Managed sending (Mailforge sends your email for you): hooks, and the pure rules the
+ * Managed sending (Loomail sends your email for you): hooks, and the pure rules the
  * screen uses to decide what to say about the sender, the domain and its DNS records.
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
@@ -112,12 +112,12 @@ export function describeSender(v: SendingView): SenderSummary {
   if (v.uses === "own_transport") {
     return {
       headline: "You are using your own email provider",
-      detail: "Mailforge Sending is on standby. Remove your own provider below if you want Mailforge to send for you instead.",
+      detail: "Loomail Sending is on standby. Remove your own provider below if you want Loomail to send for you instead.",
       tone: "info",
     };
   }
   if (!m || !m.enabled) {
-    return { headline: "Mailforge Sending is off", detail: "Turn it on and Mailforge sends your email for you. There is nothing to connect.", tone: "info" };
+    return { headline: "Loomail Sending is off", detail: "Turn it on and Loomail sends your email for you. There is nothing to connect.", tone: "info" };
   }
   if (m.paused) {
     return {
@@ -138,7 +138,7 @@ export function describeSender(v: SendingView): SenderSummary {
   }
   const cap = v.shared.daily_limit;
   return {
-    headline: "Sending from a shared Mailforge address",
+    headline: "Sending from a shared Loomail address",
     detail:
       `Email goes out as ${m.sender.from_name}, replies go to ${m.sender.reply_to ?? "your account email"}.` +
       (cap ? ` Up to ${cap.toLocaleString("en-US")} emails a day this way.` : "") +
@@ -147,7 +147,7 @@ export function describeSender(v: SendingView): SenderSummary {
   };
 }
 
-/** Can mail actually go out through Mailforge Sending right now? */
+/** Can mail actually go out through Loomail Sending right now? */
 export function sendingIsActive(v: SendingView | undefined): boolean {
   return v?.uses === "managed";
 }

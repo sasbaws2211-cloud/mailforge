@@ -30,7 +30,7 @@ import {
   flows,
   flowMemberships,
   lifecycleMessages,
-} from "@mailforge/db/schema";
+} from "@loomail/db/schema";
 
 // ---------------------------------------------------------------------------
 // Mocks: brain-oss decide and draft, and provider-resolver
@@ -41,10 +41,10 @@ const mockDraft = vi.fn();
 const mockAssess = vi.fn();
 const mockResolveTenantProvider = vi.fn();
 
-vi.mock("@mailforge/brain-oss", async () => {
+vi.mock("@loomail/brain-oss", async () => {
   // Import the real module to get the prompt builders and other pure functions.
   // Only the three LLM call functions (decide, draft, assess) are mocked.
-  const real = await vi.importActual<typeof import("@mailforge/brain-oss")>("@mailforge/brain-oss");
+  const real = await vi.importActual<typeof import("@loomail/brain-oss")>("@loomail/brain-oss");
   return {
     ...real,
     decide: (...args: unknown[]) => mockDecide(...args),
@@ -72,8 +72,8 @@ if (!TEST_DB_URL) {
     `[content.test] DATABASE_URL is not set.\n\n` +
       `This test requires a Postgres connection.\n` +
       (inCI
-        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://mailforge:mailforge@localhost:5432/mailforge\n`
-        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://mailforge:mailforge@localhost:5433/mailforge'\n`),
+        ? `Set the variable in the workflow env block:\n\n  DATABASE_URL: postgres://loomail:loomail@localhost:5432/loomail\n`
+        : `Set the variable in .env (see .env.example) or export it:\n\n  export DATABASE_URL='postgres://loomail:loomail@localhost:5433/loomail'\n`),
   );
 }
 

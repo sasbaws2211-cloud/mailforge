@@ -1,7 +1,7 @@
 /**
  * Plan gate for the drain: monthly email allowance and the credit line.
  *
- * The rules live in @mailforge/core (entitlements.ts); this file fetches the
+ * The rules live in @loomail/core (entitlements.ts); this file fetches the
  * tenant's plan row and this month's send count. With plan enforcement off
  * (the default) every function answers "unlimited" without touching the
  * database, so self-hosted installs are unaffected.
@@ -14,10 +14,27 @@ import {
   entitlementsFor,
   plansEnforced,
   startOfMonthUtc,
+  type AddonTotals,
   type Entitlements,
-} from "@mailforge/core";
+} from "@loomail/core";
 
 type Db = NodePgDatabase<Record<string, never>>;
+
+/** Prepaid top-ups bought this calendar month (UTC), summed per limit. */
+async function loadAddonTotals(db: Db, tenantId: string, now: Date): Promise<AddonTotals> {
+  const r = await db.execute<{ kind: string; units: string }>(sql`
+    SELECT kind, COALESCE(sum(units), 0)::text AS units FROM addon_purchases
+    WHERE tenant_id = ${tenantId}::uuid AND period_start = ${startOfMonthUtc(now).toISOString()}::timestamptz
+    GROUP BY kind`);
+  const out: AddonTotals = {};
+  for (const row of r.rows) {
+    const n = Number(row.units);
+    if (row.kind === "profiles") out.contacts = n;
+    else if (row.kind === "emails") out.emailsPerMonth = n;
+    else if (row.kind === "ai") out.aiTokensPerMonth = n;
+  }
+  return out;
+}
 
 export async function loadTenantEntitlements(db: Db, tenantId: string, now: Date): Promise<Entitlements> {
   const r = await db.execute<{
@@ -27,11 +44,13 @@ export async function loadTenantEntitlements(db: Db, tenantId: string, now: Date
     ai_allowance_override: number | null;
   }>(sql`SELECT plan, trial_ends_at, plan_paid_through, ai_allowance_override FROM tenants WHERE id = ${tenantId}::uuid LIMIT 1`);
   const row = r.rows[0];
+  const addons = plansEnforced() ? await loadAddonTotals(db, tenantId, now) : undefined;
   return entitlementsFor({
     plan: row?.plan ?? null,
     trialEndsAt: row?.trial_ends_at ? new Date(row.trial_ends_at) : null,
     paidThrough: row?.plan_paid_through ? new Date(row.plan_paid_through) : null,
     aiTokensOverride: row?.ai_allowance_override ?? null,
+    addons,
     now,
   });
 }
@@ -54,7 +73,7 @@ export async function remainingMonthlyEmails(db: Db, tenantId: string, now: Date
 }
 
 /** The credit line for a tenant's emails (shared with the public pages; defined in core). */
-export { poweredByFor } from "@mailforge/core";
+export { poweredByFor } from "@loomail/core";
 
 /** Which of these tenants are suspended or scheduled for deletion. Nothing is sent for them. */
 export async function suspendedTenantIds(db: Db, tenantIds: string[]): Promise<Set<string>> {

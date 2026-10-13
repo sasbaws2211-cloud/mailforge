@@ -15,6 +15,7 @@
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */
+import { DemoDataButton } from "../components/sample-event.js";
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Search, Users, SearchX } from "lucide-react";
@@ -142,13 +143,16 @@ function EmptyUnfiltered() {
     <EmptyState
       icon={Users}
       title="No contacts yet"
-      description="Contacts are created automatically when your events start flowing: an identify call creates the person, track calls fill their timeline. Once ingestion is connected, this table fills itself."
+      description="Contacts appear on their own when your app sends events: an identify call creates the person, and track calls fill in their timeline. Want to look around first? Add made-up customers, and clear them whenever you like."
       action={
-        <Link to="/integrate">
-          <Button size="sm" variant="outline">
-            Connect ingestion
-          </Button>
-        </Link>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <DemoDataButton present={false} />
+          <Link to="/integrate">
+            <Button size="sm" variant="outline">
+              Connect your app
+            </Button>
+          </Link>
+        </div>
       }
     />
   );

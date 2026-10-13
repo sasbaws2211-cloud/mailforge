@@ -3,7 +3,7 @@
  * env object and never sends anything.
  */
 import { describe, it, expect } from "vitest";
-import { ResendTransportAdapter, SmtpTransportAdapter } from "@mailforge/adapters";
+import { ResendTransportAdapter, SmtpTransportAdapter } from "@loomail/adapters";
 import { getPlatformTransport } from "../src/platform-mailer.js";
 
 describe("getPlatformTransport", () => {

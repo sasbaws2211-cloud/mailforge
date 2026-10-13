@@ -1,5 +1,5 @@
 /**
- * @mailforge/brain-oss - Brain interface and community implementation.
+ * @loomail/brain-oss - Brain interface and community implementation.
  * Provides the Brain contract that brain-cloud also implements.
  *
  * Exports:
@@ -132,7 +132,7 @@ export {
   type DecideOutput,
   type DraftOutput,
   type AssessOutput,
-} from "@mailforge/core";
+} from "@loomail/core";
 
 // ---------------------------------------------------------------------------
 // Flow compilation (task 11)

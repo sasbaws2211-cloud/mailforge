@@ -12,7 +12,7 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { sql } from "drizzle-orm";
-import { ONBOARDING_GOALS, type OnboardingGoal } from "@mailforge/core";
+import { ONBOARDING_GOALS, type OnboardingGoal } from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 
 export const FUNNEL_WINDOWS = [7, 30, 90] as const;
@@ -31,7 +31,7 @@ const LABELS: Record<FunnelStageId, string> = {
   signed_up: "Signed up",
   signed_in: "Opened the link and signed in",
   address: "Added a business address",
-  sender: "Can send (own transport or Mailforge Sending)",
+  sender: "Can send (own transport or Loomail Sending)",
   flow: "Turned on a flow",
   event: "Sent a first event",
   first_email: "First email delivered",
@@ -130,7 +130,7 @@ export async function loadOnboardingFunnel(db: Db, days: FunnelWindow, now: Date
       count(*) FILTER (WHERE has_flow)::text AS flow,
       count(*) FILTER (WHERE has_event)::text AS event,
       count(*) FILTER (WHERE first_sent IS NOT NULL)::text AS first_email,
-      count(*) FILTER (WHERE plan IN ('starter','growth','scale'))::text AS paid,
+      count(*) FILTER (WHERE plan = 'essential')::text AS paid,
       count(*) FILTER (WHERE signed_in AND first_sent IS NULL
                          AND created_at < ${t}::timestamptz - interval '24 hours'
                          AND settings->'onboarding'->>'dismissed_at' IS NULL)::text AS stalled,

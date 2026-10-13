@@ -62,10 +62,10 @@ function makeParams(overrides: Partial<TransportSendParams> = {}): TransportSend
   return {
     to: "test-recipient@example.com",
     from: etherealAccount?.user ?? "noreply@example.com",
-    fromName: "Mailforge Test",
+    fromName: "Loomail Test",
     subject: `SMTP Integration Test ${Date.now()}`,
-    bodyHtml: "<h1>Hello from Mailforge SMTP</h1><p>This email was sent through the SmtpTransportAdapter.</p>",
-    bodyText: "Hello from Mailforge SMTP\n\nThis email was sent through the SmtpTransportAdapter.",
+    bodyHtml: "<h1>Hello from Loomail SMTP</h1><p>This email was sent through the SmtpTransportAdapter.</p>",
+    bodyText: "Hello from Loomail SMTP\n\nThis email was sent through the SmtpTransportAdapter.",
     messageId: `test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     headers: {
       "List-Unsubscribe": "<https://example.com/unsubscribe?token=test>",

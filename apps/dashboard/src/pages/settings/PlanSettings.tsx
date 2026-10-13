@@ -33,10 +33,13 @@ import {
   METER_LABEL,
   usePlan,
   useCancelSubscription,
+  useBillingPayments,
+  useStopAutoRenewal,
   useCheckoutFlow,
   type MeterKind,
 } from "../../plan.js";
-import type { BillingInterval, BillingSubscription, PlanCatalogEntry, PlanInfo, PlanMeter, PlanMeterState } from "../../api.js";
+import { CANCEL_REASONS } from "../../api.js";
+import type { AddonCatalogEntry, BillingInterval, BillingSubscription, PlanCatalogEntry, PlanInfo, PlanMeter, PlanMeterState } from "../../api.js";
 import { cn } from "../../lib/utils.js";
 import { FormError, Notice, Section, errorMessage } from "./shared.js";
 
@@ -54,10 +57,11 @@ const BAR_COLOR: Record<PlanMeterState, string> = {
   over: "bg-danger",
 };
 
-const n = (v: number): string => v.toLocaleString("en-US");
+const n = (v: number): string =>
+  v.toLocaleString("en-US", { minimumFractionDigits: Number.isInteger(v) ? 0 : 2, maximumFractionDigits: 2 });
 
 function Meter({ kind, meter, detail }: { kind: MeterKind | "ai"; meter: PlanMeter; detail?: string }) {
-  const label = kind === "ai" ? "Mailforge AI tokens" : METER_LABEL[kind];
+  const label = kind === "ai" ? "Loomail AI tokens" : METER_LABEL[kind];
   // A full seat meter is normal (a Free workspace has one seat, its owner), so it is
   // shown calmly; only going over the seat allowance is flagged as a problem.
   const badge =
@@ -208,6 +212,75 @@ function PlanCard({
   );
 }
 
+/** One top-up: pick how many packs, see the total, pay by card. */
+function AddonCard({
+  a,
+  currency,
+  disabled,
+  busy,
+  busyLabel,
+  onBuy,
+  repeating,
+}: {
+  a: AddonCatalogEntry;
+  currency: string;
+  disabled: boolean;
+  busy: boolean;
+  busyLabel: string;
+  onBuy: (kind: string, packs: number, repeat: boolean) => void;
+  /** Already repeats every month. */
+  repeating: boolean;
+}) {
+  const [packs, setPacks] = useState(1);
+  const [repeat, setRepeat] = useState(false);
+  const units = a.pack_units * packs;
+  const usd = Math.round(a.pack_price_usd * packs * 100) / 100;
+  const charge = a.pack_charge !== null ? a.pack_charge * packs : null;
+  return (
+    <div className="flex flex-col rounded-lg border border-border bg-card p-4">
+      <h3 className="text-[15px] font-semibold text-foreground">{a.label}</h3>
+      <p className="mt-0.5 text-[13px] text-muted-foreground">{a.rate}</p>
+      <label className="mt-3 text-[13px] text-foreground" htmlFor={`addon-${a.kind}`}>
+        Packs of {n(a.pack_units)}
+      </label>
+      <input
+        id={`addon-${a.kind}`}
+        type="number"
+        min={1}
+        max={100}
+        value={packs}
+        onChange={(e) => setPacks(Math.min(100, Math.max(1, Math.floor(Number(e.target.value)) || 1)))}
+        className="mt-1 h-9 w-24 rounded-md border border-border bg-background px-2 text-[14px]"
+      />
+      <p className="mt-3 text-[18px] font-semibold tracking-[-0.02em] text-foreground">
+        +{n(units)} for ${n(usd)}
+      </p>
+      {charge !== null && <p className="text-[12px] text-muted-foreground">billed as {formatMoney(charge, currency)}</p>}
+      {!repeating && (
+        <label className="mt-3 flex items-start gap-2 text-[13px] text-foreground">
+          <input
+            type="checkbox"
+            checked={repeat}
+            onChange={(e) => setRepeat(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Repeat every month
+            <span className="block text-[12px] text-muted-foreground">
+              We charge the same card on the 1st at the current price. Stop it any time.
+            </span>
+          </span>
+        </label>
+      )}
+      <div className="mt-3">
+        <Button size="sm" variant="outline" disabled={disabled} onClick={() => onBuy(a.kind, packs, repeat && !repeating)}>
+          {busy ? busyLabel : repeating ? "Buy more this month" : repeat ? "Buy and repeat monthly" : "Buy for this month"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function DisabledButton({ children }: { children: React.ReactNode }) {
   return (
     <span className={cn(buttonVariants({ variant: "outline", size: "sm" }), "pointer-events-none opacity-60")} aria-disabled="true">
@@ -222,7 +295,7 @@ function trialLine(plan: PlanInfo): string | null {
     const ends = plan.trial.ends_at ? ` (ends ${formatDay(plan.trial.ends_at)})` : "";
     return `Free trial: ${d === 1 ? "1 day" : `${d} days`} left${ends}.`;
   }
-  if (plan.trial.expired) return "Your free trial has ended. You are on the Free plan.";
+  if (plan.trial.expired) return "Your free trial has ended. Subscribe to Essential to keep using Loomail.";
   return null;
 }
 
@@ -231,6 +304,8 @@ function BillingSection({ plan, canManage }: { plan: PlanInfo; canManage: boolea
   const sub = plan.billing.subscription;
   const cancel = useCancelSubscription();
   const [confirming, setConfirming] = useState(false);
+  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   if (!sub) return null;
@@ -242,7 +317,7 @@ function BillingSection({ plan, canManage }: { plan: PlanInfo; canManage: boolea
   async function doCancel() {
     setError(null);
     try {
-      await cancel.mutateAsync();
+      await cancel.mutateAsync({ reason: reason || undefined, note: note.trim() || undefined });
       setConfirming(false);
     } catch (err) {
       setError(errorMessage(err));
@@ -253,7 +328,7 @@ function BillingSection({ plan, canManage }: { plan: PlanInfo; canManage: boolea
     <Section
       title="Subscription"
       configured={null}
-      description="Your payment plan with Paystack."
+      description="Your payment plan."
       actions={
         <Badge variant={sub.status === "active" ? "success" : sub.status === "cancelling" ? "warning" : "muted"}>
           {sub.status === "active" ? "Active" : sub.status === "cancelling" ? "Cancelling" : "Ended"}
@@ -265,7 +340,7 @@ function BillingSection({ plan, canManage }: { plan: PlanInfo; canManage: boolea
       </p>
       <p className="mt-1 text-[14px] text-muted-foreground">
         {sub.status === "active" && <>Renews automatically on {end}.</>}
-        {sub.status === "cancelling" && <>Cancelled. You keep the {planName} plan until {end}, then move to Free. To carry on, choose a plan below.</>}
+        {sub.status === "cancelling" && <>Cancelled. You keep the {planName} plan until {end}, then your workspace is paused. To carry on, subscribe again below.</>}
         {sub.status === "ended" && <>This subscription ended on {end}. Choose a plan below to subscribe again.</>}
       </p>
 
@@ -281,6 +356,32 @@ function BillingSection({ plan, canManage }: { plan: PlanInfo; canManage: boolea
                 Cancel your subscription? Nothing more will be charged. You keep the {planName} plan until {end}, and
                 your data stays safe.
               </p>
+              <label className="mt-3 block text-[13px] text-foreground" htmlFor="cancel-reason">
+                What made you decide to cancel? (optional)
+              </label>
+              <select
+                id="cancel-reason"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                className="mt-1 h-9 w-full max-w-sm rounded-md border border-border bg-background px-2 text-[14px]"
+              >
+                <option value="">Choose one</option>
+                {CANCEL_REASONS.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+              {reason === "other" || reason === "missing_feature" ? (
+                <textarea
+                  value={note}
+                  maxLength={500}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Tell us what would have made it work for you"
+                  className="mt-2 block w-full max-w-sm rounded-md border border-border bg-background px-2 py-1.5 text-[14px]"
+                  rows={2}
+                />
+              ) : null}
               <div className="mt-3 flex gap-2">
                 <Button size="sm" variant="destructive" disabled={cancel.isPending} onClick={() => void doCancel()}>
                   {cancel.isPending ? "Cancelling..." : "Yes, cancel"}
@@ -363,6 +464,18 @@ export default function PlanSettings() {
     setParams(next, { replace: true });
   }
 
+  async function buyAddon(kind: string, packs: number, repeat: boolean) {
+    setCheckoutError(null);
+    setChoosing(`addon:${kind}`);
+    try {
+      await flow.start({ addon: { kind, packs, repeat } });
+    } catch (err) {
+      setCheckoutError(errorMessage(err));
+    } finally {
+      setChoosing(null);
+    }
+  }
+
   async function choose(planId: string) {
     setCheckoutError(null);
     setChoosing(planId);
@@ -405,12 +518,16 @@ export default function PlanSettings() {
         <div className="space-y-5">
           <Meter kind="contacts" meter={meters.contacts} />
           <Meter kind="emails" meter={meters.emails} detail={`Resets on ${formatDay(meters.emails.resets_at)}.`} />
-          <Meter kind="seats" meter={meters.seats} detail={seatDetail} />
+          {meters.seats.limit !== null ? (
+            <Meter kind="seats" meter={meters.seats} detail={seatDetail} />
+          ) : (
+            <p className="text-[13px] text-muted-foreground">Team members: unlimited ({seatDetail}).</p>
+          )}
           {meters.ai.source === "byok" ? (
             <div>
-              <h3 className="text-[14px] font-medium text-foreground">Mailforge AI tokens</h3>
+              <h3 className="text-[14px] font-medium text-foreground">Loomail AI tokens</h3>
               <p className="mt-1 text-[13px] text-muted-foreground">
-                This workspace uses its own AI key, so no Mailforge AI allowance is used. Your provider bills you directly.
+                This workspace uses its own AI key, so no Loomail AI allowance is used. Your provider bills you directly.
               </p>
             </div>
           ) : (
@@ -422,7 +539,7 @@ export default function PlanSettings() {
           )}
         </div>
         <p className="mt-5 text-[13px] text-muted-foreground">
-          Going over a limit never deletes anything. New contacts and invitations pause, sending and AI drafting wait
+          Going over a limit never deletes anything. New customer profiles and invitations pause, sending and AI drafting wait
           for your allowance to reset, and everything you already have keeps working.
         </p>
       </Section>
@@ -434,7 +551,7 @@ export default function PlanSettings() {
         configured={null}
         description={planDescription}
         actions={
-          plan.billing.enabled && isOwner ? (
+          false ? (
             <div className="inline-flex rounded-md border border-border p-0.5" role="group" aria-label="Billing period">
               {(["monthly", "yearly"] as const).map((i) => (
                 <button
@@ -454,7 +571,7 @@ export default function PlanSettings() {
           ) : undefined
         }
       >
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 md:max-w-md">
           {plan.plans.map((p) => (
             <PlanCard
               key={p.id}
@@ -475,11 +592,121 @@ export default function PlanSettings() {
         {plan.billing.enabled && (
           <p className="mt-4 text-[12px] text-muted-foreground">
             {plan.billing.currency.toUpperCase() === "USD"
-              ? "Payments are by card, in US dollars, and are processed by Paystack. We never see or store your card."
-              : `Prices are listed in US dollars and charged in ${plan.billing.currency} at a fixed rate of ${plan.billing.usd_rate} per $1. Payments are by card and processed by Paystack. We never see or store your card.`}
+              ? "Payments are by card, in US dollars, and are processed securely. We never see or store your card."
+              : `Prices are listed in US dollars and charged in your local currency at a fixed rate of ${plan.billing.usd_rate} per $1. Payments are by card and processed securely. We never see or store your card.`}
           </p>
         )}
       </Section>
+
+      {plan.billing.enabled && isOwner && plan.addons.length > 0 && (
+        <Section
+          title="Extra usage"
+          configured={null}
+          description="Need more than your plan includes this month? Buy extra profiles, emails or AI credits. They raise this month's limits and are never charged without you choosing them."
+        >
+          {(plan.topups.profiles > 0 || plan.topups.emails > 0 || plan.topups.ai > 0) && (
+            <Notice variant="info" className="mb-4">
+              Active this month:{" "}
+              {[
+                plan.topups.profiles > 0 && `+${n(plan.topups.profiles)} customer profiles`,
+                plan.topups.emails > 0 && `+${n(plan.topups.emails)} emails`,
+                plan.topups.ai > 0 && `+${n(plan.topups.ai)} AI credits`,
+              ]
+                .filter(Boolean)
+                .join(", ")}
+              . These stop counting on {formatDay(plan.topups.expires_at)}; buy again then if you still need them.
+            </Notice>
+          )}
+          {plan.auto_renewals.length > 0 && <AutoRenewals items={plan.auto_renewals} />}
+          <div className="grid gap-4 md:grid-cols-3">
+            {plan.addons.map((a) => (
+              <AddonCard
+                key={a.kind}
+                a={a}
+                currency={plan.billing.currency}
+                disabled={flow.busy}
+                busy={flow.busy && choosing === `addon:${a.kind}`}
+                busyLabel={flow.phase === "popup" ? "Waiting for payment..." : "Opening checkout..."}
+                onBuy={(kind, packs, repeat) => void buyAddon(kind, packs, repeat)}
+                repeating={plan.auto_renewals.some((r) => r.kind === a.kind && r.enabled)}
+              />
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {plan.billing.enabled && isOwner && <BillingHistory />}
     </div>
+  );
+}
+
+/** Top-ups that renew each month, each with a Stop button. */
+function AutoRenewals({ items }: { items: PlanInfo["auto_renewals"] }) {
+  const stop = useStopAutoRenewal();
+  return (
+    <div className="mb-4 rounded-md border border-border bg-sunken p-3" data-testid="auto-renewals">
+      <p className="text-[13px] font-medium text-foreground">Repeating every month</p>
+      <ul className="mt-2 space-y-2">
+        {items.map((r) => (
+          <li key={r.kind} className="flex flex-wrap items-center justify-between gap-2 text-[14px]">
+            <span className="text-foreground">
+              +{n(r.units)} {r.label.toLowerCase().replace("extra ", "").replace("additional ", "")} for ${n(r.price_usd)} on the 1st
+              {r.card ? <span className="text-muted-foreground"> · {r.card}</span> : null}
+              {!r.enabled && (
+                <span className="ml-2 text-danger">Stopped: {(r.last_error ?? "the card could not be charged").replace(/\.$/, "")}. Buy again to restart it.</span>
+              )}
+            </span>
+            <Button size="sm" variant="ghost" disabled={stop.isPending} onClick={() => stop.mutate(r.kind)}>
+              {r.enabled ? "Stop repeating" : "Remove"}
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Every successful payment, with a printable receipt for each. */
+function BillingHistory() {
+  const { data, isLoading, error } = useBillingPayments(true);
+  return (
+    <Section title="Billing history" configured={null} description="Your payments, with a receipt for each.">
+      {isLoading ? (
+        <Skeleton className="h-16 w-full" />
+      ) : error ? (
+        <Notice>Could not load your payments. Please refresh the page.</Notice>
+      ) : !data || data.length === 0 ? (
+        <p className="text-[14px] text-muted-foreground">No payments yet.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[14px]">
+            <thead>
+              <tr className="border-b border-border text-left text-[12px] uppercase tracking-wide text-muted-foreground">
+                <th className="py-2 pr-4 font-medium">Date</th>
+                <th className="py-2 pr-4 font-medium">What</th>
+                <th className="py-2 pr-4 text-right font-medium">Amount</th>
+                <th className="py-2 text-right font-medium">Receipt</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((p) => (
+                <tr key={p.reference} className="border-b border-border last:border-0">
+                  <td className="whitespace-nowrap py-2 pr-4 text-muted-foreground">{formatDay(p.paid_at)}</td>
+                  <td className="py-2 pr-4 text-foreground">{p.description}</td>
+                  <td className="whitespace-nowrap py-2 pr-4 text-right tabular-nums">
+                    {new Intl.NumberFormat("en-US", { style: "currency", currency: p.currency, currencyDisplay: "narrowSymbol" }).format(p.amount)}
+                  </td>
+                  <td className="py-2 text-right">
+                    <a className="text-accent-text underline-offset-4 hover:underline" href={p.receipt_url} target="_blank" rel="noreferrer">
+                      View
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
   );
 }

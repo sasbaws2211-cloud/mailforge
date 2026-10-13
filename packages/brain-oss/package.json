@@ -1,5 +1,5 @@
 {
-  "name": "@mailforge/brain-oss",
+  "name": "@loomail/brain-oss",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mailforge/core": "workspace:*"
+    "@loomail/core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

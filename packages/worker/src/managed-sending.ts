@@ -12,8 +12,8 @@
  */
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { ManagedResendAdapter, type TransportAdapter } from "@mailforge/adapters";
-import { chooseManagedSender, isDomainStatus, isValidReplyAddress, managedSendingConfigFromEnv, type ManagedSendingConfig } from "@mailforge/core";
+import { ManagedResendAdapter, type TransportAdapter } from "@loomail/adapters";
+import { chooseManagedSender, isDomainStatus, isValidReplyAddress, managedSendingConfigFromEnv, type ManagedSendingConfig } from "@loomail/core";
 
 type Db = NodePgDatabase<Record<string, never>>;
 type Env = Record<string, string | undefined>;

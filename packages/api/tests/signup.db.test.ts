@@ -9,7 +9,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { TRIAL_DAYS } from "@mailforge/core";
+import { TRIAL_DAYS } from "@loomail/core";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
 
@@ -96,7 +96,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
-  for (const k of ["MAILFORGE_MANAGED_RESEND_API_KEY", "MAILFORGE_MANAGED_SHARED_FROM", "MAILFORGE_MANAGED_SENDING", "MAILFORGE_SIGNUP_AUTO_SENDING"]) delete process.env[k];
+  for (const k of ["LOOMAIL_MANAGED_RESEND_API_KEY", "LOOMAIL_MANAGED_SHARED_FROM", "LOOMAIL_MANAGED_SENDING", "LOOMAIL_SIGNUP_AUTO_SENDING"]) delete process.env[k];
   vi.restoreAllMocks();
   while (apps.length) await apps.pop()!.close();
   if (dbAvailable) await cleanup();
@@ -129,7 +129,7 @@ describe("POST /signup: creating a workspace", () => {
     expect(t!.name).toBe("Signup Test Co");
     expect(t!.slug).toBe("signup-test-co");
     expect(t!.plan).toBe("trial");
-    expect(t!.settings.signup.plan_interest).toBe("growth");
+    expect(t!.settings.signup.plan_interest).toBe("essential");
     const msLeft = new Date(t!.trial_ends_at).getTime() - Date.now();
     expect(msLeft).toBeGreaterThan((TRIAL_DAYS * 86_400 - 120) * 1000);
     expect(msLeft).toBeLessThanOrEqual(TRIAL_DAYS * 86_400_000);
@@ -154,7 +154,7 @@ describe("POST /signup: creating a workspace", () => {
     expect(c!.n).toBe("1");
   });
 
-  it("the free plan starts on free with no trial", async () => {
+  it("there is no free plan: asking for one still gets the 7-day Essential trial", async () => {
     if (!dbAvailable) return;
     const app = await newApp();
     const email = `free1${DOMAIN}`;
@@ -162,9 +162,9 @@ describe("POST /signup: creating a workspace", () => {
     const [t] = await rows<{ plan: string; trial_ends_at: Date | null; settings: { signup: { plan_interest: string } } }>(
       sql`SELECT t.plan, t.trial_ends_at, t.settings FROM tenants t JOIN users u ON u.tenant_id = t.id WHERE u.email = ${email}`,
     );
-    expect(t!.plan).toBe("free");
-    expect(t!.trial_ends_at).toBeNull();
-    expect(t!.settings.signup.plan_interest).toBe("free");
+    expect(t!.plan).toBe("trial");
+    expect(t!.trial_ends_at).not.toBeNull();
+    expect(t!.settings.signup.plan_interest).toBe("essential");
   });
 
   it("two workspaces with the same name get different slugs", async () => {
@@ -290,7 +290,7 @@ describe("POST /signup: rate limits", () => {
     expect((await post(app, goodFields(`rl-ip7${DOMAIN}`), "203.0.113.10")).statusCode).toBe(200);
   });
 
-  describe("behind a reverse proxy (MAILFORGE_TRUST_PROXY)", () => {
+  describe("behind a reverse proxy (LOOMAIL_TRUST_PROXY)", () => {
     // Every request arrives from the proxy (10.0.0.1); the real visitor is in X-Forwarded-For.
     const viaProxy = (app: FastifyInstance, email: string, visitor: string) =>
       app.inject({
@@ -303,7 +303,7 @@ describe("POST /signup: rate limits", () => {
 
     it("by default the header is ignored, so one client cannot dodge the limit by changing it", async () => {
       if (!dbAvailable) return;
-      delete process.env.MAILFORGE_TRUST_PROXY;
+      delete process.env.LOOMAIL_TRUST_PROXY;
       const app = await newApp();
       for (let i = 0; i < 6; i++) expect((await viaProxy(app, `tp-off${i}${DOMAIN}`, `198.51.100.${i + 1}`)).statusCode, `attempt ${i}`).toBe(200);
       expect((await viaProxy(app, `tp-off6${DOMAIN}`, "198.51.100.77")).statusCode).toBe(429);
@@ -311,7 +311,7 @@ describe("POST /signup: rate limits", () => {
 
     it("with trust on, each visitor is counted by their own address, not the proxy's", async () => {
       if (!dbAvailable) return;
-      process.env.MAILFORGE_TRUST_PROXY = "true";
+      process.env.LOOMAIL_TRUST_PROXY = "true";
       try {
         const app = await newApp();
         // Eight different visitors through the same proxy: none is limited.
@@ -320,13 +320,13 @@ describe("POST /signup: rate limits", () => {
         for (let i = 0; i < 6; i++) expect((await viaProxy(app, `tp-same${i}${DOMAIN}`, "203.0.113.50")).statusCode, `same ${i}`).toBe(200);
         expect((await viaProxy(app, `tp-same6${DOMAIN}`, "203.0.113.50")).statusCode).toBe(429);
       } finally {
-        delete process.env.MAILFORGE_TRUST_PROXY;
+        delete process.env.LOOMAIL_TRUST_PROXY;
       }
     });
 
     it("trusting one proxy takes the address that proxy added, ignoring what the client sent before it", async () => {
       if (!dbAvailable) return;
-      process.env.MAILFORGE_TRUST_PROXY = "1";
+      process.env.LOOMAIL_TRUST_PROXY = "1";
       try {
         const app = await newApp();
         // The client claims a different address each time, but the proxy always appends the real one.
@@ -338,7 +338,7 @@ describe("POST /signup: rate limits", () => {
         // ...and a different real visitor through the same proxy is not.
         expect((await viaProxy(app, `tp-one7${DOMAIN}`, "192.0.2.1, 203.0.113.61")).statusCode).toBe(200);
       } finally {
-        delete process.env.MAILFORGE_TRUST_PROXY;
+        delete process.env.LOOMAIL_TRUST_PROXY;
       }
     });
   });
@@ -410,10 +410,10 @@ describe("signup to signed-in workspace, end to end", () => {
   });
 });
 
-describe("POST /signup: Mailforge Sending is switched on for new workspaces", () => {
+describe("POST /signup: Loomail Sending is switched on for new workspaces", () => {
   const offer = (shared: string | null = "hello@shared.example") => {
-    process.env.MAILFORGE_MANAGED_RESEND_API_KEY = "re_operator";
-    if (shared) process.env.MAILFORGE_MANAGED_SHARED_FROM = shared;
+    process.env.LOOMAIL_MANAGED_RESEND_API_KEY = "re_operator";
+    if (shared) process.env.LOOMAIL_MANAGED_SHARED_FROM = shared;
   };
   async function signupManaged(tag: string) {
     const app = await newApp();
@@ -440,21 +440,21 @@ describe("POST /signup: Mailforge Sending is switched on for new workspaces", ()
 
   it("does not, when managed sending is not offered at all", async () => {
     if (!dbAvailable) return;
-    process.env.MAILFORGE_MANAGED_SHARED_FROM = "hello@shared.example";
+    process.env.LOOMAIL_MANAGED_SHARED_FROM = "hello@shared.example";
     expect(await signupManaged("auto3")).toHaveLength(0);
   });
 
   it("does not, when the operator switched managed sending off", async () => {
     if (!dbAvailable) return;
     offer();
-    process.env.MAILFORGE_MANAGED_SENDING = "false";
+    process.env.LOOMAIL_MANAGED_SENDING = "false";
     expect(await signupManaged("auto4")).toHaveLength(0);
   });
 
   it("does not, when the operator opted out of auto-enable", async () => {
     if (!dbAvailable) return;
     offer();
-    process.env.MAILFORGE_SIGNUP_AUTO_SENDING = "false";
+    process.env.LOOMAIL_SIGNUP_AUTO_SENDING = "false";
     expect(await signupManaged("auto5")).toHaveLength(0);
   });
 
@@ -545,5 +545,50 @@ describe("POST /signup: goal", () => {
     await post(app, goodFields(email, { goal: "welcome" }));
     await post(app, goodFields(email, { goal: "convert_trials" }));
     expect(await goalOf(email)).toBe("welcome");
+  });
+});
+
+
+describe("POST /signup/resend: send the link again", () => {
+  const resend = (app: FastifyInstance, email: string, remoteAddress = "10.9.9.9") =>
+    app.inject({
+      method: "POST",
+      url: "/signup/resend",
+      remoteAddress,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ email }).toString(),
+    });
+
+  it("the check-your-email page offers it, for the address that was used", async () => {
+    if (!dbAvailable) return;
+    const app = await newApp();
+    const email = `rs-page${DOMAIN}`;
+    const res = await post(app, goodFields(email));
+    expect(res.body).toContain('action="/signup/resend"');
+    expect(res.body).toContain(`name="email" value="${email}"`);
+    expect(res.body).toContain("Send the link again");
+  });
+
+  it("sends another link, says so, and then asks for patience on an immediate repeat", async () => {
+    if (!dbAvailable) return;
+    const app = await newApp();
+    const email = `rs-ok${DOMAIN}`;
+    await post(app, goodFields(email));
+    const first = await resend(app, email, "10.9.9.1");
+    expect(first.statusCode).toBe(200);
+    expect(first.body).toContain("We sent another link");
+    const second = await resend(app, email, "10.9.9.1");
+    expect(second.statusCode).toBe(429);
+    expect(second.body).toMatch(/Please wait \d+ second/);
+    expect(Number(second.headers["retry-after"])).toBeGreaterThan(0);
+  });
+
+  it("refuses something that is not an email, and answers the same for an unknown address", async () => {
+    if (!dbAvailable) return;
+    const app = await newApp();
+    expect((await resend(app, "not-an-email", "10.9.9.2")).statusCode).toBe(400);
+    const unknown = await resend(app, `rs-nobody${DOMAIN}`, "10.9.9.3");
+    expect(unknown.statusCode).toBe(200);
+    expect(unknown.body).toContain("We sent another link");
   });
 });

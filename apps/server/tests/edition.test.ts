@@ -6,8 +6,8 @@ describe("edition loader", () => {
   });
 
   it("community mode returns OSS brain without loading brain-cloud", async () => {
-    // Ensure MAILFORGE_EDITION is not set or is "community"
-    vi.stubEnv("MAILFORGE_EDITION", "community");
+    // Ensure LOOMAIL_EDITION is not set or is "community"
+    vi.stubEnv("LOOMAIL_EDITION", "community");
 
     const { loadBrain } = await import("../src/edition.js");
 
@@ -23,7 +23,7 @@ describe("edition loader", () => {
   });
 
   it("community mode does not attempt to import private packages", async () => {
-    vi.stubEnv("MAILFORGE_EDITION", "community");
+    vi.stubEnv("LOOMAIL_EDITION", "community");
 
     const { loadBrain, loadBilling } = await import("../src/edition.js");
 
@@ -36,7 +36,7 @@ describe("edition loader", () => {
   });
 
   it("EDITION defaults to community when env var is unset", async () => {
-    vi.stubEnv("MAILFORGE_EDITION", "");
+    vi.stubEnv("LOOMAIL_EDITION", "");
 
     // Re-import to pick up the new env
     const mod = await import("../src/edition.js");

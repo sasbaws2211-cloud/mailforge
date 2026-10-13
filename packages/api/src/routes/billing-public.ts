@@ -22,7 +22,7 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { eq } from "drizzle-orm";
-import { billingCheckouts } from "@mailforge/db/schema";
+import { billingCheckouts } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import type { BillingRuntime } from "../billing/config.js";
 import { PaystackError, verifyPaystackSignature } from "../billing/paystack.js";

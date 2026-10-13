@@ -16,7 +16,7 @@ import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
-import { encrypt, parseEncryptionKey, resolveTransportAdapter } from "@mailforge/adapters";
+import { encrypt, parseEncryptionKey, resolveTransportAdapter } from "@loomail/adapters";
 
 const TEST_DB_URL = process.env.DATABASE_URL;
 if (!TEST_DB_URL) throw new Error("[smtp-guard.test] DATABASE_URL is not set.");
@@ -31,7 +31,7 @@ let smtp: Server;
 let smtpPort = 0;
 let connections = 0;
 
-const GUARD_ENV = ["MAILFORGE_RESTRICT_SMTP_HOSTS", "MAILFORGE_SMTP_ALLOWED_HOSTS", "MAILFORGE_SMTP_ALLOWED_PORTS", "MAILFORGE_PUBLIC_SITE", "MAILFORGE_ENFORCE_PLANS"];
+const GUARD_ENV = ["LOOMAIL_RESTRICT_SMTP_HOSTS", "LOOMAIL_SMTP_ALLOWED_HOSTS", "LOOMAIL_SMTP_ALLOWED_PORTS", "LOOMAIL_PUBLIC_SITE", "LOOMAIL_ENFORCE_PLANS"];
 
 beforeAll(async () => {
   savedKey = process.env.ENCRYPTION_KEY;
@@ -109,7 +109,7 @@ const stored = (t: { id: string }) => q(sql`SELECT 1 FROM transport_configs WHER
 
 describe("saving SMTP settings on a hosted install", () => {
   const hosted = () => {
-    process.env.MAILFORGE_PUBLIC_SITE = "true";
+    process.env.LOOMAIL_PUBLIC_SITE = "true";
   };
 
   it("refuses hosts that point at the inside, before connecting to anything, and stores nothing", async () => {
@@ -143,7 +143,7 @@ describe("saving SMTP settings on a hosted install", () => {
 
   it("the operator's exempt-host list lets a trusted relay through (and then it is verified like any other)", async () => {
     hosted();
-    process.env.MAILFORGE_SMTP_ALLOWED_HOSTS = "127.0.0.1";
+    process.env.LOOMAIL_SMTP_ALLOWED_HOSTS = "127.0.0.1";
     const t = await newTenant();
     const r = await put(t, { host: "127.0.0.1", port: smtpPort });
     expect(r.statusCode).toBe(200);
@@ -153,15 +153,15 @@ describe("saving SMTP settings on a hosted install", () => {
     expect((await put(t, { host: "127.0.0.2", port: smtpPort })).statusCode).toBe(400);
   });
 
-  it("MAILFORGE_RESTRICT_SMTP_HOSTS=false turns it off even on a hosted install", async () => {
+  it("LOOMAIL_RESTRICT_SMTP_HOSTS=false turns it off even on a hosted install", async () => {
     hosted();
-    process.env.MAILFORGE_RESTRICT_SMTP_HOSTS = "false";
+    process.env.LOOMAIL_RESTRICT_SMTP_HOSTS = "false";
     const t = await newTenant();
     expect((await put(t, { host: "127.0.0.1", port: smtpPort })).statusCode).toBe(200);
   });
 
   it("is also on when only plan enforcement is on", async () => {
-    process.env.MAILFORGE_ENFORCE_PLANS = "true";
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const t = await newTenant();
     expect((await put(t, { host: "127.0.0.1", port: smtpPort })).statusCode).toBe(400);
   });
@@ -182,7 +182,7 @@ describe("a config that was saved before the guard existed", () => {
   const params = { to: "a@example.com", from: "b@example.com", subject: "s", bodyHtml: "<p>x</p>", bodyText: "x", messageId: "m1" };
 
   it("is refused at send time on a hosted install, without connecting, so old data cannot be used to reach the inside either", async () => {
-    process.env.MAILFORGE_PUBLIC_SITE = "true";
+    process.env.LOOMAIL_PUBLIC_SITE = "true";
     const r = resolveTransportAdapter("smtp", legacy("127.0.0.1", smtpPort));
     expect(r.ok).toBe(true);
     if (!r.ok) return;

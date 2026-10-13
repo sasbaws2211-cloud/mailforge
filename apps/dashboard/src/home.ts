@@ -46,7 +46,7 @@ export function useLibrary() {
 export function useInstallLibrary() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => installLibraryFlow(),
+    mutationFn: (id?: string) => installLibraryFlow(id),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: FLOWS_QUERY_KEY });
       void qc.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY });

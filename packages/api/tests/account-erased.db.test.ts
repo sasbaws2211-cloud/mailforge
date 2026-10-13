@@ -13,8 +13,8 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@mailforge/adapters";
-import { tenantTablesInDeleteOrder } from "@mailforge/db/purge";
+import type { TransportAdapter, TransportSendParams, TransportSendResult } from "@loomail/adapters";
+import { tenantTablesInDeleteOrder } from "@loomail/db/purge";
 import { buildApp } from "../src/index.js";
 import { SESSION_COOKIE_NAME } from "../src/routes/auth.js";
 import { buildWorkspaceErasedEmail } from "../src/account/deletion-email.js";
@@ -95,10 +95,10 @@ beforeAll(async () => {
     return;
   }
   await cleanup();
-  process.env.MAILFORGE_PLATFORM_ADMINS = ADMIN_EMAIL;
+  process.env.LOOMAIL_PLATFORM_ADMINS = ADMIN_EMAIL;
   const opts = { logger: false as const, db, baseUrl: "http://localhost:3000", dashboardUrl: "http://localhost:3000" };
   const noticeTransports = [
-    { adapter: outbox, fromEmail: "no-reply@platform.example", fromName: "Mailforge" },
+    { adapter: outbox, fromEmail: "no-reply@platform.example", fromName: "Loomail" },
     { adapter: backup, fromEmail: "backup@platform.example", fromName: null },
   ];
   appMail = await buildApp({ ...opts, noticeTransports });
@@ -113,12 +113,12 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  delete process.env.MAILFORGE_SUPPORT_EMAIL;
+  delete process.env.LOOMAIL_SUPPORT_EMAIL;
   if (dbAvailable) await cleanup();
 });
 
 afterAll(async () => {
-  delete process.env.MAILFORGE_PLATFORM_ADMINS;
+  delete process.env.LOOMAIL_PLATFORM_ADMINS;
   for (const a of [appMail, appNoMail]) if (a) await a.close();
   await pool?.end();
 });
@@ -196,7 +196,7 @@ describe("emailing the owners after an immediate erase", () => {
 
   it("includes the support address when the operator has set one", async () => {
     if (!dbAvailable) return;
-    process.env.MAILFORGE_SUPPORT_EMAIL = "help@svc.example";
+    process.env.LOOMAIL_SUPPORT_EMAIL = "help@svc.example";
     const admin = await newTenant({ email: ADMIN_EMAIL, plan: "growth" });
     const t = await newTenant();
     await erase(appMail, admin, t);

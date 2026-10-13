@@ -11,7 +11,7 @@
 import { Link } from "react-router-dom";
 import { Check } from "lucide-react";
 import { Button } from "./ui/button.js";
-import { SampleEventButton } from "./sample-event.js";
+import { DemoDataButton, SampleEventButton, TestEmailButton } from "./sample-event.js";
 import { cn } from "../lib/utils.js";
 import {
   hashTarget,
@@ -95,8 +95,17 @@ export function OnboardingPanel({
         </div>
       </div>
 
-      <ol className="mt-5">
-        {rows.map(({ step, state }, i) => (
+      {rows.some((r) => r.state === "done") && (
+        <p className="mt-4 flex items-start gap-2 text-[13px] text-muted-foreground" data-testid="steps-done">
+          <Check size={14} strokeWidth={2} className="mt-0.5 shrink-0 text-success" aria-hidden="true" />
+          <span>
+            Done: {rows.filter((r) => r.state === "done").map((r) => r.step.title).join(" \u00b7 ")}
+          </span>
+        </p>
+      )}
+
+      <ol className="mt-3">
+        {rows.map(({ step, state }, i) => (state === "done" ? null : { step, state, i })).filter((r): r is NonNullable<typeof r> => r !== null).map(({ step, state, i }) => (
           <li
             key={step.id}
             data-step={step.id}
@@ -109,19 +118,16 @@ export function OnboardingPanel({
             <Marker state={state} index={i} />
             <div className="min-w-0 flex-1 basis-56">
               <p
-                className={cn(
-                  "text-[14px] font-medium leading-[20px]",
-                  state === "done" ? "text-muted-foreground" : "text-foreground",
-                )}
+                className="text-[14px] font-medium leading-[20px] text-foreground"
               >
                 {step.title}
-                {state !== "done" && step.minutes > 0 && (
+                {step.minutes > 0 && (
                   <span className="ml-2 text-[12px] font-normal text-muted-foreground">
                     ~{step.minutes} min
                   </span>
                 )}
               </p>
-              {state !== "done" && (
+              {state === "next" && (
                 <p className="mt-0.5 text-[13px] leading-[20px] text-muted-foreground">
                   {step.description}
                 </p>
@@ -132,6 +138,26 @@ export function OnboardingPanel({
                     Want to see it work first? Send yourself a sample. No API key needed.
                   </p>
                   <SampleEventButton />
+                  <p className="mb-2 mt-3 text-[13px] text-muted-foreground">
+                    Or look around first with made-up customers. They never count against your plan and nothing is ever sent to them.
+                  </p>
+                  <DemoDataButton present={info.has_demo_data === true} />
+                </div>
+              )}
+              {state === "next" && step.id === "flow" && (
+                <div className="mt-2">
+                  <p className="mb-2 text-[13px] text-muted-foreground">
+                    Want to look around first? Explore with made-up customers. They never count against your plan and nothing is ever sent to them.
+                  </p>
+                  <DemoDataButton present={info.has_demo_data === true} />
+                </div>
+              )}
+              {state === "next" && step.id === "sender" && (
+                <div className="mt-2">
+                  <p className="mb-2 text-[13px] text-muted-foreground">
+                    Not ready to connect a domain? See how an email arrives first. We send one to you.
+                  </p>
+                  <TestEmailButton />
                 </div>
               )}
             </div>

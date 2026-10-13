@@ -30,7 +30,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
-import { apiKeys, contacts, events } from "@mailforge/db/schema";
+import { apiKeys, contacts, events } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 
 // ---------------------------------------------------------------------------

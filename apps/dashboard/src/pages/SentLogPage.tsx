@@ -225,7 +225,14 @@ export default function SentLogPage() {
         <EmptyState
           icon={Send}
           title="No messages sent yet"
-          description="Every message that leaves the pipeline lands here: who received it, when, and what happened after. Messages appear once they clear the approval queue."
+          description="Every email Loomail sends lands here: who received it, when, and what happened next. To see your first one, send yourself a sample event with a Welcome flow switched on."
+          action={
+            <Link to="/integrate">
+              <Button size="sm" variant="outline">
+                Send a sample event
+              </Button>
+            </Link>
+          }
         />
       )}
       {list.isSuccess && allMessages.length === 0 && hasFilters && (
