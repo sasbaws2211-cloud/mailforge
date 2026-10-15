@@ -1,7 +1,8 @@
 # Deploying Loomail on Render
 
-One web service (the Docker image in this repo) plus one Postgres database. The web service runs the
-API, the dashboard, the scheduler and the email queue together, so keep it to **one always-on instance**.
+One web service (built from `docker/Dockerfile.render`) plus one Postgres database. The web service
+runs the API, the dashboard, the scheduler and the email queue together, so keep it to **one
+always-on instance**.
 
 `render.yaml` in the repo root describes both. It has not been run against Render yet: if Render
 rejects a field when you create the Blueprint, fix it from its message (plan names change).
