@@ -10,9 +10,9 @@ services:
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     environment:
-      # DATABASE_URL overrides the localhost URL in .env: inside the compose
-      # network the Postgres service is reachable as "postgres", not localhost.
-      - DATABASE_URL=postgres://loomail:loomail@postgres:5432/loomail
+      # Use DATABASE_URL from the host environment or root .env when set;
+      # otherwise connect to the local Postgres service on the Compose network.
+      - DATABASE_URL=${DATABASE_URL:-postgres://loomail:loomail@postgres:5432/loomail}
       # Bind to all interfaces inside the container.
       - HOST=0.0.0.0
       # Opt-in auto-migrate: applies pending community schema migrations on boot.
