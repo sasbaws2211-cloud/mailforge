@@ -132,8 +132,6 @@ RUN pnpm install --frozen-lockfile --prod
 RUN chmod +x /app/apps/server/bin/loomail.mjs \
     && ln -s /app/apps/server/bin/loomail.mjs /usr/local/bin/loomail
 
-COPY .env.example .env.example
-
 EXPOSE 3000
 
 # Default: run all roles. Override with --role=api|worker|scheduler
