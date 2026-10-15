@@ -2,7 +2,7 @@ services:
   app:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: ./Dockerfile
       # Use the dev stage: all deps including tsx, entrypoint is tsx watch.
       # node_modules in the image are Linux binaries - the source volume mount
       # below overlays only the source files, leaving node_modules untouched.
