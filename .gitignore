@@ -46,3 +46,9 @@ vite.config.ts.timestamp-*
 # Misc
 tmp/
 .turbo/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/

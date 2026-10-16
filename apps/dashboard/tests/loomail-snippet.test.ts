@@ -10,7 +10,7 @@
  *   track(userId, event, props) also works
  * - host-page safety: throws inside navigator/fetch never propagate
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -26,9 +26,32 @@ interface SentCall {
   via: "beacon" | "fetch";
 }
 
-function makeBrowser(opts: { beacon?: boolean; beaconFails?: boolean; noFetch?: boolean }) {
+/** A localStorage stand-in. Pass the same one to two browsers to simulate a second page load. */
+function makeStorage(opts: { throws?: boolean } = {}) {
+  const data = new Map<string, string>();
+  return {
+    getItem(k: string) {
+      if (opts.throws) throw new Error("storage blocked");
+      return data.has(k) ? data.get(k)! : null;
+    },
+    setItem(k: string, v: string) {
+      if (opts.throws) throw new Error("storage blocked");
+      data.set(k, v);
+    },
+  };
+}
+
+function makeBrowser(opts: {
+  beacon?: boolean;
+  beaconFails?: boolean;
+  noFetch?: boolean;
+  storage?: ReturnType<typeof makeStorage>;
+}) {
   const sent: SentCall[] = [];
   const win: Record<string, unknown> = {};
+  if (opts.storage) win.localStorage = opts.storage;
+  win.location = { href: "https://shop.test/pricing?x=1", pathname: "/pricing", search: "?x=1" };
+  win.document = { title: "Pricing", referrer: "https://google.test/" };
   const nav: Record<string, unknown> = {};
   if (opts.beacon !== false) {
     nav.sendBeacon = (url: string, body: string) => {
@@ -151,6 +174,151 @@ describe("loomail.js snippet", () => {
       loomail("init", "mf_pub_x", { endpoint: "http://x.test" });
       loomail("track", "u1", "evt");
     }).not.toThrow();
+  });
+
+  describe("anonymous visitors and persistence", () => {
+    type Loomail = (...args: unknown[]) => void;
+    const boot = (storage: ReturnType<typeof makeStorage>, autoPage = false) => {
+      const b = makeBrowser({ storage });
+      b.run(b.win, b.nav, undefined as never);
+      const l = b.win.loomail as Loomail;
+      l("init", "mf_pub_x", { endpoint: "http://x.test", autoPage });
+      return { b, l };
+    };
+
+    it("holds anonymous events in the browser and never sends them", () => {
+      const { b, l } = boot(makeStorage());
+      l("track", "viewed_pricing");
+      l("page");
+      expect(b.sent.length).toBe(0);
+    });
+
+    it("sends held events under the real userId when identify runs, identify first", () => {
+      const { b, l } = boot(makeStorage());
+      l("track", "viewed_pricing", { plan: "pro" });
+      l("identify", "u1", { email: "a@b.c" });
+      expect(b.sent.map((s) => s.url)).toEqual([
+        "http://x.test/v1/identify",
+        "http://x.test/v1/track",
+      ]);
+      const replayed = b.sent[1]!.body;
+      expect(replayed).toMatchObject({ userId: "u1", event: "viewed_pricing", properties: { plan: "pro" } });
+      expect(typeof replayed.timestamp).toBe("string");
+      expect(new Date(replayed.timestamp as string).toISOString()).toBe(replayed.timestamp);
+      expect(String(replayed.messageId)).toMatch(/^anon:/);
+      // the same anonymous id travels with both calls so the server can stitch later
+      expect((b.sent[0]!.body.context as { anonymousId: string }).anonymousId).toBe(
+        (replayed.context as { anonymousId: string }).anonymousId,
+      );
+    });
+
+    it("sends held events once only", () => {
+      const { b, l } = boot(makeStorage());
+      l("track", "a");
+      l("identify", "u1");
+      l("identify", "u1");
+      expect(b.sent.filter((s) => s.url.endsWith("/v1/track")).length).toBe(1);
+    });
+
+    it("remembers the identified user across page loads", () => {
+      const storage = makeStorage();
+      const first = boot(storage);
+      first.l("identify", "u1");
+      const second = boot(storage); // a new page load, same browser
+      second.l("track", "clicked_upgrade");
+      expect(second.b.sent.length).toBe(1);
+      expect(second.b.sent[0]!.body).toMatchObject({ userId: "u1", event: "clicked_upgrade" });
+    });
+
+    it("keeps held events across page loads until identify", () => {
+      const storage = makeStorage();
+      boot(storage).l("track", "landed");
+      const second = boot(storage);
+      second.l("identify", "u1");
+      expect(second.b.sent.map((s) => s.body.event ?? "identify")).toEqual(["identify", "landed"]);
+    });
+
+    it("keeps one anonymous id per browser", () => {
+      const storage = makeStorage();
+      const first = boot(storage);
+      first.l("identify", "u1");
+      const second = boot(storage);
+      second.l("track", "x");
+      const aid = (first.b.sent[0]!.body.context as { anonymousId: string }).anonymousId;
+      expect((second.b.sent[0]!.body.context as { anonymousId: string }).anonymousId).toBe(aid);
+    });
+
+    it("reset forgets the user, starts a new anonymous id and drops held events", () => {
+      const storage = makeStorage();
+      const { b, l } = boot(storage);
+      l("identify", "u1");
+      const aidBefore = (b.sent[0]!.body.context as { anonymousId: string }).anonymousId;
+      l("reset");
+      l("track", "after_logout"); // held, because nobody is identified now
+      expect(b.sent.length).toBe(1);
+      l("identify", "u2");
+      const aidAfter = (b.sent[1]!.body.context as { anonymousId: string }).anonymousId;
+      expect(aidAfter).not.toBe(aidBefore);
+      expect(b.sent[2]!.body).toMatchObject({ userId: "u2", event: "after_logout" });
+    });
+
+    it("drops held events that are too old to keep their timestamp", () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+        const storage = makeStorage();
+        boot(storage).l("track", "ancient");
+        vi.setSystemTime(new Date("2026-01-04T00:00:00Z")); // 72h later
+        const second = boot(storage);
+        second.l("identify", "u1");
+        expect(second.b.sent.length).toBe(1); // identify only
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("caps what it holds", () => {
+      const { b, l } = boot(makeStorage());
+      for (let i = 0; i < 80; i++) l("track", "e" + i);
+      l("identify", "u1");
+      const tracks = b.sent.filter((s) => s.url.endsWith("/v1/track"));
+      expect(tracks.length).toBe(50);
+      expect(tracks[49]!.body.event).toBe("e79"); // newest kept
+    });
+
+    it("still works with storage blocked, for the life of the page", () => {
+      const { b, l } = boot(makeStorage({ throws: true }));
+      l("track", "a");
+      l("identify", "u1");
+      l("track", "b");
+      expect(b.sent.map((s) => s.body.event ?? "identify")).toEqual(["identify", "a", "b"]);
+    });
+
+    it("page() sends page details, and autoPage sends one on init", () => {
+      const auto = boot(makeStorage(), true);
+      auto.l("identify", "u1");
+      expect(auto.b.sent[1]!.body).toMatchObject({
+        event: "page_viewed",
+        properties: { path: "/pricing", title: "Pricing", referrer: "https://google.test/", search: "?x=1" },
+      });
+      const { b, l } = boot(makeStorage());
+      l("identify", "u1");
+      l("page", "Pricing page", { variant: "b" });
+      expect(b.sent[1]!.body).toMatchObject({
+        event: "page_viewed",
+        properties: { name: "Pricing page", variant: "b", path: "/pricing" },
+      });
+    });
+
+    it("explicit track(userId, event) still works and is remembered", () => {
+      const storage = makeStorage();
+      const { b, l } = boot(storage);
+      l("track", "u9", "evt");
+      expect(b.sent[0]!.body).toMatchObject({ userId: "u9", event: "evt" });
+      const second = boot(storage);
+      second.l("track", "next");
+      expect(second.b.sent[0]!.body).toMatchObject({ userId: "u9", event: "next" });
+    });
   });
 
   it("strips a trailing slash from the endpoint", () => {

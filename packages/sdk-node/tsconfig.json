@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declarationMap": false,
+    "outDir": "dist/esm",
+    "rootDir": "src",
+    "types": ["node"]
+  },
+  "include": ["src"]
+}

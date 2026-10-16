@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loomail"
+version = "0.1.0"
+description = "Server-side client for Loomail: send identify and track events with a secret key."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools]
+packages = ["loomail"]
+
+[tool.setuptools.package-data]
+loomail = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

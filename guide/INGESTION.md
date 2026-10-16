@@ -57,15 +57,37 @@ Served by your own install at `/loomail.js`. Paste before `</body>`:
 </script>
 <script async src="https://YOUR_LOOMAIL_HOST/loomail.js"></script>
 <script>
-  loomail("init", "mf_pub_YOUR_PUBLISHABLE_KEY", { endpoint: "https://YOUR_LOOMAIL_HOST" });
+  loomail("init", "mf_pub_YOUR_PUBLISHABLE_KEY", { endpoint: "https://YOUR_LOOMAIL_HOST", autoPage: true });
+  // when someone signs up or logs in:
   loomail("identify", "user_123", { email: "user@example.com" });
   loomail("track", "signed_up", { plan: "trial" });
+  // when they log out:
+  // loomail("reset");
 </script>
 ```
 
+Calls: `init`, `identify(userId, traits)`, `track(event, properties)`, `page([name], [properties])`
+(sends a `page_viewed` event; `autoPage: true` does one on load, call it yourself on
+route changes in a single-page app), and `reset()`.
+
+### Anonymous visitors and remembering people
+
+Loomail contacts need a `userId`, so an anonymous visitor is never sent to the server.
+Instead the snippet keeps their `track`/`page` calls in the browser's localStorage (up to
+50 events, up to 48 hours old) and, the moment you call `identify`, sends them under the
+real `userId` with their original timestamps. Visitors who never sign up cost nothing and
+create no contacts. The snippet also remembers the identified user across page loads, so
+`identify` does not have to run on every page; call `reset()` on logout so the next person
+on that browser starts clean.
+
+Limits: this is per browser. A visitor who browses on one device and signs up on another
+is not stitched, and events older than 48 hours are dropped rather than re-dated by the
+server's clock-skew clamp. If localStorage is blocked, the snippet works for the life of
+the page only. Every call also carries a stable `context.anonymousId`.
+
 Properties worth knowing:
 
-- **No build step, no dependencies.** The file is ~2 KB minified (~1 KB gzipped).
+- **No build step, no dependencies.** Roughly 3 KB gzipped as served.
 - **Load-order independent.** The two-line stub queues calls made before
   `loomail.js` arrives; the snippet replays them when it loads.
 - **No CORS preflight.** Payloads go out as `text/plain` with the key in the
@@ -87,7 +109,33 @@ with no CORS headers, so the request fails closed. Leave the list empty to
 allow any origin - still safe in the write-only sense; the allowlist is
 abuse friction, not the trust boundary.
 
-## 3. Server-side (Node, no SDK)
+## 3. Server-side
+
+### Official SDKs
+
+Zero dependencies; they use a secret key, retry what is safe to retry, and give every call a
+`messageId` so a retry never double-counts. See each README for the full API.
+
+```bash
+npm install @loomail/node      # packages/sdk-node
+pip install loomail            # packages/sdk-python (sync and asyncio)
+```
+
+```javascript
+import { Loomail } from "@loomail/node";
+const loomail = new Loomail({ secretKey: process.env.LOOMAIL_SECRET_KEY, host: "https://YOUR_LOOMAIL_HOST" });
+await loomail.identify("user_123", { email: "user@example.com", plan: "trial" });
+await loomail.track("user_123", "signed_up");
+```
+
+```python
+from loomail import Loomail
+loomail = Loomail(secret_key="mf_live_...", host="https://YOUR_LOOMAIL_HOST")
+loomail.identify("user_123", {"email": "user@example.com", "plan": "trial"})
+loomail.track("user_123", "signed_up")
+```
+
+### Plain HTTP (any language)
 
 Any HTTP client works. Node 18+:
 
@@ -110,9 +158,10 @@ async function track(userId, event, properties = {}) {
 await track("user_123", "invoice_paid", { amount: 4900 });
 ```
 
-The same shape works from Python (`requests`), Go (`net/http`), Ruby, or
-anything else that can POST JSON with a header. We deliberately do not ship
-first-party server SDKs yet: the endpoint is the SDK.
+The same shape works from Go (`net/http`), Ruby, or anything else that can POST
+JSON with a header. We ship SDKs for Node and Python only; for other languages
+the endpoint is the SDK. Send a `messageId` with each call so that retrying a
+failed request cannot double-count it.
 
 ## 4. Pointing an existing Segment SDK at Loomail
 

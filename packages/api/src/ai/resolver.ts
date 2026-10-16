@@ -1,14 +1,4 @@
-/**
- * Which AI serves a workspace, for the API.
- *
- * The rule is the same one the worker applies (see @loomail/db/llm and
- * packages/worker/src/provider-resolver.ts): the workspace's own key if it has
- * one, otherwise the operator's providers (Loomail AI), which are capped per
- * plan per calendar month when plan enforcement is on. The few queries are
- * duplicated between the API and the worker on purpose, like the plan checks.
- *
- * Mirror side: PUBLIC (packages/api is mirrored).
- */
+
 import {
   PLANS,
   AI_UNAVAILABLE_MESSAGE,

@@ -162,9 +162,12 @@ function buildSnippet(origin: string, rawKey: string | null): string {
     "</script>",
     `<script async src="${origin}/loomail.js"></script>`,
     "<script>",
-    `  loomail("init", "${k}", { endpoint: "${origin}" });`,
+    `  loomail("init", "${k}", { endpoint: "${origin}", autoPage: true });`,
+    "  // When someone signs up or logs in (events from before this are kept and sent with it):",
     '  loomail("identify", "user_123", { email: "user@example.com" });',
     '  loomail("track", "signed_up");',
+    "  // When they log out:",
+    '  // loomail("reset");',
     "</script>",
   ].join("\n");
 }
