@@ -95,6 +95,7 @@ Push to `main` and Render rebuilds and redeploys; migrations run on start. Roll 
 | Symptom | Likely cause |
 |---|---|
 | Build fails | read the build log; the project needs Node 22 (the Dockerfile sets it) |
+| Service restarts with `relation "tenants" does not exist` | The database migrations were not applied. Confirm `LOOMAIL_MIGRATE_ON_BOOT=true` is set on the web service and that startup logs show `[migrate] community schema up to date`; for an existing service, apply the Blueprint environment changes and redeploy. |
 | Service restarts at once | `DATABASE_URL` missing, or a pooled URL (`-pooler`); use the internal URL |
 | No sign-in email arrives | `PLATFORM_FROM_EMAIL`/`PLATFORM_RESEND_API_KEY` unset or the domain not verified in Resend |
 | "billing is OFF" in the log | `PAYSTACK_CURRENCY` is not USD and `PAYSTACK_USD_RATE` is missing |

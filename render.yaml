@@ -9,7 +9,7 @@ services:
   - type: web
     name: loomail
     runtime: docker
-    dockerfilePath: ./docker/Dockerfile.render
+    dockerfilePath: ./docker/Dockerfile
     dockerContext: .
     # Always-on instance, not Free: Loomail runs its scheduler and email queue inside the web
     # process, and a Free service goes to sleep, which stops flows from sending.
