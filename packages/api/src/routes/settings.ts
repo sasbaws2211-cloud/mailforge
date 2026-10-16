@@ -531,7 +531,7 @@ const settingsRoutes: FastifyPluginAsync = async (app) => {
           verification.kind === "http"
             ? `${effective.baseUrl} rejected the credentials (HTTP ${verification.status})`
             : verification.kind === "timeout"
-              ? `${effective.baseUrl} timed out`
+              ? `${effective.baseUrl} did not answer within 10 seconds`
               : `${effective.baseUrl} could not be reached`;
         const said = verification.detail !== "" ? `: ${verification.detail}` : "";
         return {

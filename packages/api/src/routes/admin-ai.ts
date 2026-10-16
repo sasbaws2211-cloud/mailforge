@@ -298,7 +298,7 @@ const adminAiRoutes: FastifyPluginAsync = async (app) => {
         verification.kind === "http"
           ? `${eff.baseUrl} rejected the credentials (HTTP ${verification.status})`
           : verification.kind === "timeout"
-            ? `${eff.baseUrl} timed out`
+            ? `${eff.baseUrl} did not answer within 10 seconds`
             : `${eff.baseUrl} could not be reached`;
       return reply.status(422).send({ error: `${what}${said}. Nothing was saved.`, code: "verification_failed" });
     }
