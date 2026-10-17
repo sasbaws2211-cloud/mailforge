@@ -25,7 +25,14 @@ import {
   type PlanBuild,
   type StepData,
 } from "./components/step-writer.js";
-import { stateToCondition, type ApiFlowCondition, type ConditionState } from "./conditions.js";
+import {
+  conditionToState,
+  emptyConditionState,
+  newConditionRow,
+  stateToCondition,
+  type ApiFlowCondition,
+  type ConditionState,
+} from "./conditions.js";
 
 /** The most emails and splits a flow may have in total, and the most splits one path may pass through. */
 export const MAX_FLOW_NODES = 30;
@@ -52,6 +59,10 @@ export interface ForkData {
   delay: string;
   /** Wait-until mode: go down the "yes" path the moment the condition holds, or "no" when the delay runs out. */
   early: boolean;
+  /** "condition": decided by what is true of the contact. "split": decided at random (an A/B test or a holdout). */
+  kind: "condition" | "split";
+  /** For a random split: the share (1 to 99) sent down the "yes" path, which is version A. */
+  percent_a: number;
   /** What decides the path: the "yes" path if it holds. */
   condition: ConditionState;
   yes: SequenceData;
@@ -73,10 +84,23 @@ export function newFork(firstRow: ConditionState["rows"][number]): ForkData {
     id: `fork-${++counter}`,
     delay: "3d",
     early: false,
+    kind: "condition",
+    percent_a: 50,
     condition: { match: "all", rows: [firstRow] },
     yes: emptySequence(),
     no: emptySequence(),
   };
+}
+
+/**
+ * Change how a split decides. A random split has no condition to wait for, so it cannot be a wait-until, and it
+ * normally splits straight away: the condition fork's 3-day default becomes "Immediately" (and back again). A delay
+ * the person chose themselves is kept.
+ */
+export function switchForkKind(fork: ForkData, kind: ForkData["kind"]): ForkData {
+  if (fork.kind === kind) return fork;
+  const delay = kind === "split" && fork.delay === "3d" ? "0m" : kind === "condition" && fork.delay === "0m" ? "3d" : fork.delay;
+  return { ...fork, kind, early: kind === "split" ? false : fork.early, delay };
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +171,13 @@ export function buildPlanFromTree(root: SequenceData, planExit?: ConditionState)
       steps.push(planStepFor(s, ids[i]!, convert, next));
     });
 
-    if (seq.fork && forkId !== null) {
+    if (seq.fork && forkId !== null && seq.fork.kind === "split") {
+      const yesEntry = emit(seq.fork.yes);
+      const noEntry = emit(seq.fork.no);
+      const pct = seq.fork.percent_a;
+      if (!Number.isInteger(pct) || pct < 1 || pct > 99) errors[`${seq.fork.id}-percent`] = "Choose a share from 1 to 99.";
+      branches.push({ order: forkId, delay: seq.fork.delay, split: { percent_a: pct }, then: yesEntry, else: noEntry });
+    } else if (seq.fork && forkId !== null) {
       const yesEntry = emit(seq.fork.yes);
       const noEntry = emit(seq.fork.no);
       const result = stateToCondition(seq.fork.condition);
@@ -182,9 +212,9 @@ export type OutlineLine =
   /** An email step. */
   | { kind: "email"; depth: number; order: number; step: Record<string, unknown> }
   /** A split: wait, then check. */
-  | { kind: "fork"; depth: number; order: number; delay: string; condition: unknown; early: boolean }
+  | { kind: "fork"; depth: number; order: number; delay: string; condition: unknown; early: boolean; split: number | null }
   /** The heading of one path out of a split. */
-  | { kind: "path"; depth: number; label: "If yes" | "Otherwise" }
+  | { kind: "path"; depth: number; label: "If yes" | "Otherwise" | "Version A" | "Version B" | "Holdout" }
   /** A path that finishes the flow. */
   | { kind: "end"; depth: number }
   /** A path that joins a step already shown above. */
@@ -243,10 +273,13 @@ export function planOutline(plan: unknown): OutlineLine[] {
     }
     const branch = branchAt.get(target);
     if (branch) {
-      lines.push({ kind: "fork", depth, order: target, delay: String(branch.delay ?? ""), condition: branch.condition, early: branch.early === true });
-      lines.push({ kind: "path", depth: depth + 1, label: "If yes" });
+      const split = branch.split as { percent_a?: unknown } | undefined;
+      const percent = split && typeof split.percent_a === "number" ? split.percent_a : null;
+      lines.push({ kind: "fork", depth, order: target, delay: String(branch.delay ?? ""), condition: branch.condition, early: branch.early === true, split: percent });
+      // A random split names its paths by version; a path that is simply "end" is a holdout.
+      lines.push({ kind: "path", depth: depth + 1, label: percent === null ? "If yes" : branch.then === "end" ? "Holdout" : "Version A" });
       walk(branch.then, depth + 2);
-      lines.push({ kind: "path", depth: depth + 1, label: "Otherwise" });
+      lines.push({ kind: "path", depth: depth + 1, label: percent === null ? "Otherwise" : branch.else === "end" ? "Holdout" : "Version B" });
       walk(branch.else, depth + 2);
       return;
     }
@@ -257,3 +290,144 @@ export function planOutline(plan: unknown): OutlineLine[] {
   walk(1, 0);
   return lines;
 }
+
+// ---------------------------------------------------------------------------
+// Stored plan -> tree (to reopen a saved flow in the editor)
+// ---------------------------------------------------------------------------
+
+/** The copy of one email, as kept in its template: what the plan itself does not hold. */
+export interface TemplateCopy {
+  subject: string;
+  body_html: string;
+  body_text: string | null;
+}
+
+export type TreeFromPlan =
+  | { ok: true; tree: SequenceData; planExit: ConditionState }
+  | { ok: false; reason: string };
+
+let loadedForks = 0;
+
+/**
+ * The inverse of buildPlanFromTree(): a stored plan back into the tree the editor edits, with each email's
+ * subject and body taken from its template (`templates`, by slug = the step's template_ref).
+ *
+ * Only plans in a shape the editor can draw load: a straight line, or a tree of splits where every path is its
+ * own run of emails ending in a split or the end. Anything else (paths that rejoin, a node nothing leads to,
+ * a template that is gone, a condition the editor cannot show, more than one plan-level stop condition, a
+ * tree beyond the editor's limits) returns `ok: false` with the reason, because saving what the editor drew
+ * would silently change or destroy the stored plan. A plan with the same shape but different numbering loads
+ * fine; it is renumbered when saved again.
+ */
+export function treeFromPlan(plan: unknown, templates: ReadonlyMap<string, TemplateCopy>): TreeFromPlan {
+  const fail = (reason: string): TreeFromPlan => ({ ok: false, reason });
+  if (!plan || typeof plan !== "object") return fail("The flow has no plan.");
+  const p = plan as Record<string, unknown>;
+  const rawSteps = Array.isArray(p.steps) ? (p.steps as Array<Record<string, unknown>>) : [];
+  const rawBranches = Array.isArray(p.branches) ? (p.branches as Array<Record<string, unknown>>) : [];
+  if (rawSteps.length === 0) return fail("The plan has no steps.");
+  if (p.version !== 2 && (rawBranches.length > 0 || rawSteps.some((s) => s.next !== undefined))) {
+    return fail("The plan has branches but is not marked as a branching plan.");
+  }
+
+  const stepAt = new Map<number, Record<string, unknown>>();
+  const branchAt = new Map<number, Record<string, unknown>>();
+  for (const s of rawSteps) {
+    if (typeof s.order !== "number" || stepAt.has(s.order)) return fail("The plan numbers its steps in a way the editor cannot read.");
+    stepAt.set(s.order, s);
+  }
+  for (const b of rawBranches) {
+    if (typeof b.order !== "number" || stepAt.has(b.order) || branchAt.has(b.order)) {
+      return fail("The plan numbers its steps in a way the editor cannot read.");
+    }
+    branchAt.set(b.order, b);
+  }
+  const orders = [...stepAt.keys(), ...branchAt.keys()].sort((a, b) => a - b);
+  const nextAfter = (order: number): number | "end" => orders.find((o) => o > order) ?? "end";
+
+  const seen = new Set<number>();
+  let problem: string | null = null;
+  const stop = (reason: string): SequenceData => {
+    problem ??= reason;
+    return emptySequence();
+  };
+
+  const parseSeq = (entry: unknown, depth: number): SequenceData => {
+    const seq: SequenceData = emptySequence();
+    let cur = entry;
+    while (problem === null) {
+      if (cur === "end") return seq;
+      if (typeof cur !== "number") return stop("A step points somewhere that is not in the plan.");
+      if (seen.has(cur)) return stop(`Two paths lead to step ${cur}, so the paths rejoin.`);
+      seen.add(cur);
+
+      const step = stepAt.get(cur);
+      if (step) {
+        const copy = typeof step.template_ref === "string" ? templates.get(step.template_ref) : undefined;
+        if (!copy) return stop(`The email for step ${cur} could not be found.`);
+        const condition = conditionToState(step.condition);
+        const exit = conditionToState(step.exit_condition);
+        if (condition.unreadable || exit.unreadable) return stop(`Step ${cur} has a condition the editor cannot show.`);
+        if (typeof step.delay !== "string" || typeof step.action_type !== "string") return stop(`Step ${cur} is incomplete.`);
+        seq.steps.push({
+          order: seq.steps.length + 1,
+          delay: step.delay,
+          action_type: step.action_type,
+          window_policy: step.window_policy === "immediate" ? "immediate" : "respect_window",
+          subject: copy.subject,
+          body_html: copy.body_html,
+          body_text: copy.body_text ?? "",
+          ...(step.condition !== undefined ? { condition: condition.state } : {}),
+          ...(step.exit_condition !== undefined ? { exit_condition: exit.state } : {}),
+        });
+        cur = step.next ?? nextAfter(cur);
+        continue;
+      }
+
+      const branch = branchAt.get(cur);
+      if (!branch) return stop(`A step points to step ${cur}, which is not in the plan.`);
+      if (depth >= MAX_FORK_DEPTH) return stop("The plan splits more deeply than the editor allows.");
+      if (typeof branch.delay !== "string") return stop(`Split ${cur} is incomplete.`);
+      const split = branch.split as { percent_a?: unknown } | undefined;
+      let fork: ForkData;
+      if (split !== undefined) {
+        const pct = split.percent_a;
+        if (branch.condition !== undefined || branch.early === true || typeof pct !== "number" || !Number.isInteger(pct) || pct < 1 || pct > 99) {
+          return stop(`Split ${cur} is not an A/B split the editor can show.`);
+        }
+        fork = { ...newFork(emptyRow()), kind: "split", percent_a: pct, early: false, delay: branch.delay, condition: emptyConditionState() };
+      } else {
+        const cond = conditionToState(branch.condition);
+        if (branch.condition === undefined || cond.unreadable || cond.state.rows.length === 0) {
+          return stop(`Split ${cur} has a condition the editor cannot show.`);
+        }
+        fork = { ...newFork(emptyRow()), kind: "condition", early: branch.early === true, delay: branch.delay, condition: cond.state };
+      }
+      fork.id = `loaded-fork-${++loadedForks}`;
+      fork.yes = parseSeq(branch.then, depth + 1);
+      fork.no = parseSeq(branch.else, depth + 1);
+      seq.fork = fork;
+      return seq;
+    }
+    return seq;
+  };
+
+  const tree = parseSeq(1, 0);
+  if (problem !== null) return fail(problem);
+  if (seen.size !== orders.length) return fail("Some steps in the plan are not reachable from the start.");
+  if (countNodes(tree) > MAX_FLOW_NODES) return fail("The plan has more steps than the editor allows.");
+
+  const exits = Array.isArray(p.exit_conditions) ? (p.exit_conditions as Array<Record<string, unknown>>) : [];
+  let planExit = emptyConditionState();
+  if (exits.length > 1) return fail("The plan has more than one stop condition.");
+  if (exits.length === 1) {
+    const only = exits[0]!;
+    const parsed = Object.keys(only).length === 1 && "condition" in only ? conditionToState(only.condition) : null;
+    if (!parsed || parsed.unreadable) return fail("The plan's stop condition is one the editor cannot show.");
+    planExit = parsed.state;
+  }
+  return { ok: true, tree, planExit };
+}
+
+/** A throwaway row for newFork(), which is overwritten straight away. */
+const emptyRow = () => newConditionRow();

@@ -49,6 +49,7 @@
  */
 import { StepTestSend } from "../components/step-test-send.js";
 import React, { useState, useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import {
   useFlowWithPolling,
@@ -68,7 +69,7 @@ import { Input } from "../components/ui/input.js";
 import { Select } from "../components/ui/select.js";
 import { Textarea } from "../components/ui/textarea.js";
 import { Skeleton } from "../components/ui/skeleton.js";
-import { TemplateEditorBySlug } from "../components/template-editor.js";
+import { TemplateEditorBySlug, TEMPLATES_QUERY_KEY, fetchEmailTemplates } from "../components/template-editor.js";
 import { type StepData } from "../components/step-writer.js";
 import { SequenceEditor, type TreeContext } from "../components/flow-tree-editor.js";
 import {
@@ -77,6 +78,7 @@ import {
   countEmails,
   countNodes,
   planOutline,
+  treeFromPlan,
   type ForkData,
   type SequenceData,
 } from "../flow-tree.js";
@@ -87,6 +89,7 @@ import { describeCondition, emptyConditionState, type ConditionState } from "../
 import { PromptGuidance } from "../components/prompt-guidance.js";
 import { AudienceEditor } from "../components/audience-editor.js";
 import { FlowGoalCard } from "../components/flow-goal-card.js";
+import { SplitResults } from "../components/split-results.js";
 import type { ApiGoal } from "../goal.js";
 import {
   audienceToRows,
@@ -764,7 +767,22 @@ function defaultFormState(): FormState {
   };
 }
 
-function formStateFromFlow(flow: Flow): FormState {
+/**
+ * Whether a saved plan opens in the editor. A person-written flow's plan is loaded back into the tree when the
+ * editor can draw it; otherwise it stays as stored (shown read-only) so that saving can never overwrite it.
+ */
+function loadStoredPlan(
+  flow: Flow,
+  templates: ReadonlyArray<{ slug: string; subject: string; body_html: string; body_text: string | null }> | undefined,
+): { tree: SequenceData; planExit: ConditionState; locked: string | null } {
+  const none = { tree: { steps: [], fork: null }, planExit: emptyConditionState(), locked: null };
+  if (flow.content_mode !== "fixed_content" || flow.source === "library" || !flow.compiled_plan) return none;
+  if (!templates) return { ...none, locked: "The emails of this plan could not be loaded." };
+  const result = treeFromPlan(flow.compiled_plan, new Map(templates.map((t) => [t.slug, t])));
+  return result.ok ? { tree: result.tree, planExit: result.planExit, locked: null } : { ...none, locked: result.reason };
+}
+
+function formStateFromFlow(flow: Flow, stored = loadStoredPlan(flow, undefined)): FormState {
   const cfg = (flow.trigger_config ?? {}) as Record<string, string>;
   return {
     name: flow.name,
@@ -780,9 +798,9 @@ function formStateFromFlow(flow: Flow): FormState {
     prompt_source: flow.prompt_source ?? "",
     approval_mode: flow.approval_mode,
     content_mode: (flow.content_mode as Flow["content_mode"]) ?? "ai_drafted",
-    steps_data: [],
-    fork_data: null,
-    plan_exit: emptyConditionState(),
+    steps_data: stored.tree.steps,
+    fork_data: stored.tree.fork,
+    plan_exit: stored.planExit,
   };
 }
 
@@ -1051,7 +1069,12 @@ function BranchingSteps({
             )}
             {line.kind === "fork" && (
               <p className="rounded-md border border-border bg-sunken px-3 py-2 text-[14px] text-foreground">
-                {line.early ? (
+                {line.split !== null ? (
+                  <>
+                    <span className="font-medium">A/B test.</span> {renderDelay(line.delay)}, then a random split: {line.split}% version A,{" "}
+                    {100 - line.split}% version B
+                  </>
+                ) : line.early ? (
                   <>
                     <span className="font-medium">Wait.</span> Up to {renderDelay(line.delay)} for: {describeCondition(line.condition)}
                   </>
@@ -1066,7 +1089,7 @@ function BranchingSteps({
             {line.kind === "path" && (
               <p
                 className={`text-[12px] font-semibold uppercase tracking-[0.06em] ${
-                  line.label === "If yes" ? "text-success" : "text-muted-foreground"
+                  line.label === "If yes" || line.label === "Version A" ? "text-success" : "text-muted-foreground"
                 }`}
               >
                 {line.label}
@@ -1275,6 +1298,16 @@ export default function FlowEditorPage() {
   const savePlanMutation = useSaveFlowPlan(id ?? "");
   const llmQuery = useLlm();
   const eventNamesQuery = useEventNames();
+  // A saved person-written plan holds only template names; the copy comes from the templates.
+  const storedFlow = !isNew ? flowQuery.data : undefined;
+  const needsTemplates = storedFlow?.content_mode === "fixed_content" && storedFlow.source !== "library" && !!storedFlow.compiled_plan;
+  const storedTemplatesQuery = useQuery({
+    queryKey: TEMPLATES_QUERY_KEY,
+    queryFn: fetchEmailTemplates,
+    enabled: needsTemplates,
+    // Always the copy as it is now: the editor saves whatever it loads.
+    refetchOnMount: "always",
+  });
 
   const [form, setForm] = useState<FormState>(defaultFormState);
   const [contentModeSelected, setContentModeSelected] = useState(false);
@@ -1286,6 +1319,8 @@ export default function FlowEditorPage() {
   const [compileError, setCompileError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState(false);
   const [initialised, setInitialised] = useState(false);
+  /** Why the saved plan was not loaded into the editor (null when it was, or there is none). */
+  const [planLocked, setPlanLocked] = useState<string | null>(null);
   const [editingTemplate, setEditingTemplate] = useState<string | null>(null);
 
   // New-flow progressive disclosure: section refs for scroll-into-view.
@@ -1296,10 +1331,13 @@ export default function FlowEditorPage() {
   // Populate form when editing an existing flow
   useEffect(() => {
     if (!isNew && flowQuery.data && !initialised) {
-      setForm(formStateFromFlow(flowQuery.data));
+      if (needsTemplates && storedTemplatesQuery.isFetching) return;
+      const stored = loadStoredPlan(flowQuery.data, storedTemplatesQuery.data?.templates);
+      setForm(formStateFromFlow(flowQuery.data, stored));
+      setPlanLocked(stored.locked);
       setInitialised(true);
     }
-  }, [isNew, flowQuery.data, initialised]);
+  }, [isNew, flowQuery.data, initialised, needsTemplates, storedTemplatesQuery.isFetching, storedTemplatesQuery.data]);
 
   // Initialise immediately for new flow. Two prefill params, both from the
   // retention grid: ?segment=tenure:recency (primary, targets the cell's
@@ -1860,6 +1898,29 @@ export default function FlowEditorPage() {
         </div>
       </div>
 
+      {planLocked !== null && existingFlow?.compiled_plan ? (
+        <div role="note" data-testid="plan-locked">
+          <div className="mb-4 rounded-md border border-border bg-sunken px-4 py-3">
+            <p className="text-[14px] font-medium text-foreground">This plan can't be edited here</p>
+            <p className="mt-1 text-[14px] leading-relaxed text-muted-foreground">
+              {planLocked} The editor only draws plans made of emails and splits that don't rejoin, and saving from it
+              would replace this plan. It is shown below as stored; to change it, edit each email's template, or ask
+              the API to save a new plan.
+            </p>
+          </div>
+          <CompiledPlanPreview
+            plan={existingFlow.compiled_plan as UnknownRecord}
+            onEditTemplate={(slug) => setEditingTemplate(slug)}
+            flowId={existingFlow.id}
+          />
+          {editingTemplate && (
+            <div className="mt-6 rounded-lg border border-border bg-card p-6">
+              <TemplateEditorBySlug slug={editingTemplate} onClose={() => setEditingTemplate(null)} />
+            </div>
+          )}
+        </div>
+      ) : (
+      <>
       <SequenceEditor
         value={{ steps: form.steps_data, fork: form.fork_data }}
         onChange={(next) => {
@@ -1913,6 +1974,8 @@ export default function FlowEditorPage() {
             )}
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );
@@ -2384,6 +2447,7 @@ export default function FlowEditorPage() {
                 eventSuggestions={eventNamesQuery.data ?? []}
               />
             )}
+            {existingFlow && existingFlow.status !== "archived" && <SplitResults flowId={existingFlow.id} />}
 
             <div className="mt-8">
               {isFixedContentEditor ? fixedContentSurface : aiSurface}
