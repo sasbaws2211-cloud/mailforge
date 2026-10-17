@@ -38,6 +38,7 @@ The execution plan will be stored and executed by a deterministic engine. The LL
 
 OUTPUT FORMAT (strict JSON, no markdown fences, no commentary outside the JSON):
 {
+  "version": <optional: 2, ONLY for a branching plan, see BRANCHING below>,
   "trigger": {
     "type": "<lifecycle_transition|event|segment|manual>",
     "condition": { ... }
@@ -52,8 +53,12 @@ OUTPUT FORMAT (strict JSON, no markdown fences, no commentary outside the JSON):
       "kb_ref": "<optional: @kb entry name>",
       "brain_instruction": "<optional: instruction for the content drafter>",
       "condition": <optional: proceed-if condition, see CONDITION VOCABULARY below>,
-      "exit_condition": <optional: per-step exit trigger, see CONDITION VOCABULARY below>
+      "exit_condition": <optional: per-step exit trigger, see CONDITION VOCABULARY below>,
+      "next": <optional: branching plans only, see BRANCHING below>
     }
+  ],
+  "branches": [
+    <optional: branching plans only, see BRANCHING below>
   ],
   "exit_conditions": [
     <optional: plan-level exit triggers, see EXIT CONDITION VOCABULARY below>
@@ -124,8 +129,36 @@ Each entry in exit_conditions is one of these shapes:
 
 Do not use any other keys or structures in exit_conditions entries.
 
+BRANCHING (forks: different contacts follow different paths):
+
+A flow is a straight line by default. Do NOT add "version", "branches" or "next" unless the description clearly needs different paths for different contacts (for example "if they have done X ... otherwise ..."). A plain sequence of emails, even with "only send if" conditions on some of them, is NOT branching: use a step "condition" for that.
+
+For a branching plan:
+- Put "version": 2 at the top level.
+- "branches" is an array of forks. A fork sends no email. After its "delay" (counted from when the contact reached the fork) it checks its "condition" and sends the contact to the node numbered "then" if the condition holds, otherwise to the node numbered "else". Both are required, and each is either another node's "order" number or the string "end" (the contact finishes the flow).
+  { "order": 2, "delay": "3d", "condition": <any condition from the CONDITION VOCABULARY>, "then": 3, "else": 4 }
+  In a fork, "since": "step" means since the contact reached the fork.
+- Email steps and forks share ONE numbering. Every "order" is unique across steps and branches, and the flow always starts at order 1 (which may be a fork).
+- Give EVERY email step a "next": the "order" of the node that comes after it, or "end".
+- Rules the plan must follow: no loops (a node can never lead back to an earlier node); every node must be reachable from order 1; at most 30 nodes (steps plus forks) in total; at most 3 forks on any one path. A path that should simply stop uses "end".
+- A step's own "condition" still means "skip just this email and move on to its next". Use a fork when the contact should follow a different path.
+
+Example: "Send a welcome email. Three days later, if they created a project send a tips email, otherwise send a help email."
+{
+  "version": 2,
+  "trigger": { "type": "event", "condition": { "event": "signed_up" } },
+  "steps": [
+    { "order": 1, "action_type": "onboard_welcome", "delay": "0m", "window_policy": "immediate", "next": 2 },
+    { "order": 3, "action_type": "nurture_value", "delay": "0m", "window_policy": "respect_window", "next": "end" },
+    { "order": 4, "action_type": "onboard_guide", "delay": "0m", "window_policy": "respect_window", "next": "end" }
+  ],
+  "branches": [
+    { "order": 2, "delay": "3d", "condition": { "field": "event", "name": "project_created", "op": "performed", "since": "flow" }, "then": 3, "else": 4 }
+  ]
+}
+
 RULES:
-1. "order" is 1-based, sequential, unique within steps.
+1. "order" is 1-based, sequential, unique within steps. (In a branching plan, orders are unique across steps and forks together; they need not be consecutive.)
 2. "delay" uses the format <integer><unit> where unit is m (minutes), h (hours), or d (days). Examples: "0m" (immediate), "30m", "2h", "3d". No spaces, no fractional values.
 3. "action_type" must be from this catalog:
    - nurture_value: share product value, feature highlights

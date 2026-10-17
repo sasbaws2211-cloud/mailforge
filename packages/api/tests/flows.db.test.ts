@@ -1135,6 +1135,154 @@ describe("flow CRUD", () => {
       });
     });
 
+    describe("branching plans", () => {
+      const email = (order: number, extra: Record<string, unknown> = {}) => ({
+        order,
+        delay: "0m",
+        action_type: "nurture_value",
+        window_policy: "respect_window",
+        subject: `Subject ${order}`,
+        body_html: `<p>Body ${order}</p>`,
+        ...extra,
+      });
+      const paid = { field: "payment_status", op: "is", value: "paid" };
+      const fork = (order: number, then: number | "end", otherwise: number | "end", extra: Record<string, unknown> = {}) => ({
+        order,
+        delay: "3d",
+        condition: paid,
+        then,
+        else: otherwise,
+        ...extra,
+      });
+      const fixedFlow = async (app: Awaited<ReturnType<typeof buildApp>>) => {
+        const created = await app.inject({
+          method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+          payload: { ...minimalFlow({ name: "Branching test" }), content_mode: "fixed_content" },
+        });
+        return created.json().id as string;
+      };
+      const savePlan = (app: Awaited<ReturnType<typeof buildApp>>, id: string, payload: unknown) =>
+        app.inject({ method: "POST", url: `/v1/flows/${id}/plan`, headers: { cookie: cookieA }, payload: payload as never });
+      const templateCount = async (id: string) => {
+        const r = await db.execute(sql`SELECT count(*)::int AS n FROM templates WHERE slug LIKE ${"flow-" + id + "-step-%"}`);
+        return (r.rows[0] as { n: number }).n;
+      };
+
+      // 1 email -> 2 fork -> 3 (paid) or 4 (not); 3 and 4 end
+      const goodPlan = () => ({
+        version: 2,
+        steps: [email(1), email(3, { next: "end" }), email(4, { next: "end" })],
+        branches: [fork(2, 3, 4)],
+      });
+
+      it("saves a branching plan: version, forks and next pointers, with a template per email", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const res = await savePlan(app, id, goodPlan());
+        expect(res.statusCode).toBe(200);
+        const plan = res.json().compiled_plan;
+        expect(plan.version).toBe(2);
+        expect(plan.branches).toEqual([fork(2, 3, 4)]);
+        expect(plan.steps.map((s: { order: number; next?: unknown }) => [s.order, s.next])).toEqual([[1, undefined], [3, "end"], [4, "end"]]);
+        expect(plan.steps[0].template_ref).toBe(`flow-${id}-step-1`);
+        expect(await templateCount(id)).toBe(3);
+        expect(res.json().compile_status).toBe("ready");
+      });
+
+      it("a branching flow can be activated", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        await savePlan(app, id, goodPlan());
+        const activate = await app.inject({ method: "PATCH", url: `/v1/flows/${id}`, headers: { cookie: cookieA }, payload: { status: "active" } });
+        expect(activate.statusCode).toBe(200);
+      });
+
+      it("a plan without forks and without a version is saved exactly as before", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const res = await savePlan(app, id, { steps: [email(1), email(2, { delay: "2d" })] });
+        expect(res.statusCode).toBe(200);
+        const plan = res.json().compiled_plan;
+        expect(plan.version).toBeUndefined();
+        expect(plan.branches).toBeUndefined();
+        expect(plan.steps.every((s: { next?: unknown }) => s.next === undefined)).toBe(true);
+      });
+
+      const refused = async (payload: unknown, message: RegExp) => {
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const res = await savePlan(app, id, payload);
+        expect(res.statusCode).toBe(400);
+        expect(JSON.stringify(res.json().issues)).toMatch(message);
+        // nothing was half-saved
+        expect(await templateCount(id)).toBe(0);
+        const got = await app.inject({ method: "GET", url: `/v1/flows/${id}`, headers: { cookie: cookieA } });
+        expect(got.json().compiled_plan).toBeNull();
+        expect(got.json().compile_status).toBeNull();
+      };
+
+      it("400, and nothing saved, for a plan that loops", async () => {
+        if (!dbAvailable) return;
+        await refused({ version: 2, steps: [email(1), email(3, { next: 1 })], branches: [fork(2, 3, 3)] }, /loops back/);
+      });
+
+      it("400, and nothing saved, for a path to a step that does not exist", async () => {
+        if (!dbAvailable) return;
+        await refused({ version: 2, steps: [email(1), email(3, { next: "end" })], branches: [fork(2, 3, 9)] }, /nothing has order 9/);
+      });
+
+      it("400 for forks without the version, and for next without it", async () => {
+        if (!dbAvailable) return;
+        await refused({ steps: [email(1), email(3, { next: "end" })], branches: [fork(2, 3, "end")] }, /branches need plan version 2/);
+        await refused({ steps: [email(1, { next: 2 }), email(2)] }, /next needs plan version 2/);
+      });
+
+      it("400 for a step and a fork sharing an order, and for a step nothing reaches", async () => {
+        if (!dbAvailable) return;
+        await refused({ version: 2, steps: [email(1), email(2, { next: "end" })], branches: [fork(2, "end", "end")] }, /order 2 is used by more than one/);
+        await refused({ version: 2, steps: [email(1, { next: "end" }), email(5)] }, /order 5 can never be reached/);
+      });
+
+      it("400 for more than three forks on one path", async () => {
+        if (!dbAvailable) return;
+        const forks = [fork(1, 2, 2), fork(2, 3, 3), fork(3, 4, 4), fork(4, 5, 5)];
+        await refused({ version: 2, steps: [email(5, { next: "end" })], branches: forks }, /at most 3 branches/);
+      });
+
+      it("400 with a clear message for a fork whose condition the engine does not know", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const res = await savePlan(app, id, { version: 2, steps: [email(1), email(3, { next: "end" })], branches: [fork(2, 3, "end", { condition: { favourite_colour: "red" } })] });
+        expect(res.statusCode).toBe(400);
+        const issue = res.json().issues.find((i: { path: string }) => i.path.startsWith("branches.0.condition"));
+        expect(issue.message).toBe("not a condition the engine understands");
+      });
+
+      it("400 for a fork missing a way out, or with a bad delay", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const noElse = { order: 2, delay: "3d", condition: paid, then: 3 };
+        expect((await savePlan(app, id, { version: 2, steps: [email(1), email(3, { next: "end" })], branches: [noElse] })).statusCode).toBe(400);
+        expect((await savePlan(app, id, { version: 2, steps: [email(1), email(3, { next: "end" })], branches: [fork(2, 3, "end", { delay: "soon" })] })).statusCode).toBe(400);
+      });
+
+      it("saving a new plan replaces the old one, including its forks", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        await savePlan(app, id, goodPlan());
+        const replaced = await savePlan(app, id, { steps: [email(1)] });
+        expect(replaced.statusCode).toBe(200);
+        expect(replaced.json().compiled_plan.branches).toBeUndefined();
+        expect(replaced.json().compiled_plan.version).toBeUndefined();
+      });
+    });
+
     it("rejects plan for ai_drafted flow", async () => {
       if (!dbAvailable) return;
       const app = await buildApp({ db, logger: false });

@@ -61,6 +61,12 @@ interface StepWriterProps {
   conditionErrors?: Record<string, string>;
   /** Names of events the app already sends, offered when writing conditions. */
   eventSuggestions?: string[];
+  /** Shown when the list is empty. */
+  emptyText?: string;
+  /** Label of the add button. */
+  addLabel?: string;
+  /** False when the flow is at its size limit, so another email cannot be added. */
+  canAdd?: boolean;
   /** Flow trigger type and config for AI context */
   triggerType?: string;
   triggerConfig?: Record<string, unknown>;
@@ -87,7 +93,7 @@ const ACTION_TYPE_OPTIONS = [
   { value: "critical_security", label: "Security alert" },
 ] as const;
 
-const DELAY_PRESETS = [
+export const DELAY_PRESETS = [
   { value: "0m", label: "Immediately" },
   { value: "1h", label: "1 hour" },
   { value: "2h", label: "2 hours" },
@@ -549,6 +555,9 @@ export function StepWriter({
   hasLlm,
   conditionErrors = {},
   eventSuggestions = [],
+  emptyText = "No steps yet. Add your first email below.",
+  addLabel = "Add step",
+  canAdd = true,
 }: StepWriterProps) {
   function addStep() {
     const newOrder = steps.length + 1;
@@ -594,9 +603,7 @@ export function StepWriter({
     <div className="space-y-6">
       {steps.length === 0 && (
         <div className="rounded-md border border-border bg-sunken px-4 py-6 text-center">
-          <p className="text-[14px] text-muted-foreground">
-            No steps yet. Add your first email below.
-          </p>
+          <p className="text-[14px] text-muted-foreground">{emptyText}</p>
         </div>
       )}
 
@@ -622,10 +629,13 @@ export function StepWriter({
         variant="outline"
         size="sm"
         onClick={addStep}
-        disabled={disabled}
+        disabled={disabled || !canAdd}
       >
-        Add step
+        {addLabel}
       </Button>
+      {!canAdd && (
+        <p className="text-[13px] text-muted-foreground">A flow can have at most 30 emails and splits in total.</p>
+      )}
     </div>
   );
 }
@@ -645,8 +655,53 @@ export interface PlanBody {
     body_text?: string;
     condition?: ApiFlowCondition;
     exit_condition?: ApiFlowCondition;
+    /** Branching plans only: the order of the node that comes after this email, or "end". */
+    next?: number | "end";
   }>;
+  /** Branching plans only: forks that send a contact one way or the other by a condition. */
+  branches?: Array<{
+    order: number;
+    delay: string;
+    condition: ApiFlowCondition;
+    then: number | "end";
+    else: number | "end";
+  }>;
+  /** 2 for a plan with branches; absent for a straight-line plan. */
+  version?: 2;
   exit_conditions?: Array<{ condition: ApiFlowCondition }>;
+}
+
+/** Turns editor condition rows into the API shape, collecting row problems into `errors`. */
+export function conditionConverter(errors: Record<string, string>) {
+  return (state: ConditionState | undefined): ApiFlowCondition | undefined => {
+    if (!state) return undefined;
+    const result = stateToCondition(state);
+    Object.assign(errors, result.errors);
+    return result.condition ?? undefined;
+  };
+}
+
+/** One email as the plan body wants it, under the given order (and optional next pointer). */
+export function planStepFor(
+  s: StepData,
+  order: number,
+  convert: (state: ConditionState | undefined) => ApiFlowCondition | undefined,
+  next?: number | "end",
+): PlanBody["steps"][number] {
+  const condition = convert(s.condition);
+  const exit_condition = convert(s.exit_condition);
+  return {
+    order,
+    delay: s.delay,
+    action_type: s.action_type,
+    window_policy: s.window_policy,
+    subject: s.subject,
+    body_html: s.body_html,
+    ...(s.body_text ? { body_text: s.body_text } : {}),
+    ...(condition ? { condition } : {}),
+    ...(exit_condition ? { exit_condition } : {}),
+    ...(next !== undefined ? { next } : {}),
+  };
 }
 
 export interface PlanBuild {
@@ -662,28 +717,9 @@ export interface PlanBuild {
  */
 export function buildPlanWithConditions(steps: StepData[], planExit?: ConditionState): PlanBuild {
   const errors: Record<string, string> = {};
-  const convert = (state: ConditionState | undefined): ApiFlowCondition | undefined => {
-    if (!state) return undefined;
-    const result = stateToCondition(state);
-    Object.assign(errors, result.errors);
-    return result.condition ?? undefined;
-  };
+  const convert = conditionConverter(errors);
   const body: PlanBody = {
-    steps: steps.map((s) => {
-      const condition = convert(s.condition);
-      const exit_condition = convert(s.exit_condition);
-      return {
-        order: s.order,
-        delay: s.delay,
-        action_type: s.action_type,
-        window_policy: s.window_policy,
-        subject: s.subject,
-        body_html: s.body_html,
-        ...(s.body_text ? { body_text: s.body_text } : {}),
-        ...(condition ? { condition } : {}),
-        ...(exit_condition ? { exit_condition } : {}),
-      };
-    }),
+    steps: steps.map((s) => planStepFor(s, s.order, convert)),
   };
   const planExitCondition = convert(planExit);
   if (planExitCondition) body.exit_conditions = [{ condition: planExitCondition }];

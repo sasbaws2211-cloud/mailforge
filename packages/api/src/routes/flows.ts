@@ -55,6 +55,9 @@ import {
   wrapInTextShell,
   audienceSchema,
   conditionSchema,
+  compiledBranchSchema,
+  nodeTargetSchema,
+  MAX_PLAN_NODES,
   planExitConditionSchema,
   readAudience,
   stripAudience,
@@ -777,7 +780,8 @@ ${note}`,
    * is set so the execution engine uses the deterministic template path.
    *
    * Body: { steps: Array<{ order, delay, action_type, window_policy, subject,
-   *         body_html, body_text?, condition?, exit_condition? }>, exit_conditions?: [...] }
+   *         body_html, body_text?, condition?, exit_condition?, next? }>,
+   *         version?: 2, branches?: [...], exit_conditions?: [...] }
    *
    * On success: creates templates, builds a compiled plan, sets
    * compile_status = "ready". The flow can then be activated.
@@ -801,10 +805,15 @@ ${note}`,
         // "Send only if..." and "stop the flow if...": see core's flow/condition.ts for what they can say.
         condition: conditionSchema.optional(),
         exit_condition: conditionSchema.optional(),
+        // Branching plans only: the node to go to afterwards, or "end".
+        next: nodeTargetSchema.optional(),
       });
 
       const planBodySchema = z.object({
+        // 2 for a plan with forks (branches) or next pointers; leave out for a straight-line plan.
+        version: z.literal(2).optional(),
         steps: z.array(stepContentSchema).min(1, "At least one step is required"),
+        branches: z.array(compiledBranchSchema).max(MAX_PLAN_NODES).optional(),
         exit_conditions: z.array(planExitConditionSchema).max(10).optional(),
       });
 
@@ -824,7 +833,7 @@ ${note}`,
         };
       }
 
-      const { steps, exit_conditions } = parsed.data;
+      const { steps, branches, version, exit_conditions } = parsed.data;
 
       // Fetch flow
       const flowRows = await db
@@ -853,8 +862,46 @@ ${note}`,
         };
       }
 
-      // Create/upsert templates for each step
       const flowId = request.params.id;
+
+      // Build the compiled plan and check it BEFORE writing anything: a plan can now be wrong in ways a
+      // person can cause (a loop, a path to nowhere), and that is a 400 for them, not a half-saved flow.
+      const stepPlan = steps.map((s) => ({
+        order: s.order,
+        action_type: s.action_type,
+        delay: s.delay,
+        window_policy: s.window_policy,
+        template_ref: `flow-${flowId}-step-${s.order}`,
+        ...(s.condition !== undefined ? { condition: s.condition } : {}),
+        ...(s.exit_condition !== undefined ? { exit_condition: s.exit_condition } : {}),
+        ...(s.next !== undefined ? { next: s.next } : {}),
+      }));
+      const compiledPlan = {
+        ...(version ? { version } : {}),
+        trigger: {
+          type: flow.triggerType,
+          condition: stripAudience(flow.triggerConfig as Record<string, unknown>),
+        },
+        steps: stepPlan,
+        ...(branches && branches.length > 0 ? { branches } : {}),
+        ...(exit_conditions && exit_conditions.length > 0
+          ? { exit_conditions }
+          : {}),
+      };
+
+      const planParsed = compiledPlanSchema.safeParse(compiledPlan);
+      if (!planParsed.success) {
+        reply.status(400);
+        return {
+          error: "Invalid plan data.",
+          issues: planParsed.error.issues.map((i) => ({
+            path: i.path.join("."),
+            message: i.message,
+          })),
+        };
+      }
+
+      // Create/upsert templates for each step
       const templateVariables = [
         "contact.first_name",
         "contact.name",
@@ -894,39 +941,6 @@ ${note}`,
           });
       }
 
-      // Build the compiled plan
-      const compiledPlan = {
-        trigger: {
-          type: flow.triggerType,
-          condition: stripAudience(flow.triggerConfig as Record<string, unknown>),
-        },
-        steps: steps.map((s) => ({
-          order: s.order,
-          action_type: s.action_type,
-          delay: s.delay,
-          window_policy: s.window_policy,
-          template_ref: `flow-${flowId}-step-${s.order}`,
-          ...(s.condition !== undefined ? { condition: s.condition } : {}),
-          ...(s.exit_condition !== undefined ? { exit_condition: s.exit_condition } : {}),
-        })),
-        ...(exit_conditions && exit_conditions.length > 0
-          ? { exit_conditions }
-          : {}),
-      };
-
-      // Validate against the schema to be sure
-      const planParsed = compiledPlanSchema.safeParse(compiledPlan);
-      if (!planParsed.success) {
-        reply.status(500);
-        return {
-          error: "Internal error: generated plan failed validation.",
-          issues: planParsed.error.issues.map((i) => ({
-            path: i.path.join("."),
-            message: i.message,
-          })),
-        };
-      }
-
       // Write the plan to the flow
       const [updated] = await db
         .update(flows)
@@ -935,15 +949,7 @@ ${note}`,
           compiledAt: new Date(),
           compileStatus: "ready",
           compileError: null,
-          steps: steps.map((s) => ({
-            order: s.order,
-            action_type: s.action_type,
-            delay: s.delay,
-            window_policy: s.window_policy,
-            template_ref: `flow-${flowId}-step-${s.order}`,
-            ...(s.condition !== undefined ? { condition: s.condition } : {}),
-            ...(s.exit_condition !== undefined ? { exit_condition: s.exit_condition } : {}),
-          })),
+          steps: stepPlan,
           updatedAt: new Date(),
         })
         .where(and(eq(flows.id, flowId), eq(flows.tenantId, tenantId)))

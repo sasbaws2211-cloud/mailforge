@@ -12,6 +12,7 @@ The compiler is an LLM with a strict output contract. It handles natural languag
 - **Number the steps with their delays**: "Step 1 (day 0, immediate) ... Step 2 (2 days later, respect_window) ...". Delays are minutes, hours, or days only.
 - **Say `immediate` or `respect_window` per step.** Immediate ignores the send window (use for welcomes, payment failures); respect_window holds the email for the next 09:00-17:00 weekday slot.
 - **Use the closed condition vocabulary.** Steps can proceed-if or exit-if on: the lifecycle stage; payment status, plan, engagement, whether they have an email; a custom trait you name (like `seats`); and whether they did or did not do an event, in the last N days, since the step, or since entering the flow. Checks can be combined with all-of / any-of. Say which ones you mean ("only if they are on a paid plan and have not exported a report in 7 days"). Nothing outside this list compiles. See *Conditions inside a flow* in [CONCEPTS.md](./CONCEPTS.md).
+- **Describe different paths with "if ... otherwise ..."** and a wait. See [Different paths for different contacts](#different-paths-for-different-contacts).
 - **State the exit conditions**: "Exit the flow the moment the user activates" compiles to a plan-level exit on the lifecycle change.
 - **End with class and re-entry**: "Flow class: nurture. Reentry: once."
 
@@ -231,6 +232,27 @@ Flow class: nurture. Reentry: cooldown 30 days.
 **Use when:** you want to target an audience by tenure and recency rather than by a single event. The retention grid in Analytics previews exactly who the cell contains.
 
 ---
+
+## Different paths for different contacts
+
+When the flow should do something different depending on the contact, say so in plain words and the AI writes a split (see *Flows that split into paths* in [CONCEPTS.md](./CONCEPTS.md)). Use the words "if", "otherwise" and a wait: the AI only branches when the description clearly needs it. A plain sequence of emails, even with "only send if..." on some of them, stays a straight line.
+
+- **Say what decides the path**, using something Loomail knows: what they did ("created a project"), their plan or payment status, their lifecycle stage, or a trait you send (name it, such as `seats`).
+- **Say how long to wait** before deciding, so the check has something to look at.
+- **Say what each path sends**, and what happens on a path that sends nothing ("otherwise, stop").
+- Keep it small: a path can pass through at most 3 splits.
+
+### Onboarding that adapts to what they did
+
+> When a user signs up, send a welcome email straight away. Three days later, if they have created a project, send a tips email about getting more from projects. Otherwise, send a short email offering help getting started, and then stop.
+
+**Produces:** a welcome email, a split after 3 days on "did `project_created` since entering the flow", a tips email on the yes path, a help email on the other path, and the flow ends on both paths. Your app must send the `project_created` event for the check to mean anything.
+
+### Treat paying and free contacts differently
+
+> When a contact goes from engaged to at risk, wait 2 days. If they are on a paid plan, send a personal check-in from the founder. If not, send a win-back email with a reminder of what the free plan includes.
+
+**Produces:** a split on payment status, with one email on each path. (If you only ever want one of these two groups in the flow at all, an *audience* on the trigger is simpler: see CONCEPTS.md.)
 
 ## After you paste one in
 

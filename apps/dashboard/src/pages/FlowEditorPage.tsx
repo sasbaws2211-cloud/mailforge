@@ -69,7 +69,17 @@ import { Select } from "../components/ui/select.js";
 import { Textarea } from "../components/ui/textarea.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { TemplateEditorBySlug } from "../components/template-editor.js";
-import { StepWriter, buildPlanWithConditions, type StepData } from "../components/step-writer.js";
+import { type StepData } from "../components/step-writer.js";
+import { SequenceEditor, type TreeContext } from "../components/flow-tree-editor.js";
+import {
+  allEmails,
+  buildPlanFromTree,
+  countEmails,
+  countNodes,
+  planOutline,
+  type ForkData,
+  type SequenceData,
+} from "../flow-tree.js";
 import { ConditionEditor } from "../components/condition-editor.js";
 import { describeCondition, emptyConditionState, type ConditionState } from "../conditions.js";
 import { PromptGuidance } from "../components/prompt-guidance.js";
@@ -622,6 +632,8 @@ interface FormState {
   approval_mode: Flow["approval_mode"];
   content_mode: Flow["content_mode"];
   steps_data: StepData[];
+  /** The split that ends the main sequence, if the flow has one (and, inside it, the two paths). */
+  fork_data: ForkData | null;
   /** "Stop the whole flow early if..." for a hand-written plan. */
   plan_exit: ConditionState;
 }
@@ -640,6 +652,7 @@ function defaultFormState(): FormState {
     approval_mode: "require",
     content_mode: "ai_drafted",
     steps_data: [],
+    fork_data: null,
     plan_exit: emptyConditionState(),
   };
 }
@@ -659,6 +672,7 @@ function formStateFromFlow(flow: Flow): FormState {
     approval_mode: flow.approval_mode,
     content_mode: (flow.content_mode as Flow["content_mode"]) ?? "ai_drafted",
     steps_data: [],
+    fork_data: null,
     plan_exit: emptyConditionState(),
   };
 }
@@ -818,7 +832,139 @@ function renderPlanExitCondition(cond: unknown): React.ReactNode {
   );
 }
 
-function CompiledPlanPreview({
+/** What one email step looks like in the plan preview: its type, timing, template, conditions. */
+function StepDetails({
+  step,
+  onEditTemplate,
+  flowId,
+}: {
+  step: UnknownRecord;
+  onEditTemplate?: (slug: string) => void;
+  /** When given, steps with fixed copy get a "Send test to me" button. */
+  flowId?: string;
+}) {
+  return (
+    <div className="min-w-0 flex-1 space-y-1 pt-0.5">
+      <p className="text-[14px] text-foreground">
+        <code className="font-mono text-[13px]">{String(step.action_type ?? "")}</code>
+        {typeof step.delay === "string" && (
+          <span className="text-muted-foreground"> {renderDelay(step.delay)}</span>
+        )}
+        {typeof step.window_policy === "string" && (
+          <span className="text-muted-foreground">
+            {step.window_policy === "immediate"
+              ? ", outside the send window"
+              : ", within the send window"}
+          </span>
+        )}
+      </p>
+      {(typeof step.template_ref === "string" || typeof step.kb_ref === "string") && (
+        <p className="text-[13px] text-muted-foreground">
+          {typeof step.template_ref === "string" && (
+            onEditTemplate ? (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[13px] text-accent-text transition-colors hover:bg-sunken"
+                onClick={() => onEditTemplate(step.template_ref as string)}
+              >
+                template <code className="font-mono">{step.template_ref}</code>
+                <span className="text-[11px] text-muted-foreground">(edit)</span>
+              </button>
+            ) : (
+              <>template <code className="font-mono text-[13px]">{step.template_ref}</code></>
+            )
+          )}
+          {typeof step.template_ref === "string" && flowId && typeof step.order === "number" && (
+            <>
+              {" · "}
+              <StepTestSend flowId={flowId} order={step.order} />
+            </>
+          )}
+          {typeof step.template_ref === "string" && typeof step.kb_ref === "string" && " · "}
+          {typeof step.kb_ref === "string" && (
+            <>kb <code className="font-mono text-[13px]">{step.kb_ref}</code></>
+          )}
+        </p>
+      )}
+      {typeof step.brain_instruction === "string" && (
+        <p className="text-[13px] italic text-muted-foreground">
+          {step.brain_instruction}
+        </p>
+      )}
+      {step.condition !== undefined && step.condition !== null && (
+        <p className="text-[13px] text-muted-foreground">
+          only if {renderConditionClause(step.condition)}
+        </p>
+      )}
+      {step.exit_condition !== undefined && step.exit_condition !== null && (
+        <p className="text-[13px] text-muted-foreground">
+          exit the flow if {renderConditionClause(step.exit_condition)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A branching plan, drawn as an outline: emails in order, then each split with its "If yes" and "Otherwise"
+ * paths indented beneath it. See planOutline() for how any stored plan becomes these lines.
+ */
+function BranchingSteps({
+  plan,
+  onEditTemplate,
+  flowId,
+}: {
+  plan: UnknownRecord;
+  onEditTemplate?: (slug: string) => void;
+  flowId?: string;
+}) {
+  const lines = planOutline(plan);
+  return (
+    <div>
+      <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+        Then, following these paths
+      </p>
+      <ul className="mt-2 list-none space-y-3">
+        {lines.map((line, i) => (
+          <li key={i} style={{ marginLeft: `${line.depth * 20}px` }}>
+            {line.kind === "email" && (
+              <div className="flex gap-4">
+                <span
+                  aria-hidden="true"
+                  className="mt-0.5 flex h-[23px] w-[23px] shrink-0 items-center justify-center rounded-full border border-border-strong bg-background font-mono text-[12px] text-muted-foreground"
+                >
+                  {line.order}
+                </span>
+                <StepDetails step={line.step} onEditTemplate={onEditTemplate} flowId={flowId} />
+              </div>
+            )}
+            {line.kind === "fork" && (
+              <p className="rounded-md border border-border bg-sunken px-3 py-2 text-[14px] text-foreground">
+                <span className="font-medium">Split.</span> Check {renderDelay(line.delay)}: if{" "}
+                {describeCondition(line.condition)}
+              </p>
+            )}
+            {line.kind === "path" && (
+              <p
+                className={`text-[12px] font-semibold uppercase tracking-[0.06em] ${
+                  line.label === "If yes" ? "text-success" : "text-muted-foreground"
+                }`}
+              >
+                {line.label}
+              </p>
+            )}
+            {line.kind === "end" && <p className="text-[13px] italic text-muted-foreground">The flow ends here.</p>}
+            {line.kind === "rejoin" && (
+              <p className="text-[13px] text-muted-foreground">Continues at step {line.order}, shown above.</p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export function CompiledPlanPreview({
   plan,
   onEditTemplate,
   flowId,
@@ -858,8 +1004,9 @@ function CompiledPlanPreview({
         </div>
       )}
 
-      {/* Steps */}
-      {steps.length > 0 && (
+      {/* Steps: a straight line, or (for a branching plan) an outline of the paths */}
+      {plan.version === 2 && <BranchingSteps plan={plan} onEditTemplate={onEditTemplate} flowId={flowId} />}
+      {plan.version !== 2 && steps.length > 0 && (
         <div>
           <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
             Then, in order
@@ -880,64 +1027,7 @@ function CompiledPlanPreview({
                 >
                   {typeof step.order === "number" ? step.order : idx + 1}
                 </span>
-                <div className="min-w-0 flex-1 space-y-1 pt-0.5">
-                  <p className="text-[14px] text-foreground">
-                    <code className="font-mono text-[13px]">{String(step.action_type ?? "")}</code>
-                    {typeof step.delay === "string" && (
-                      <span className="text-muted-foreground"> {renderDelay(step.delay)}</span>
-                    )}
-                    {typeof step.window_policy === "string" && (
-                      <span className="text-muted-foreground">
-                        {step.window_policy === "immediate"
-                          ? ", outside the send window"
-                          : ", within the send window"}
-                      </span>
-                    )}
-                  </p>
-                  {(typeof step.template_ref === "string" || typeof step.kb_ref === "string") && (
-                    <p className="text-[13px] text-muted-foreground">
-                      {typeof step.template_ref === "string" && (
-                        onEditTemplate ? (
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[13px] text-accent-text transition-colors hover:bg-sunken"
-                            onClick={() => onEditTemplate(step.template_ref as string)}
-                          >
-                            template <code className="font-mono">{step.template_ref}</code>
-                            <span className="text-[11px] text-muted-foreground">(edit)</span>
-                          </button>
-                        ) : (
-                          <>template <code className="font-mono text-[13px]">{step.template_ref}</code></>
-                        )
-                      )}
-                      {typeof step.template_ref === "string" && flowId && typeof step.order === "number" && (
-                        <>
-                          {" · "}
-                          <StepTestSend flowId={flowId} order={step.order} />
-                        </>
-                      )}
-                      {typeof step.template_ref === "string" && typeof step.kb_ref === "string" && " · "}
-                      {typeof step.kb_ref === "string" && (
-                        <>kb <code className="font-mono text-[13px]">{step.kb_ref}</code></>
-                      )}
-                    </p>
-                  )}
-                  {typeof step.brain_instruction === "string" && (
-                    <p className="text-[13px] italic text-muted-foreground">
-                      {step.brain_instruction}
-                    </p>
-                  )}
-                  {step.condition !== undefined && step.condition !== null && (
-                    <p className="text-[13px] text-muted-foreground">
-                      only if {renderConditionClause(step.condition)}
-                    </p>
-                  )}
-                  {step.exit_condition !== undefined && step.exit_condition !== null && (
-                    <p className="text-[13px] text-muted-foreground">
-                      exit the flow if {renderConditionClause(step.exit_condition)}
-                    </p>
-                  )}
-                </div>
+                <StepDetails step={step} onEditTemplate={onEditTemplate} flowId={flowId} />
               </li>
             ))}
           </ol>
@@ -1327,18 +1417,23 @@ export default function FlowEditorPage() {
     if (!id) return;
     clearErrors();
 
-    // Validate steps have content
-    const emptySteps = form.steps_data.filter((s) => !s.subject.trim() || !s.body_html.trim());
-    if (emptySteps.length > 0) {
-      setBannerError(`Step ${emptySteps[0]!.order} is missing a subject or body.`);
+    // Validate every email, on every path, has content
+    const tree: SequenceData = { steps: form.steps_data, fork: form.fork_data };
+    const emails = allEmails(tree);
+    if (emails.some((s) => !s.subject.trim() || !s.body_html.trim())) {
+      setBannerError(
+        form.fork_data
+          ? "Every email, on every path, needs a subject and a body."
+          : `Step ${emails.find((s) => !s.subject.trim() || !s.body_html.trim())!.order} is missing a subject or body.`,
+      );
       return;
     }
-    if (form.steps_data.length === 0) {
-      setBannerError("Add at least one step before saving the plan.");
+    if (emails.length === 0) {
+      setBannerError("Add at least one email before saving the plan.");
       return;
     }
 
-    const { body, errors } = buildPlanWithConditions(form.steps_data, form.plan_exit);
+    const { body, errors } = buildPlanFromTree(tree, form.plan_exit);
     if (Object.keys(errors).length > 0) {
       setConditionErrors(errors);
       setBannerError("Fix the highlighted conditions, or remove them.");
@@ -1400,6 +1495,19 @@ export default function FlowEditorPage() {
     !isNew &&
     existingFlow?.compile_status === "ready" &&
     existingFlow.compiled_plan !== null;
+
+  // What every part of the email tree needs to know about the flow around it.
+  const treeContext: TreeContext = {
+    flowId: id,
+    hasLlm,
+    disabled: isPending || flowReadOnly,
+    triggerType: form.trigger_type,
+    triggerConfig: buildTriggerConfig(form.trigger_type, form),
+    flowName: form.name,
+    conditionErrors,
+    eventSuggestions: eventNamesQuery.data ?? [],
+    totalNodes: countNodes({ steps: form.steps_data, fork: form.fork_data }),
+  };
 
   // -------------------------------------------------------------------------
   // Library flow editor: a distinct experience for pre-built flows
@@ -1613,21 +1721,17 @@ export default function FlowEditorPage() {
         </div>
       </div>
 
-      <StepWriter
-        flowId={id}
-        steps={form.steps_data}
-        onStepsChange={(steps) => setField("steps_data", steps)}
-        disabled={isPending || flowReadOnly}
-        hasLlm={hasLlm}
-        triggerType={form.trigger_type}
-        triggerConfig={buildTriggerConfig(form.trigger_type, form)}
-        flowName={form.name}
-        conditionErrors={conditionErrors}
-        eventSuggestions={eventNamesQuery.data ?? []}
+      <SequenceEditor
+        value={{ steps: form.steps_data, fork: form.fork_data }}
+        onChange={(next) => {
+          setField("steps_data", next.steps);
+          setField("fork_data", next.fork);
+        }}
+        ctx={treeContext}
       />
 
       {/* Plan-level exit */}
-      {form.steps_data.length > 0 && (
+      {countEmails({ steps: form.steps_data, fork: form.fork_data }) > 0 && (
         <div className="mt-6 rounded-lg border border-border bg-card p-5">
           <p className="text-[14px] font-medium text-foreground">
             Stop the flow early <span className="font-normal text-muted-foreground">(optional)</span>
@@ -1658,7 +1762,7 @@ export default function FlowEditorPage() {
             <Button
               type="button"
               onClick={handleSavePlan}
-              disabled={isPending || form.steps_data.length === 0}
+              disabled={isPending || countEmails({ steps: form.steps_data, fork: form.fork_data }) === 0}
             >
               {savePlanMutation.isPending ? "Saving plan..." : "Save plan"}
             </Button>

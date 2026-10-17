@@ -92,6 +92,46 @@ Things to know:
 - **The three original shapes** (`lifecycle_state`, `lifecycle_state_not`, `event_since_step`) are unchanged and still valid anywhere a condition goes.
 - **Plain-English flows** use the same vocabulary: the AI is told these shapes when it compiles. It is told to use a custom trait only when your description names one.
 
+## Flows that split into paths
+
+A flow is a straight line by default: every contact gets the same emails in the same order. A **split** sends different contacts down different paths. After the emails above it, the flow waits (or not), checks a condition, and sends the contact down the **If it holds** path or the **Otherwise** path. Each path is its own list of emails, and each can end in a split of its own.
+
+> Welcome email. Wait 3 days. **Did they create a project?**
+> Yes: send "Nice work, here is what to do next".
+> No: send "Stuck? Here is a quick guide".
+
+In the flow editor (for flows you write yourself), press **Split into two paths** under the last email. The condition is the same kind used everywhere else (see *Conditions inside a flow*): contact facts, lifecycle stage, and what they did, combined with all-of or any-of. The plan preview draws the paths as an outline. For plain-English flows, describe the fork in your prompt (see [FLOW-PROMPTS.md](./FLOW-PROMPTS.md)) and the AI writes it.
+
+Rules, which the editor enforces and the API checks:
+
+- **A split is the last thing in its path.** When a path runs out of emails, the flow ends for that contact. An empty path is fine: "otherwise, do nothing".
+- **At most 3 splits on any one path, and 30 emails and splits in total.**
+- **No loops.** A contact can never be sent back to an earlier step, so nobody can be mailed forever. A plan with a loop, a path to a step that does not exist, or a step nothing leads to is refused with a message saying which.
+- **The wait counts from arriving at the split**, not from the previous email. The check happens when that wait is over, and what the contact did since arriving can be asked with "since this step".
+- **The decision is made once.** Contacts are not moved between paths later if the answer changes.
+- **A decision never sends an email by itself.** The first email on the chosen path goes out straight away if it is due; later ones follow their own delays.
+- **A step's own condition is different from a split.** "Send this email only if..." skips just that email and moves on. A split chooses a whole path.
+- **Straight-line flows are unchanged.** A flow without a split is saved exactly as before.
+
+The same through the API, on `POST /v1/flows/:id/plan`. A plan with splits has `version: 2`. Emails and splits share one numbering (`order`), the flow starts at order 1, and each email says what comes `next` (another order, or `"end"`). A split has a `delay`, a `condition`, and `then` / `else` targets:
+
+```json
+{ "version": 2,
+  "steps": [
+    { "order": 1, "delay": "0m", "action_type": "onboard_welcome", "window_policy": "immediate",
+      "subject": "Welcome", "body_html": "<p>...</p>", "next": 2 },
+    { "order": 3, "delay": "0m", "action_type": "nurture_value", "window_policy": "respect_window",
+      "subject": "Nice work", "body_html": "<p>...</p>", "next": "end" },
+    { "order": 4, "delay": "0m", "action_type": "onboard_guide", "window_policy": "respect_window",
+      "subject": "Stuck?", "body_html": "<p>...</p>", "next": "end" } ],
+  "branches": [
+    { "order": 2, "delay": "3d",
+      "condition": { "field": "event", "name": "project_created", "op": "performed", "since": "flow" },
+      "then": 3, "else": 4 } ] }
+```
+
+The API accepts more shapes than the editor builds: paths may rejoin (two emails can both lead to a shared one), and a step can jump over others with `next`. The plan preview shows these as "Continues at step N". The editor itself only builds the tree shape above.
+
 ## The approval queue
 
 AI-drafted flows default to `approval_mode: require`: every generated message waits in **Approvals** until a human approves or rejects it. This is the trust mechanism. The AI writes, you publish.
