@@ -1052,6 +1052,89 @@ describe("flow CRUD", () => {
       expect(activateRes.json().status).toBe("active");
     });
 
+    describe("conditions", () => {
+      const stepOf = (order: number, extra: Record<string, unknown> = {}) => ({
+        order,
+        delay: order === 1 ? "0m" : "2d",
+        action_type: "nurture_value",
+        window_policy: "respect_window",
+        subject: `Subject ${order}`,
+        body_html: `<p>Body ${order}</p>`,
+        ...extra,
+      });
+      const fixedFlow = async (app: Awaited<ReturnType<typeof buildApp>>) => {
+        const created = await app.inject({
+          method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+          payload: { ...minimalFlow({ name: "Conditions test" }), content_mode: "fixed_content" },
+        });
+        return created.json().id as string;
+      };
+      const savePlan = (app: Awaited<ReturnType<typeof buildApp>>, id: string, payload: unknown) =>
+        app.inject({ method: "POST", url: `/v1/flows/${id}/plan`, headers: { cookie: cookieA }, payload: payload as never });
+
+      it("keeps step conditions, step exits and plan exits in the saved plan", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const condition = { all: [{ field: "payment_status", op: "is", value: "paid" }, { field: "event", name: "exported", op: "not_performed", within_days: 7 }] };
+        const exitCondition = { field: "plan", op: "is", value: "Pro" };
+        const planExit = { condition: { field: "event", name: "upgraded", op: "performed", since: "flow" } };
+        const res = await savePlan(app, id, { steps: [stepOf(1, { condition }), stepOf(2, { exit_condition: exitCondition })], exit_conditions: [planExit] });
+        expect(res.statusCode).toBe(200);
+        const plan = res.json().compiled_plan;
+        expect(plan.steps[0].condition).toEqual(condition);
+        expect(plan.steps[1].exit_condition).toEqual(exitCondition);
+        expect(plan.steps[0].exit_condition).toBeUndefined();
+        expect(plan.exit_conditions).toEqual([planExit]);
+      });
+
+      it("a step with no condition saves exactly as before", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const res = await savePlan(app, id, { steps: [stepOf(1)] });
+        expect(res.statusCode).toBe(200);
+        expect(Object.keys(res.json().compiled_plan.steps[0]).sort()).toEqual(["action_type", "delay", "order", "template_ref", "window_policy"]);
+      });
+
+      it("400 with the path when a step condition is not one the engine knows", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const res = await savePlan(app, id, { steps: [stepOf(1, { condition: { favourite_colour: "red" } })] });
+        expect(res.statusCode).toBe(400);
+        const issue = res.json().issues.find((i: { path: string }) => i.path.startsWith("steps.0.condition"));
+        expect(issue.message).toBe("not a condition the engine understands");
+      });
+
+      it("400 for an event condition with no time window", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const res = await savePlan(app, id, { steps: [stepOf(1, { exit_condition: { field: "event", name: "x", op: "performed" } })] });
+        expect(res.statusCode).toBe(400);
+      });
+
+      it("400, not a server error, for a bad plan-level exit", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const res = await savePlan(app, id, { steps: [stepOf(1)], exit_conditions: [{ mystery: true }] });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().issues.some((i: { path: string }) => i.path.startsWith("exit_conditions.0"))).toBe(true);
+      });
+
+      it("a plan that passed here is one the engine reads: it validates against the stored-plan schema", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const res = await savePlan(app, id, { steps: [stepOf(1, { condition: { any: [{ lifecycle_state: "dormant" }, { field: "has_email", op: "is", value: true }] } })] });
+        expect(res.statusCode).toBe(200);
+        const got = await app.inject({ method: "GET", url: `/v1/flows/${id}`, headers: { cookie: cookieA } });
+        expect(got.json().compiled_plan.steps[0].condition.any).toHaveLength(2);
+      });
+    });
+
     it("rejects plan for ai_drafted flow", async () => {
       if (!dbAvailable) return;
       const app = await buildApp({ db, logger: false });

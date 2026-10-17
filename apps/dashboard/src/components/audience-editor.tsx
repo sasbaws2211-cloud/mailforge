@@ -27,7 +27,7 @@ import {
 
 const FIELDS = Object.keys(FIELD_LABELS) as AudienceField[];
 
-function ValueControl({
+export function ValueControl({
   row,
   onChange,
   disabled,

@@ -16,6 +16,13 @@
  *
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */
+import { ConditionEditor } from "./condition-editor.js";
+import {
+  emptyConditionState,
+  stateToCondition,
+  type ApiFlowCondition,
+  type ConditionState,
+} from "../conditions.js";
 import React, { useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, X } from "lucide-react";
@@ -38,6 +45,9 @@ export interface StepData {
   body_html: string;
   body_text: string;
   window_policy: "immediate" | "respect_window";
+  /** "Send only if..." and "stop the flow instead if...": editor state, turned into API conditions on save. */
+  condition?: ConditionState;
+  exit_condition?: ConditionState;
 }
 
 interface StepWriterProps {
@@ -47,6 +57,10 @@ interface StepWriterProps {
   disabled?: boolean;
   /** Whether an LLM is configured (controls AI draft button visibility) */
   hasLlm: boolean;
+  /** Problems with condition rows (steps and the plan-level exit), keyed by row id. */
+  conditionErrors?: Record<string, string>;
+  /** Names of events the app already sends, offered when writing conditions. */
+  eventSuggestions?: string[];
   /** Flow trigger type and config for AI context */
   triggerType?: string;
   triggerConfig?: Record<string, unknown>;
@@ -165,6 +179,8 @@ interface StepEditorProps {
   disabled?: boolean;
   flowId: string | undefined;
   hasLlm: boolean;
+  conditionErrors: Record<string, string>;
+  eventSuggestions: string[];
 }
 
 function StepEditor({
@@ -177,6 +193,8 @@ function StepEditor({
   disabled,
   flowId,
   hasLlm,
+  conditionErrors,
+  eventSuggestions,
 }: StepEditorProps) {
   const [previewMode, setPreviewMode] = useState<"html" | "text">("html");
   const [draftError, setDraftError] = useState<string | null>(null);
@@ -335,6 +353,54 @@ function StepEditor({
         </div>
       </div>
 
+      {/* Conditions */}
+      <details
+        className="mb-4 rounded-md border border-border bg-sunken px-3 py-2"
+        open={(step.condition?.rows.length ?? 0) > 0 || (step.exit_condition?.rows.length ?? 0) > 0}
+      >
+        <summary className="cursor-pointer text-[13px] font-medium text-foreground">
+          Conditions (optional)
+          {((step.condition?.rows.length ?? 0) > 0 || (step.exit_condition?.rows.length ?? 0) > 0) && (
+            <span className="ml-2 font-normal text-muted-foreground">in use</span>
+          )}
+        </summary>
+        <div className="mt-3 space-y-5">
+          <div>
+            <p className="mb-2 text-[13px] font-medium text-foreground">Send this email only if&hellip;</p>
+            <p className="mb-2 text-[12px] text-muted-foreground">
+              Otherwise this email is skipped and the flow moves on to the next one.
+            </p>
+            <ConditionEditor
+              state={step.condition ?? emptyConditionState()}
+              onChange={(condition) => onUpdate({ ...step, condition })}
+              errors={conditionErrors}
+              disabled={disabled}
+              firstLabel="Only if"
+              emptyText="Always sent."
+              eventSuggestions={eventSuggestions}
+              idPrefix={`step-${step.order}-send`}
+            />
+          </div>
+          <div>
+            <p className="mb-2 text-[13px] font-medium text-foreground">Stop the whole flow instead if&hellip;</p>
+            <p className="mb-2 text-[12px] text-muted-foreground">
+              Checked when this email is due. If true, the contact leaves the flow and nothing more is sent.
+            </p>
+            <ConditionEditor
+              state={step.exit_condition ?? emptyConditionState()}
+              onChange={(exit_condition) => onUpdate({ ...step, exit_condition })}
+              errors={conditionErrors}
+              disabled={disabled}
+              firstLabel="Stop if"
+              addLabel="Add a stop condition"
+              emptyText="The flow never stops here."
+              eventSuggestions={eventSuggestions}
+              idPrefix={`step-${step.order}-stop`}
+            />
+          </div>
+        </div>
+      </details>
+
       {/* Variable chips */}
       <div className="mb-4">
         <VariableChips onInsert={insertVariable} disabled={disabled} />
@@ -481,6 +547,8 @@ export function StepWriter({
   onStepsChange,
   disabled,
   hasLlm,
+  conditionErrors = {},
+  eventSuggestions = [],
 }: StepWriterProps) {
   function addStep() {
     const newOrder = steps.length + 1;
@@ -544,6 +612,8 @@ export function StepWriter({
           disabled={disabled}
           flowId={flowId}
           hasLlm={hasLlm}
+          conditionErrors={conditionErrors}
+          eventSuggestions={eventSuggestions}
         />
       ))}
 
@@ -564,6 +634,63 @@ export function StepWriter({
 // Helper: build plan body for POST /v1/flows/:id/plan
 // ---------------------------------------------------------------------------
 
+export interface PlanBody {
+  steps: Array<{
+    order: number;
+    delay: string;
+    action_type: string;
+    window_policy: string;
+    subject: string;
+    body_html: string;
+    body_text?: string;
+    condition?: ApiFlowCondition;
+    exit_condition?: ApiFlowCondition;
+  }>;
+  exit_conditions?: Array<{ condition: ApiFlowCondition }>;
+}
+
+export interface PlanBuild {
+  body: PlanBody;
+  /** Problems with condition rows, keyed by row id. Empty when the plan is good to send. */
+  errors: Record<string, string>;
+}
+
+/**
+ * The body for POST /v1/flows/:id/plan, with each step's conditions (and an optional plan-level exit)
+ * converted from editor rows to the API shape. Rows that cannot be converted are reported in `errors`
+ * and left out of the body, so check `errors` before sending.
+ */
+export function buildPlanWithConditions(steps: StepData[], planExit?: ConditionState): PlanBuild {
+  const errors: Record<string, string> = {};
+  const convert = (state: ConditionState | undefined): ApiFlowCondition | undefined => {
+    if (!state) return undefined;
+    const result = stateToCondition(state);
+    Object.assign(errors, result.errors);
+    return result.condition ?? undefined;
+  };
+  const body: PlanBody = {
+    steps: steps.map((s) => {
+      const condition = convert(s.condition);
+      const exit_condition = convert(s.exit_condition);
+      return {
+        order: s.order,
+        delay: s.delay,
+        action_type: s.action_type,
+        window_policy: s.window_policy,
+        subject: s.subject,
+        body_html: s.body_html,
+        ...(s.body_text ? { body_text: s.body_text } : {}),
+        ...(condition ? { condition } : {}),
+        ...(exit_condition ? { exit_condition } : {}),
+      };
+    }),
+  };
+  const planExitCondition = convert(planExit);
+  if (planExitCondition) body.exit_conditions = [{ condition: planExitCondition }];
+  return { body, errors };
+}
+
+/** The plan body without any conditions: the original shape. Prefer buildPlanWithConditions. */
 export function buildPlanBody(
   steps: StepData[],
 ): { steps: Array<{ order: number; delay: string; action_type: string; window_policy: string; subject: string; body_html: string; body_text?: string }> } {

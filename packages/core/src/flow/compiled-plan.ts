@@ -13,6 +13,7 @@
  * Mirror side: PUBLIC (packages/core is mirrored).
  */
 import { z } from "zod";
+import { conditionSchema } from "./condition.js";
 
 // ---------------------------------------------------------------------------
 // Condition schemas (step-level)
@@ -23,16 +24,10 @@ import { z } from "zod";
  * the step executes only when the condition evaluates to true.
  * If false, the step is skipped and the flow advances.
  *
- * Exactly three shapes are supported:
- *   1. { lifecycle_state: "<state>" } - contact is currently in this state
- *   2. { lifecycle_state_not: "<state>" } - contact is NOT in this state
- *   3. { event_since_step: "<event_name>" } - event occurred since reaching step
+ * The vocabulary (leaves such as lifecycle state, payment status, plan, traits and events, and all/any
+ * groups of them) is defined in ./condition.ts. The three original shapes remain valid.
  */
-export const stepConditionSchema = z.union([
-  z.object({ lifecycle_state: z.string().min(1) }).strict(),
-  z.object({ lifecycle_state_not: z.string().min(1) }).strict(),
-  z.object({ event_since_step: z.string().min(1) }).strict(),
-]);
+export const stepConditionSchema = conditionSchema;
 
 // ---------------------------------------------------------------------------
 // Step schema
@@ -76,7 +71,8 @@ export const compiledStepSchema = z.object({
  * A plan-level exit condition. When any of these fire, the contact exits the
  * flow entirely regardless of which step they are on.
  *
- * Three shapes:
+ * Shapes:
+ *   0. { condition: <Condition> } - exit when any condition from the vocabulary holds
  *   1. { event: "<name>" } - exit when event occurs during the membership
  *   2. { lifecycle_state_change: { to: "<state>" } } - exit on state transition
  *   3. Both keys present - exit when BOTH are true (AND)
@@ -88,6 +84,8 @@ export const planExitConditionSchema = z.union([
     event: z.string().min(1),
     lifecycle_state_change: z.object({ to: z.string().min(1) }).strict(),
   }).strict(),
+  // Any condition from the vocabulary in ./condition.ts, judged from when the membership entered the flow.
+  z.object({ condition: stepConditionSchema }).strict(),
 ]);
 
 // ---------------------------------------------------------------------------

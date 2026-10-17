@@ -151,14 +151,20 @@ export async function advanceMembership(
 
   // Condition inputs: the contact's current state, and a way to ask "did this event happen since...".
   const contactRow = await db
-    .select({ lifecycleState: contacts.lifecycleState })
+    .select({
+      lifecycleState: contacts.lifecycleState,
+      paymentStatus: contacts.paymentStatus,
+      engagementDepth: contacts.engagementDepth,
+      email: contacts.email,
+      properties: contacts.properties,
+    })
     .from(contacts)
     .where(eq(contacts.id, membership.contactId))
     .limit(1);
   if (contactRow.length === 0) {
     return { kind: "skipped_no_contact" };
   }
-  const contactState: ContactState = { lifecycleState: contactRow[0]!.lifecycleState };
+  const contactState: ContactState = contactRow[0]!;
   const eventChecker: EventChecker = {
     async hasEventSince(eventName: string, since: Date): Promise<boolean> {
       const found = await db
@@ -174,14 +180,30 @@ export async function advanceMembership(
         .limit(1);
       return found.length > 0;
     },
+    async countEventsSince(eventName: string, since: Date, limit: number): Promise<number> {
+      // Reads at most `limit` rows: "at least 3 times" never needs more than 3.
+      const found = await db
+        .select({ id: events.id })
+        .from(events)
+        .where(
+          and(
+            eq(events.contactId, membership.contactId),
+            eq(events.eventName, eventName),
+            gte(events.timestamp, since),
+          ),
+        )
+        .limit(limit);
+      return found.length;
+    },
   };
+  const times = { now, enteredAt: membership.enteredAt };
 
   // Plan-level exit conditions come before any step logic.
   if (flow.exitConditions && flow.exitConditions.length > 0) {
     let exitFired = false;
     let conditionErrorMsg: string | null = null;
     for (const ec of flow.exitConditions) {
-      const result = await evaluatePlanExitCondition(ec, contactState, eventChecker, membership.enteredAt);
+      const result = await evaluatePlanExitCondition(ec, contactState, eventChecker, membership.enteredAt, times);
       if (result.outcome === "unknown_shape") {
         conditionErrorMsg = formatConditionError({ type: "plan_exit" }, result.message);
         break;
@@ -247,7 +269,7 @@ export async function advanceMembership(
 
   // The step's own exit condition.
   if (currentStepDef.exit_condition !== undefined) {
-    const exitResult = await evaluateStepCondition(currentStepDef.exit_condition, contactState, eventChecker, referenceTime);
+    const exitResult = await evaluateStepCondition(currentStepDef.exit_condition, contactState, eventChecker, referenceTime, times);
     if (exitResult.outcome === "unknown_shape") {
       await recordError(
         formatConditionError({ type: "step_exit_condition", stepOrder: membership.currentStep }, exitResult.message),
@@ -264,7 +286,7 @@ export async function advanceMembership(
 
   // The step's proceed-if condition: false means skip the step (no message) and move on.
   if (currentStepDef.condition !== undefined) {
-    const condResult = await evaluateStepCondition(currentStepDef.condition, contactState, eventChecker, referenceTime);
+    const condResult = await evaluateStepCondition(currentStepDef.condition, contactState, eventChecker, referenceTime, times);
     if (condResult.outcome === "unknown_shape") {
       await recordError(
         formatConditionError({ type: "step_condition", stepOrder: membership.currentStep }, condResult.message),

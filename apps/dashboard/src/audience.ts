@@ -128,7 +128,7 @@ export function rowsToAudience(rows: AudienceRow[]): RowsResult {
   return { audience: Object.keys(errors).length === 0 ? { conditions } : null, errors };
 }
 
-function rowToCondition(row: AudienceRow): ApiCondition | string {
+export function rowToCondition(row: AudienceRow): ApiCondition | string {
   const value = row.value.trim();
   switch (row.field) {
     case "payment_status":

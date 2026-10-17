@@ -271,3 +271,14 @@ export {
   type PlanExitCondition,
   type StepCondition,
 } from "./compiled-plan.js";
+
+export {
+  conditionSchema,
+  eventConditionSchema,
+  conditionShape,
+  MAX_CONDITION_LEAVES,
+  MAX_CONDITION_DEPTH,
+  type Condition,
+  type EventCondition,
+  type LegacyCondition,
+} from "./condition.js";

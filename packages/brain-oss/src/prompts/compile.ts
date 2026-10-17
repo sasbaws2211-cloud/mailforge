@@ -62,19 +62,45 @@ OUTPUT FORMAT (strict JSON, no markdown fences, no commentary outside the JSON):
 
 CONDITION VOCABULARY (step-level "condition" and "exit_condition"):
 
-The execution engine supports EXACTLY these three shapes. Do not invent other keys or structures.
+A condition is either ONE CHECK or a GROUP of conditions. The execution engine supports EXACTLY the shapes below. Do not invent other keys or structures.
+
+Checks about lifecycle state and events:
 
 1. { "lifecycle_state": "<state>" }
-   The step proceeds (or exit fires) only if the contact is currently in this lifecycle state.
-   Example: { "lifecycle_state": "at_risk" }
+   True if the contact is currently in this lifecycle state. Example: { "lifecycle_state": "at_risk" }
 
 2. { "lifecycle_state_not": "<state>" }
-   The step proceeds (or exit fires) only if the contact is NOT in this lifecycle state.
-   Example: { "lifecycle_state_not": "engaged" }
+   True if the contact is NOT in this lifecycle state. Example: { "lifecycle_state_not": "engaged" }
 
 3. { "event_since_step": "<event_name>" }
-   The step proceeds (or exit fires) only if the named event has occurred since the contact reached this step.
-   Example: { "event_since_step": "feature_activated" }
+   True if the named event has occurred since the contact reached this step. Example: { "event_since_step": "feature_activated" }
+
+Checks about the contact:
+
+4. { "field": "payment_status", "op": "is" | "is_not", "value": "<free|trial|paid|past_due|cancelled>" }
+   or { "field": "payment_status", "op": "in", "value": ["trial", "paid"] }
+5. { "field": "engagement_depth", "op": "is" | "is_not", "value": "<power|regular|casual|minimal>" }
+   or the same with "op": "in" and a list of values
+6. { "field": "plan", "op": "is" | "is_not", "value": "<plan name, for example Pro>" }
+7. { "field": "has_email", "op": "is", "value": true | false }
+8. { "field": "trait", "key": "<trait name>", "op": "is" | "is_not" | "contains", "value": "<text>" }
+   or { "field": "trait", "key": "<trait name>", "op": "gt" | "lt", "value": <number> }
+   or { "field": "trait", "key": "<trait name>", "op": "is_set" | "is_not_set" }
+   Use "trait" ONLY when the description names a specific property of the contact (for example "seats" or "country"). Never invent trait names; prefer checks 4-7 when they fit.
+
+Checks about what the contact did:
+
+9. { "field": "event", "name": "<event_name>", "op": "performed" | "not_performed", <window> }
+   <window> is EXACTLY ONE of: "within_days": <1 to 365> (in the last N days), "since": "step" (since reaching this step), or "since": "flow" (since entering the flow). A window is required.
+   "performed" may also take "min_count": <2 to 100> (at least that many times). "not_performed" means zero times in the window.
+   Example: { "field": "event", "name": "exported_report", "op": "not_performed", "within_days": 7 }
+
+Groups:
+
+10. { "all": [ <condition>, ... ] }  every condition inside must be true
+11. { "any": [ <condition>, ... ] }  at least one condition inside must be true
+    Groups may nest up to 3 deep and hold at most 10 checks in total.
+    Example: { "all": [ { "field": "payment_status", "op": "is", "value": "paid" }, { "field": "event", "name": "logged_in", "op": "not_performed", "within_days": 14 } ] }
 
 Semantics of "condition" on a step: this is a PROCEED-IF gate. The step executes only when the condition is true. If false, the step is skipped (no email sent) and the flow advances to the next step. Use this when the prompt says "only send if ...", "skip if not ...", or "if the user is still ...".
 
@@ -92,6 +118,9 @@ Each entry in exit_conditions is one of these shapes:
 
 3. { "event": "<event_name>", "lifecycle_state_change": { "to": "<state>" } }
    Exit when BOTH the event has occurred AND the contact has transitioned to the state.
+
+4. { "condition": <any condition from the CONDITION VOCABULARY> }
+   Exit the flow when that condition holds, judged from the time the contact entered the flow ("since": "step" means "since": "flow" here). Use this shape for anything that is not simply "an event happened" or "the state became X", for example { "condition": { "field": "payment_status", "op": "is", "value": "cancelled" } }. This shape has no other keys.
 
 Do not use any other keys or structures in exit_conditions entries.
 
@@ -116,7 +145,7 @@ RULES:
 6. "kb_ref": only use KB entry names from the available list provided. If a @kb:name reference appears in the prompt and the name is in the available list, use it. Otherwise omit.
 7. "brain_instruction": provide a clear, specific instruction for the content drafter that will generate the actual email copy at send time. Include what to emphasize, what tone, what data to personalize on.
 8. "exit_conditions": plan-level exits. When any fires, the contact leaves the flow regardless of which step they are on. Common: lifecycle state changes back to a healthy state.
-9. Step-level "condition" and "exit_condition" MUST use ONLY the three shapes listed in CONDITION VOCABULARY. No other keys or structures are permitted.
+9. Step-level "condition" and "exit_condition" MUST use ONLY the shapes listed in CONDITION VOCABULARY. No other keys or structures are permitted. Add a condition only when the description asks for one.
 10. The trigger type and condition are confirmed from the flow's existing configuration. Do not invent a different trigger than the one provided.
 11. Produce ONLY the JSON object. No explanation, no markdown, no preamble.`;
 

@@ -12,7 +12,15 @@
  *
  * Mirror side: PUBLIC (packages/worker is mirrored).
  */
-import { stepConditionSchema, type StepCondition, type PlanExitCondition } from "@loomail/core";
+import {
+  stepConditionSchema,
+  planExitConditionSchema,
+  audienceConditionHolds,
+  type AudienceCondition,
+  type AudienceContact,
+  type Condition,
+  type EventCondition,
+} from "@loomail/core";
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -28,15 +36,17 @@ export type ConditionResult =
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal contact state needed for condition evaluation.
+ * The contact state conditions are judged against. Only lifecycleState is required; the rest
+ * (what a trigger audience can look at) is read when a condition asks for it, and a field that
+ * was not supplied counts as not set.
  */
-export interface ContactState {
+export interface ContactState extends Partial<AudienceContact> {
   lifecycleState: string;
 }
 
 /**
- * Interface for checking whether an event occurred since a reference time.
- * The caller provides an implementation backed by a DB query.
+ * Interface for asking about a contact's events. The caller provides an implementation backed by
+ * a DB query.
  */
 export interface EventChecker {
   /**
@@ -44,6 +54,86 @@ export interface EventChecker {
    * since the reference time.
    */
   hasEventSince(eventName: string, since: Date): Promise<boolean>;
+  /**
+   * How many times the event occurred since the reference time, counting no further than `limit`
+   * (so a check for "at least 3" never reads more than 3 rows). Optional: without it, only
+   * "at least once" style checks can be evaluated.
+   */
+  countEventsSince?(eventName: string, since: Date, limit: number): Promise<number>;
+}
+
+/** Times a condition may need besides the step's own reference time. All optional, for older callers. */
+export interface EvaluationTimes {
+  /** "Now": the end of a within_days window. Defaults to the current time. */
+  now?: Date;
+  /** When the contact entered the flow, for `since: "flow"`. Defaults to the reference time. */
+  enteredAt?: Date;
+}
+
+const DAY_MS = 86_400_000;
+
+/** A condition that parsed fine but cannot be evaluated with what the caller supplied. */
+class UnsupportedCondition extends Error {}
+
+function audienceView(contact: ContactState): AudienceContact {
+  return {
+    paymentStatus: contact.paymentStatus ?? null,
+    engagementDepth: contact.engagementDepth ?? null,
+    email: contact.email ?? null,
+    properties: contact.properties ?? null,
+  };
+}
+
+async function eventHolds(
+  c: EventCondition,
+  events: EventChecker,
+  referenceSince: Date,
+  times: EvaluationTimes,
+): Promise<boolean> {
+  const since =
+    c.within_days !== undefined
+      ? new Date((times.now ?? new Date()).getTime() - c.within_days * DAY_MS)
+      : c.since === "flow"
+        ? (times.enteredAt ?? referenceSince)
+        : referenceSince;
+
+  const needed = c.op === "performed" ? (c.min_count ?? 1) : 1;
+  let count: number;
+  if (needed <= 1) {
+    count = (await events.hasEventSince(c.name, since)) ? 1 : 0;
+  } else if (events.countEventsSince) {
+    count = await events.countEventsSince(c.name, since, needed);
+  } else {
+    throw new UnsupportedCondition("counting events is not available here");
+  }
+  return c.op === "performed" ? count >= needed : count === 0;
+}
+
+/** Evaluate one parsed condition. Groups short-circuit, so later checks (and their queries) are skipped. */
+async function conditionHolds(
+  c: Condition,
+  contact: ContactState,
+  events: EventChecker,
+  referenceSince: Date,
+  times: EvaluationTimes,
+): Promise<boolean> {
+  if ("all" in c) {
+    for (const child of c.all) {
+      if (!(await conditionHolds(child, contact, events, referenceSince, times))) return false;
+    }
+    return true;
+  }
+  if ("any" in c) {
+    for (const child of c.any) {
+      if (await conditionHolds(child, contact, events, referenceSince, times)) return true;
+    }
+    return false;
+  }
+  if ("lifecycle_state" in c) return contact.lifecycleState === c.lifecycle_state;
+  if ("lifecycle_state_not" in c) return contact.lifecycleState !== c.lifecycle_state_not;
+  if ("event_since_step" in c) return events.hasEventSince(c.event_since_step, referenceSince);
+  if (c.field === "event") return eventHolds(c, events, referenceSince, times);
+  return audienceConditionHolds(c as AudienceCondition, audienceView(contact));
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +158,7 @@ export async function evaluateStepCondition(
   contact: ContactState,
   eventChecker: EventChecker,
   referenceSince: Date,
+  times: EvaluationTimes = {},
 ): Promise<ConditionResult> {
   // Validate shape against the schema
   const parsed = stepConditionSchema.safeParse(condition);
@@ -78,30 +169,15 @@ export async function evaluateStepCondition(
     };
   }
 
-  const cond: StepCondition = parsed.data;
-
-  if ("lifecycle_state" in cond) {
-    return contact.lifecycleState === cond.lifecycle_state
-      ? { outcome: "pass" }
-      : { outcome: "fail" };
+  try {
+    const holds = await conditionHolds(parsed.data, contact, eventChecker, referenceSince, times);
+    return holds ? { outcome: "pass" } : { outcome: "fail" };
+  } catch (err) {
+    if (err instanceof UnsupportedCondition) {
+      return { outcome: "unknown_shape", message: `${err.message}: ${JSON.stringify(condition)}` };
+    }
+    throw err;
   }
-
-  if ("lifecycle_state_not" in cond) {
-    return contact.lifecycleState !== cond.lifecycle_state_not
-      ? { outcome: "pass" }
-      : { outcome: "fail" };
-  }
-
-  if ("event_since_step" in cond) {
-    const found = await eventChecker.hasEventSince(cond.event_since_step, referenceSince);
-    return found ? { outcome: "pass" } : { outcome: "fail" };
-  }
-
-  // TypeScript exhaustiveness check - should never reach here
-  return {
-    outcome: "unknown_shape",
-    message: `unrecognized condition shape: ${JSON.stringify(condition)}`,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -120,12 +196,14 @@ export async function evaluateStepCondition(
  * @param contact - Current contact state
  * @param eventChecker - Async event lookup
  * @param membershipEnteredAt - The time the membership was entered (for event lookups)
+ * @param times - Optional "now" for within_days windows
  */
 export async function evaluatePlanExitCondition(
   exitCondition: unknown,
   contact: ContactState,
   eventChecker: EventChecker,
   membershipEnteredAt: Date,
+  times: EvaluationTimes = {},
 ): Promise<ConditionResult> {
   if (
     exitCondition === null ||
@@ -136,6 +214,22 @@ export async function evaluatePlanExitCondition(
       outcome: "unknown_shape",
       message: `exit condition is not an object: ${JSON.stringify(exitCondition)}`,
     };
+  }
+
+  // { condition: <any condition from the vocabulary> }: judged from when the membership entered the flow
+  // (so "since the step" and "since the flow" mean the same here: there is no step yet).
+  if ("condition" in (exitCondition as Record<string, unknown>)) {
+    const parsed = planExitConditionSchema.safeParse(exitCondition);
+    if (!parsed.success || !("condition" in parsed.data)) {
+      return {
+        outcome: "unknown_shape",
+        message: `unrecognized exit condition shape: ${JSON.stringify(exitCondition)}`,
+      };
+    }
+    return evaluateStepCondition(parsed.data.condition, contact, eventChecker, membershipEnteredAt, {
+      ...times,
+      enteredAt: membershipEnteredAt,
+    });
   }
 
   const ec = exitCondition as Record<string, unknown>;

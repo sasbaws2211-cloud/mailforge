@@ -94,6 +94,8 @@ interface Scenario {
   noPlan?: boolean;
   flowStatus?: string;
   contactState?: string;
+  paymentStatus?: string;
+  properties?: Record<string, unknown>;
   currentStep?: number;
   enteredAgoMs?: number;
   conditionError?: string;
@@ -101,6 +103,8 @@ interface Scenario {
   events?: Array<[string, number]>;
   /** Messages already created for the membership, as [step order, ms ago]. */
   messages?: Array<[number, number]>;
+  /** What the membership must look like afterwards (checked on the scan's result; the targeted job must match it). */
+  expect?: { status: string; currentStep: number; messageOrders: number[] };
 }
 
 async function build(tenantId: string, sc: Scenario, now: number): Promise<string> {
@@ -110,6 +114,8 @@ async function build(tenantId: string, sc: Scenario, now: number): Promise<strin
       tenantId,
       externalId: "parity",
       lifecycleState: sc.contactState ?? "engaged",
+      ...(sc.paymentStatus !== undefined ? { paymentStatus: sc.paymentStatus } : {}),
+      ...(sc.properties !== undefined ? { properties: sc.properties } : {}),
       firstSeenAt: new Date(now - 60 * DAY),
       lastSeenAt: new Date(now - DAY),
     })
@@ -227,6 +233,23 @@ const scenarios: Scenario[] = [
   { name: "message already exists (crash before advancing): advances without a duplicate", steps: [step(1, "0m"), step(2, "1d")], messages: [[1, 60_000]] },
   { name: "an old condition error clears when the delay is not yet due", steps: [step(1, "3d")], enteredAgoMs: DAY, conditionError: "step 1 condition: stale" },
   { name: "an old condition error clears once the step succeeds", steps: [step(1, "0m")], conditionError: "step 1 condition: stale" },
+  // --- richer conditions -------------------------------------------------
+  { name: "payment status condition false: step skipped", steps: [step(1, "0m", { condition: { field: "payment_status", op: "is", value: "free" } }), step(2, "1d")], paymentStatus: "paid", expect: { status: "active", currentStep: 2, messageOrders: [] } },
+  { name: "payment status condition true: message created", steps: [step(1, "0m", { condition: { field: "payment_status", op: "is", value: "paid" } }), step(2, "1d")], paymentStatus: "paid", expect: { status: "active", currentStep: 2, messageOrders: [1] } },
+  { name: "plan trait condition", steps: [step(1, "0m", { condition: { field: "plan", op: "is", value: "pro" } })], properties: { plan: "Pro" }, expect: { status: "completed", currentStep: 1, messageOrders: [1] } },
+  { name: "custom trait greater-than condition false", steps: [step(1, "0m", { condition: { field: "trait", key: "seats", op: "gt", value: 50 } })], properties: { seats: 12 }, expect: { status: "completed", currentStep: 1, messageOrders: [] } },
+  { name: "not performed in 7 days, but it happened 3 days ago: skipped", steps: [step(1, "0m", { condition: { field: "event", name: "exported", op: "not_performed", within_days: 7 } })], events: [["exported", 3 * DAY]], expect: { status: "completed", currentStep: 1, messageOrders: [] } },
+  { name: "not performed in 7 days, last done 9 days ago: sends", steps: [step(1, "0m", { condition: { field: "event", name: "exported", op: "not_performed", within_days: 7 } })], events: [["exported", 9 * DAY]], expect: { status: "completed", currentStep: 1, messageOrders: [1] } },
+  { name: "performed at least 3 times, with 3: sends", steps: [step(1, "0m", { condition: { field: "event", name: "login", op: "performed", since: "flow", min_count: 3 } })], enteredAgoMs: 5 * DAY, events: [["login", DAY], ["login", 2 * DAY], ["login", 3 * DAY]], expect: { status: "completed", currentStep: 1, messageOrders: [1] } },
+  { name: "performed at least 3 times, with 2: skipped", steps: [step(1, "0m", { condition: { field: "event", name: "login", op: "performed", since: "flow", min_count: 3 } })], enteredAgoMs: 5 * DAY, events: [["login", DAY], ["login", 2 * DAY]], expect: { status: "completed", currentStep: 1, messageOrders: [] } },
+  { name: "events before entering the flow do not count for since-flow", steps: [step(1, "0m", { condition: { field: "event", name: "login", op: "performed", since: "flow" } })], enteredAgoMs: DAY, events: [["login", 5 * DAY]], expect: { status: "completed", currentStep: 1, messageOrders: [] } },
+  { name: "any group: one of two holds", steps: [step(1, "0m", { condition: { any: [{ field: "payment_status", op: "is", value: "free" }, { field: "plan", op: "is", value: "Pro" }] } })], paymentStatus: "paid", properties: { plan: "Pro" }, expect: { status: "completed", currentStep: 1, messageOrders: [1] } },
+  { name: "all group: one of two fails", steps: [step(1, "0m", { condition: { all: [{ field: "payment_status", op: "is", value: "paid" }, { field: "plan", op: "is", value: "Growth" }] } })], paymentStatus: "paid", properties: { plan: "Pro" }, expect: { status: "completed", currentStep: 1, messageOrders: [] } },
+  { name: "nested groups mixing fields and events", steps: [step(1, "0m", { condition: { all: [{ field: "payment_status", op: "is", value: "paid" }, { any: [{ field: "event", name: "a", op: "performed", since: "flow" }, { field: "event", name: "b", op: "performed", within_days: 2 }] }] } })], paymentStatus: "paid", events: [["b", HOUR]], expect: { status: "completed", currentStep: 1, messageOrders: [1] } },
+  { name: "step exit_condition on payment status: exits", steps: [step(1, "0m", { exit_condition: { field: "payment_status", op: "is", value: "cancelled" } })], paymentStatus: "cancelled", expect: { status: "exited", currentStep: 1, messageOrders: [] } },
+  { name: "plan exit { condition } on an event since entry: exits", steps: [step(1, "5d")], exitConditions: [{ condition: { field: "event", name: "upgraded", op: "performed", since: "flow" } }], events: [["upgraded", 10 * 60_000]], expect: { status: "exited", currentStep: 1, messageOrders: [] } },
+  { name: "plan exit { condition } not met: carries on", steps: [step(1, "0m")], exitConditions: [{ condition: { field: "payment_status", op: "is", value: "cancelled" } }], paymentStatus: "paid", expect: { status: "completed", currentStep: 1, messageOrders: [1] } },
+  { name: "event condition with no window is stuck with a recorded error", steps: [step(1, "0m", { condition: { field: "event", name: "x", op: "performed" } })] },
 ];
 
 describe("the scan and the targeted job advance a membership identically", () => {
@@ -234,5 +257,12 @@ describe("the scan and the targeted job advance a membership identically", () =>
     if (!dbAvailable) return;
     const { viaScan, viaTargeted } = await runBoth(sc);
     expect(viaTargeted).toEqual(viaScan);
+    if (sc.expect) {
+      expect({
+        status: viaScan.status,
+        currentStep: viaScan.currentStep,
+        messageOrders: viaScan.messages.map((m) => m.order),
+      }).toEqual(sc.expect);
+    }
   });
 });

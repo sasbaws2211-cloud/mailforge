@@ -54,6 +54,8 @@ import {
   wrapInShell,
   wrapInTextShell,
   audienceSchema,
+  conditionSchema,
+  planExitConditionSchema,
   readAudience,
   stripAudience,
   AUDIENCE_TRIGGER_TYPES,
@@ -775,7 +777,7 @@ ${note}`,
    * is set so the execution engine uses the deterministic template path.
    *
    * Body: { steps: Array<{ order, delay, action_type, window_policy, subject,
-   *         body_html, body_text? }>, exit_conditions?: [...] }
+   *         body_html, body_text?, condition?, exit_condition? }>, exit_conditions?: [...] }
    *
    * On success: creates templates, builds a compiled plan, sets
    * compile_status = "ready". The flow can then be activated.
@@ -796,11 +798,14 @@ ${note}`,
         subject: z.string().min(1, "Subject is required"),
         body_html: z.string().min(1, "Body HTML is required"),
         body_text: z.string().optional(),
+        // "Send only if..." and "stop the flow if...": see core's flow/condition.ts for what they can say.
+        condition: conditionSchema.optional(),
+        exit_condition: conditionSchema.optional(),
       });
 
       const planBodySchema = z.object({
         steps: z.array(stepContentSchema).min(1, "At least one step is required"),
-        exit_conditions: z.array(z.unknown()).optional(),
+        exit_conditions: z.array(planExitConditionSchema).max(10).optional(),
       });
 
       const parsed = planBodySchema.safeParse(request.body);
@@ -810,7 +815,11 @@ ${note}`,
           error: "Invalid plan data.",
           issues: parsed.error.issues.map((i) => ({
             path: i.path.join("."),
-            message: i.message,
+            // A condition that matches none of the known shapes arrives as zod's bare "Invalid input".
+            message:
+              i.message === "Invalid input" && /(^|\.)(condition|exit_condition|exit_conditions)(\.|$)/.test(i.path.join("."))
+                ? "not a condition the engine understands"
+                : i.message,
           })),
         };
       }
@@ -897,6 +906,8 @@ ${note}`,
           delay: s.delay,
           window_policy: s.window_policy,
           template_ref: `flow-${flowId}-step-${s.order}`,
+          ...(s.condition !== undefined ? { condition: s.condition } : {}),
+          ...(s.exit_condition !== undefined ? { exit_condition: s.exit_condition } : {}),
         })),
         ...(exit_conditions && exit_conditions.length > 0
           ? { exit_conditions }
@@ -930,6 +941,8 @@ ${note}`,
             delay: s.delay,
             window_policy: s.window_policy,
             template_ref: `flow-${flowId}-step-${s.order}`,
+            ...(s.condition !== undefined ? { condition: s.condition } : {}),
+            ...(s.exit_condition !== undefined ? { exit_condition: s.exit_condition } : {}),
           })),
           updatedAt: new Date(),
         })

@@ -69,7 +69,9 @@ import { Select } from "../components/ui/select.js";
 import { Textarea } from "../components/ui/textarea.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { TemplateEditorBySlug } from "../components/template-editor.js";
-import { StepWriter, buildPlanBody, type StepData } from "../components/step-writer.js";
+import { StepWriter, buildPlanWithConditions, type StepData } from "../components/step-writer.js";
+import { ConditionEditor } from "../components/condition-editor.js";
+import { describeCondition, emptyConditionState, type ConditionState } from "../conditions.js";
 import { PromptGuidance } from "../components/prompt-guidance.js";
 import { AudienceEditor } from "../components/audience-editor.js";
 import {
@@ -620,6 +622,8 @@ interface FormState {
   approval_mode: Flow["approval_mode"];
   content_mode: Flow["content_mode"];
   steps_data: StepData[];
+  /** "Stop the whole flow early if..." for a hand-written plan. */
+  plan_exit: ConditionState;
 }
 
 function defaultFormState(): FormState {
@@ -636,6 +640,7 @@ function defaultFormState(): FormState {
     approval_mode: "require",
     content_mode: "ai_drafted",
     steps_data: [],
+    plan_exit: emptyConditionState(),
   };
 }
 
@@ -654,6 +659,7 @@ function formStateFromFlow(flow: Flow): FormState {
     approval_mode: flow.approval_mode,
     content_mode: (flow.content_mode as Flow["content_mode"]) ?? "ai_drafted",
     steps_data: [],
+    plan_exit: emptyConditionState(),
   };
 }
 
@@ -768,7 +774,8 @@ function renderConditionClause(cond: unknown): React.ReactNode {
       <><code className="font-mono text-[13px]">{c.event_since_step}</code> happened since the previous step</>
     );
   }
-  return <code className="font-mono text-[13px]">{JSON.stringify(cond)}</code>;
+  // Payment status, plan, traits, events with a window, and all/any groups: plain English.
+  return <>{describeCondition(cond)}</>;
 }
 
 /**
@@ -778,6 +785,10 @@ function renderConditionClause(cond: unknown): React.ReactNode {
 function renderPlanExitCondition(cond: unknown): React.ReactNode {
   if (cond === null || typeof cond !== "object") return null;
   const c = cond as UnknownRecord;
+  // { condition }: any condition from the shared vocabulary, judged from when the contact entered the flow.
+  if ("condition" in c) {
+    return <>{describeCondition(c.condition)}</>;
+  }
   const parts: React.ReactNode[] = [];
   if (typeof c.event === "string") {
     parts.push(
@@ -1061,6 +1072,7 @@ export default function FlowEditorPage() {
   const [promptDirty, setPromptDirty] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [audienceErrors, setAudienceErrors] = useState<Record<string, string>>({});
+  const [conditionErrors, setConditionErrors] = useState<Record<string, string>>({});
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [compileError, setCompileError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState(false);
@@ -1238,6 +1250,7 @@ export default function FlowEditorPage() {
   function clearErrors() {
     setFieldErrors({});
     setAudienceErrors({});
+    setConditionErrors({});
     setBannerError(null);
     setSavedNotice(false);
   }
@@ -1325,8 +1338,15 @@ export default function FlowEditorPage() {
       return;
     }
 
+    const { body, errors } = buildPlanWithConditions(form.steps_data, form.plan_exit);
+    if (Object.keys(errors).length > 0) {
+      setConditionErrors(errors);
+      setBannerError("Fix the highlighted conditions, or remove them.");
+      return;
+    }
+
     try {
-      await savePlanMutation.mutateAsync(buildPlanBody(form.steps_data) as any);
+      await savePlanMutation.mutateAsync(body as any);
       setSavedNotice(true);
     } catch (err) {
       handleError(err);
@@ -1602,7 +1622,34 @@ export default function FlowEditorPage() {
         triggerType={form.trigger_type}
         triggerConfig={buildTriggerConfig(form.trigger_type, form)}
         flowName={form.name}
+        conditionErrors={conditionErrors}
+        eventSuggestions={eventNamesQuery.data ?? []}
       />
+
+      {/* Plan-level exit */}
+      {form.steps_data.length > 0 && (
+        <div className="mt-6 rounded-lg border border-border bg-card p-5">
+          <p className="text-[14px] font-medium text-foreground">
+            Stop the flow early <span className="font-normal text-muted-foreground">(optional)</span>
+          </p>
+          <p className="mb-4 mt-1 text-[13px] text-muted-foreground">
+            Checked each time the flow looks at a contact, before every email. If it holds, the contact leaves the
+            flow and nothing more is sent.
+          </p>
+          <ConditionEditor
+            state={form.plan_exit}
+            onChange={(plan_exit) => setField("plan_exit", plan_exit)}
+            errors={conditionErrors}
+            disabled={isPending || flowReadOnly}
+            firstLabel="Stop if"
+            addLabel="Add a stop condition"
+            emptyText="The flow runs to the end unless a step says otherwise."
+            eventSuggestions={eventNamesQuery.data ?? []}
+            allowStepWindow={false}
+            idPrefix="plan-exit"
+          />
+        </div>
+      )}
 
       {/* Save plan button */}
       {!isNew && !flowReadOnly && (

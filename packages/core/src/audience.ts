@@ -129,6 +129,11 @@ function asNumber(actual: unknown): number | null {
   return null;
 }
 
+/** Does one audience condition hold for this contact? (Used for conditions inside flows too.) */
+export function audienceConditionHolds(c: AudienceCondition, contact: AudienceContact): boolean {
+  return holds(c, contact);
+}
+
 function holds(c: AudienceCondition, contact: AudienceContact): boolean {
   switch (c.field) {
     case "payment_status": {

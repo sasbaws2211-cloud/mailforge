@@ -62,7 +62,35 @@ Rules that follow from this design:
 
 - Compilation and AI drafting need an LLM provider configured. Everything else does not.
 - The LLM never decides timing at send time. Delays, windows, and throttles are computed by the engine.
-- Conditions are a closed vocabulary: current lifecycle state is / is not X, and event Y has / has not happened since this step. Plans cannot contain arbitrary predicates.
+- Conditions are a closed vocabulary (below). Plans cannot contain arbitrary predicates.
+
+**Conditions inside a flow.** A step can carry a condition ("send this email only if...": false skips the step and the flow moves on) and an exit condition ("stop the whole flow instead if..."), and a plan can carry exits that are checked before every step. A condition is one check, or an `all` / `any` group of checks (nesting up to 3 deep, at most 10 checks in total):
+
+| Check | Examples |
+|---|---|
+| Lifecycle stage | is / is not `at_risk` |
+| Payment status, plan, engagement, has an email | `paid`, plan is `Pro`, engagement is not `minimal` |
+| A custom trait (any key you send in `identify`) | `seats` greater than 10, `country` is `Ghana`, `beta` is set |
+| Something they did | did / did not `exported_report`, in the last N days, since reaching this step, or since entering the flow; "did" can ask for at least N times |
+
+These are the same contact checks a trigger audience uses (see *Audience* above), plus lifecycle stage and events. In the flow editor, a hand-written step has a *Conditions (optional)* section and the flow has *Stop the flow early*. The same shapes through the API, on `POST /v1/flows/:id/plan`:
+
+```json
+{ "steps": [ { "order": 1, "delay": "0m", "action_type": "nurture_reactivate", "window_policy": "respect_window",
+    "subject": "...", "body_html": "...",
+    "condition": { "all": [
+      { "field": "payment_status", "op": "is", "value": "paid" },
+      { "field": "event", "name": "exported_report", "op": "not_performed", "within_days": 7 } ] } } ],
+  "exit_conditions": [ { "condition": { "field": "event", "name": "upgraded", "op": "performed", "since": "flow" } } ] }
+```
+
+Things to know:
+
+- **An event check needs a window.** Say `within_days` (back from now), `since: "step"` or `since: "flow"`. `since: "step"` has no meaning in a plan-level exit, where it counts from entering the flow.
+- **Checked when the step comes due**, not when the contact entered. Contact fields are read at that moment, so a contact who upgrades during a wait is judged on their plan then.
+- **A condition the engine cannot read does not guess.** The contact stays where they are and the reason is recorded on the membership (`condition_error`); it clears when the flow is fixed or recompiled. The API refuses to save one, so this only happens to hand-edited data.
+- **The three original shapes** (`lifecycle_state`, `lifecycle_state_not`, `event_since_step`) are unchanged and still valid anywhere a condition goes.
+- **Plain-English flows** use the same vocabulary: the AI is told these shapes when it compiles. It is told to use a custom trait only when your description names one.
 
 ## The approval queue
 
