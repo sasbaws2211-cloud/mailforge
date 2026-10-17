@@ -269,6 +269,18 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@22.20.1)(lightningcss@1.32.0)
 
+  packages/sdk-node:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1(@types/node@22.20.1)(lightningcss@1.32.0)
+
   packages/worker:
     dependencies:
       '@loomail/adapters':
