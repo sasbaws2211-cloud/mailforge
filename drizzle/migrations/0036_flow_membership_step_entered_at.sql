@@ -1,0 +1,1 @@
+ALTER TABLE "flow_memberships" ADD COLUMN "step_entered_at" timestamp with time zone;

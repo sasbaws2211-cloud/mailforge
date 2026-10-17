@@ -25,7 +25,12 @@ export const flowMemberships = pgTable(
     flowId: uuid("flow_id")
       .notNull()
       .references(() => flows.id),
+    // The node (email step or branch) the contact is at. A node's `order` is its id in the plan.
     currentStep: integer("current_step").notNull().default(1),
+    // When the contact arrived at current_step. Delays in a version 2 (branching) plan count from here.
+    // Null until the first move, and always null for straight-line plans, which count from the
+    // previous email instead (so nothing about existing flows changes).
+    stepEnteredAt: timestamp("step_entered_at", { withTimezone: true }),
     status: text("status").default("active").notNull(), // active|completed|exited|paused
     enteredAt: timestamp("entered_at", { withTimezone: true }).notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),

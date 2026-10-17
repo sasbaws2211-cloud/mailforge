@@ -70,6 +70,8 @@ export interface PhaseStepAdvancementResult {
   membershipsExitedArchived: number;
   membershipsSkippedPaused: number;
   membershipsStuckConditionError: number;
+  /** Branches taken in branching (version 2) plans. */
+  branchesTaken: number;
   staleCheckpointsDiscarded: number;
 }
 
@@ -102,6 +104,7 @@ export async function phaseStepAdvancement(
     membershipsExitedArchived: 0,
     membershipsSkippedPaused: 0,
     membershipsStuckConditionError: 0,
+    branchesTaken: 0,
     staleCheckpointsDiscarded: 0,
   };
 
@@ -140,6 +143,7 @@ export async function phaseStepAdvancement(
     stats.membershipsExitedArchived += tenantStats.membershipsExitedArchived;
     stats.membershipsSkippedPaused += tenantStats.membershipsSkippedPaused;
     stats.membershipsStuckConditionError += tenantStats.membershipsStuckConditionError;
+    stats.branchesTaken += tenantStats.branchesTaken;
     stats.staleCheckpointsDiscarded += tenantStats.staleCheckpointsDiscarded;
     stats.tenantsProcessed++;
   }
@@ -161,6 +165,8 @@ interface TenantStepResult {
   membershipsExitedArchived: number;
   membershipsSkippedPaused: number;
   membershipsStuckConditionError: number;
+  /** Branches taken in branching (version 2) plans. */
+  branchesTaken: number;
   staleCheckpointsDiscarded: number;
 }
 
@@ -179,6 +185,7 @@ async function processTenantStepAdvancement(
     membershipsExitedArchived: 0,
     membershipsSkippedPaused: 0,
     membershipsStuckConditionError: 0,
+    branchesTaken: 0,
     staleCheckpointsDiscarded: 0,
   };
 
@@ -259,6 +266,7 @@ async function processTenantStepAdvancement(
         currentStep: flowMemberships.currentStep,
         enteredAt: flowMemberships.enteredAt,
         conditionError: flowMemberships.conditionError,
+        stepEnteredAt: flowMemberships.stepEnteredAt,
       })
       .from(flowMemberships)
       .where(and(...whereConditions))
@@ -324,6 +332,7 @@ async function processTenantStepAdvancement(
 
 /** Turn what happened to one membership into this scan's counters. */
 function tally(stats: TenantStepResult, outcome: AdvanceOutcome): void {
+  stats.branchesTaken += outcome.branchHops ?? 0;
   switch (outcome.kind) {
     case "exited_archived":
       stats.membershipsExitedArchived++;
@@ -350,6 +359,9 @@ function tally(stats: TenantStepResult, outcome: AdvanceOutcome): void {
         if (outcome.completed) stats.membershipsCompleted++;
         else stats.stepsAdvanced++;
       }
+      break;
+    case "branch_taken":
+      if (outcome.completed) stats.membershipsCompleted++;
       break;
     case "skipped_no_contact":
     case "skipped_invalid_delay":

@@ -125,6 +125,7 @@ export {
   TEMPLATE_APPROVAL_MODES,
   compiledPlanSchema,
   compiledStepSchema,
+  compiledBranchSchema,
   compiledTriggerSchema,
   planExitConditionSchema,
   stepConditionSchema,
@@ -150,10 +151,25 @@ export {
   type TemplateApprovalMode,
   type CompiledPlan,
   type CompiledStep,
+  type CompiledBranch,
   type CompiledTrigger,
   type PlanExitCondition,
   type StepCondition,
 } from "./flow/index.js";
+
+export {
+  analyzePlanGraph,
+  defaultNext,
+  stepTarget,
+  isBranchingPlan,
+  nodeTargetSchema,
+  MAX_PLAN_NODES,
+  MAX_BRANCH_DEPTH,
+  type NodeTarget,
+  type GraphStep,
+  type GraphBranch,
+  type PlanGraphInput,
+} from "./flow/plan-graph.js";
 
 export {
   THROTTLE_DEFAULTS,

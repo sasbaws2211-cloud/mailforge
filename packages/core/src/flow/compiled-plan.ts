@@ -14,6 +14,7 @@
  */
 import { z } from "zod";
 import { conditionSchema } from "./condition.js";
+import { analyzePlanGraph, nodeTargetSchema } from "./plan-graph.js";
 
 // ---------------------------------------------------------------------------
 // Condition schemas (step-level)
@@ -48,6 +49,7 @@ export const stepConditionSchema = conditionSchema;
  *   - brain_instruction: natural-language instruction for brain.draft()
  *   - condition: proceed-if gate (step executes only when true; skipped otherwise)
  *   - exit_condition: per-step exit trigger (if true, contact exits the flow)
+ *   - next: (plan version 2 only) the order of the node to go to afterwards, or "end"
  */
 export const compiledStepSchema = z.object({
   order: z.number().int().min(1),
@@ -61,7 +63,29 @@ export const compiledStepSchema = z.object({
   brain_instruction: z.string().optional(),
   condition: stepConditionSchema.optional(),
   exit_condition: stepConditionSchema.optional(),
+  next: nodeTargetSchema.optional(),
 });
+
+// ---------------------------------------------------------------------------
+// Branch schema (plan version 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * A fork. It sends nothing: after `delay` (counted from when the contact arrived here) it checks `condition`
+ * and sends the contact to `then` if it holds, otherwise to `else`. Each is another node's order, or "end".
+ * Shares the `order` id space with email steps.
+ */
+export const compiledBranchSchema = z
+  .object({
+    order: z.number().int().min(1),
+    delay: z.string().regex(/^\d+(m|h|d)$/, {
+      message: "delay must match format: <int><m|h|d> (e.g. '0m', '3d')",
+    }),
+    condition: stepConditionSchema,
+    then: nodeTargetSchema,
+    else: nodeTargetSchema,
+  })
+  .strict();
 
 // ---------------------------------------------------------------------------
 // Exit condition schema (plan-level)
@@ -105,15 +129,26 @@ export const compiledTriggerSchema = z.object({
  * The top-level compiled plan stored in flows.compiled_plan.
  *
  * Structure:
+ *   - version: absent for a straight-line flow, 2 for one with branches
  *   - trigger: confirms the trigger type and condition from the prompt
  *   - steps: ordered array of execution steps (min 1)
+ *   - branches: (version 2) forks that choose the next node by a condition
  *   - exit_conditions: optional plan-level exit triggers
  */
-export const compiledPlanSchema = z.object({
-  trigger: compiledTriggerSchema,
-  steps: z.array(compiledStepSchema).min(1),
-  exit_conditions: z.array(planExitConditionSchema).optional(),
-});
+export const compiledPlanSchema = z
+  .object({
+    /** Absent: the original straight line. 2: may use `branches` and `next` (see ./plan-graph.ts). */
+    version: z.literal(2).optional(),
+    trigger: compiledTriggerSchema,
+    steps: z.array(compiledStepSchema).min(1),
+    branches: z.array(compiledBranchSchema).optional(),
+    exit_conditions: z.array(planExitConditionSchema).optional(),
+  })
+  .superRefine((plan, ctx) => {
+    for (const message of analyzePlanGraph(plan)) {
+      ctx.addIssue({ code: "custom", message });
+    }
+  });
 
 // ---------------------------------------------------------------------------
 // Exported types
@@ -121,6 +156,7 @@ export const compiledPlanSchema = z.object({
 
 export type CompiledPlan = z.infer<typeof compiledPlanSchema>;
 export type CompiledStep = z.infer<typeof compiledStepSchema>;
+export type CompiledBranch = z.infer<typeof compiledBranchSchema>;
 export type CompiledTrigger = z.infer<typeof compiledTriggerSchema>;
 export type PlanExitCondition = z.infer<typeof planExitConditionSchema>;
 export type StepCondition = z.infer<typeof stepConditionSchema>;

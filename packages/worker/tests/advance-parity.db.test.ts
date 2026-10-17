@@ -86,6 +86,15 @@ const step = (order: number, delay: string, extra: Record<string, unknown> = {})
   ...extra,
 });
 
+/** A fork in a branching plan. */
+const fork = (order: number, delay: string, condition: unknown, then: number | "end", otherwise: number | "end") => ({
+  order,
+  delay,
+  condition,
+  then,
+  else: otherwise,
+});
+
 interface Scenario {
   name: string;
   steps?: unknown[];
@@ -103,8 +112,12 @@ interface Scenario {
   events?: Array<[string, number]>;
   /** Messages already created for the membership, as [step order, ms ago]. */
   messages?: Array<[number, number]>;
+  /** A branching (version 2) plan: forks, and when the contact arrived at the current node. */
+  version?: 2;
+  branches?: unknown[];
+  stepEnteredAgoMs?: number;
   /** What the membership must look like afterwards (checked on the scan's result; the targeted job must match it). */
-  expect?: { status: string; currentStep: number; messageOrders: number[] };
+  expect?: { status: string; currentStep: number; messageOrders: number[]; stepEntered?: boolean; error?: RegExp };
 }
 
 async function build(tenantId: string, sc: Scenario, now: number): Promise<string> {
@@ -124,8 +137,10 @@ async function build(tenantId: string, sc: Scenario, now: number): Promise<strin
   const plan = sc.noPlan
     ? null
     : {
+        ...(sc.version ? { version: sc.version } : {}),
         trigger: { type: "lifecycle_transition", condition: {} },
         steps,
+        ...(sc.branches ? { branches: sc.branches } : {}),
         ...(sc.exitConditions ? { exit_conditions: sc.exitConditions } : {}),
       };
   const [flow] = await db
@@ -151,6 +166,7 @@ async function build(tenantId: string, sc: Scenario, now: number): Promise<strin
       currentStep: sc.currentStep ?? 1,
       status: "active",
       enteredAt: new Date(now - (sc.enteredAgoMs ?? HOUR)),
+      ...(sc.stepEnteredAgoMs !== undefined ? { stepEnteredAt: new Date(now - sc.stepEnteredAgoMs) } : {}),
       ...(sc.conditionError ? { conditionError: sc.conditionError } : {}),
     })
     .returning({ id: flowMemberships.id });
@@ -181,6 +197,7 @@ async function snapshot(membershipId: string) {
     currentStep: m!.currentStep,
     exitReason: m!.exitReason,
     conditionError: m!.conditionError,
+    stepEnteredSet: m!.stepEnteredAt !== null,
     completed: m!.completedAt !== null,
     exited: m!.exitedAt !== null,
     messages: msgs
@@ -250,6 +267,28 @@ const scenarios: Scenario[] = [
   { name: "plan exit { condition } on an event since entry: exits", steps: [step(1, "5d")], exitConditions: [{ condition: { field: "event", name: "upgraded", op: "performed", since: "flow" } }], events: [["upgraded", 10 * 60_000]], expect: { status: "exited", currentStep: 1, messageOrders: [] } },
   { name: "plan exit { condition } not met: carries on", steps: [step(1, "0m")], exitConditions: [{ condition: { field: "payment_status", op: "is", value: "cancelled" } }], paymentStatus: "paid", expect: { status: "completed", currentStep: 1, messageOrders: [1] } },
   { name: "event condition with no window is stuck with a recorded error", steps: [step(1, "0m", { condition: { field: "event", name: "x", op: "performed" } })] },
+  // --- branching plans (version 2) -------------------------------------
+  { name: "a fork first: the condition holds, so the contact goes down the then path and the email is sent in the same call", version: 2, branches: [fork(1, "0m", { field: "payment_status", op: "is", value: "paid" }, 2, 3)], steps: [step(2, "0m", { next: "end" }), step(3, "0m", { next: "end" })], paymentStatus: "paid", expect: { status: "completed", currentStep: 2, messageOrders: [2] } },
+  { name: "a fork first: the condition fails, so the else path", version: 2, branches: [fork(1, "0m", { field: "payment_status", op: "is", value: "paid" }, 2, 3)], steps: [step(2, "0m", { next: "end" }), step(3, "0m", { next: "end" })], paymentStatus: "free", expect: { status: "completed", currentStep: 3, messageOrders: [3] } },
+  { name: "a fork whose delay has not elapsed waits", version: 2, branches: [fork(1, "3d", { lifecycle_state: "engaged" }, 2, 3)], steps: [step(2, "0m", { next: "end" }), step(3, "0m", { next: "end" })], enteredAgoMs: DAY, expect: { status: "active", currentStep: 1, messageOrders: [], stepEntered: false } },
+  { name: "a fork whose delay has elapsed decides", version: 2, branches: [fork(1, "2d", { lifecycle_state: "engaged" }, 2, 3)], steps: [step(2, "0m", { next: "end" }), step(3, "0m", { next: "end" })], enteredAgoMs: 3 * DAY, expect: { status: "completed", currentStep: 2, messageOrders: [2] } },
+  { name: "a fork can send the contact straight to the end", version: 2, branches: [fork(1, "0m", { lifecycle_state: "engaged" }, "end", 2)], steps: [step(2, "0m", { next: "end" })], expect: { status: "completed", currentStep: 1, messageOrders: [] } },
+  { name: "an email's next pointer can jump over a step", version: 2, steps: [step(1, "0m", { next: 3 }), step(2, "0m"), step(3, "0m", { next: "end" })], expect: { status: "active", currentStep: 3, messageOrders: [1], stepEntered: true } },
+  { name: "an email skipped by its condition goes to its next, not to the following order", version: 2, steps: [step(1, "0m", { condition: { field: "payment_status", op: "is", value: "free" }, next: 3 }), step(2, "0m"), step(3, "0m", { next: "end" })], paymentStatus: "paid", expect: { status: "active", currentStep: 3, messageOrders: [], stepEntered: true } },
+  { name: "paths that rejoin: the email on one path leads to the shared step", version: 2, branches: [fork(1, "0m", { lifecycle_state: "engaged" }, 2, 3)], steps: [step(2, "0m", { next: 4 }), step(3, "0m", { next: 4 }), step(4, "0m", { next: "end" })], expect: { status: "active", currentStep: 4, messageOrders: [2], stepEntered: true } },
+  { name: "in a branching plan the delay counts from arriving at the step, not from the previous email: not due", version: 2, steps: [step(1, "0m", { next: 2 }), step(2, "2d", { next: "end" })], currentStep: 2, enteredAgoMs: 10 * DAY, stepEnteredAgoMs: DAY, expect: { status: "active", currentStep: 2, messageOrders: [] } },
+  { name: "in a branching plan the delay counts from arriving at the step: due", version: 2, steps: [step(1, "0m", { next: 2 }), step(2, "2d", { next: "end" })], currentStep: 2, enteredAgoMs: 10 * DAY, stepEnteredAgoMs: 3 * DAY, expect: { status: "completed", currentStep: 2, messageOrders: [2] } },
+  { name: "two forks back to back are both taken in one call", version: 2, branches: [fork(1, "0m", { field: "payment_status", op: "is", value: "paid" }, 2, 5), fork(2, "0m", { field: "plan", op: "is", value: "Pro" }, 3, 5)], steps: [step(3, "0m", { next: "end" }), step(5, "0m", { next: "end" })], paymentStatus: "paid", properties: { plan: "Pro" }, expect: { status: "completed", currentStep: 3, messageOrders: [3] } },
+  { name: "a fork that leads to a step that is not due yet stops there, recording the arrival", version: 2, branches: [fork(1, "0m", { lifecycle_state: "engaged" }, 2, 3)], steps: [step(2, "2d", { next: "end" }), step(3, "0m", { next: "end" })], expect: { status: "active", currentStep: 2, messageOrders: [], stepEntered: true } },
+  { name: "an event since this step on a fork counts from arrival: an older event does not count", version: 2, branches: [fork(2, "0m", { field: "event", name: "x", op: "performed", since: "step" }, 3, 4)], steps: [step(1, "0m", { next: 2 }), step(3, "0m", { next: "end" }), step(4, "0m", { next: "end" })], currentStep: 2, enteredAgoMs: 10 * DAY, stepEnteredAgoMs: DAY, events: [["x", 3 * DAY]], expect: { status: "completed", currentStep: 4, messageOrders: [4] } },
+  { name: "an event since this step on a fork counts from arrival: a newer event does", version: 2, branches: [fork(2, "0m", { field: "event", name: "x", op: "performed", since: "step" }, 3, 4)], steps: [step(1, "0m", { next: 2 }), step(3, "0m", { next: "end" }), step(4, "0m", { next: "end" })], currentStep: 2, enteredAgoMs: 10 * DAY, stepEnteredAgoMs: DAY, events: [["x", HOUR]], expect: { status: "completed", currentStep: 3, messageOrders: [3] } },
+  { name: "the plan-level exit still applies in a branching plan", version: 2, branches: [fork(1, "0m", { lifecycle_state: "engaged" }, 2, 3)], steps: [step(2, "0m", { next: "end" }), step(3, "0m", { next: "end" })], exitConditions: [{ condition: { field: "payment_status", op: "is", value: "cancelled" } }], paymentStatus: "cancelled", expect: { status: "exited", currentStep: 1, messageOrders: [] } },
+  { name: "a steps own exit_condition applies in a branching plan", version: 2, steps: [step(1, "0m", { exit_condition: { field: "payment_status", op: "is", value: "cancelled" }, next: "end" })], paymentStatus: "cancelled", expect: { status: "exited", currentStep: 1, messageOrders: [] } },
+  { name: "a message left by a crash is not duplicated; the contact moves on", version: 2, steps: [step(1, "0m", { next: 2 }), step(2, "1d", { next: "end" })], messages: [[1, 60_000]], expect: { status: "active", currentStep: 2, messageOrders: [1], stepEntered: true } },
+  { name: "an unreadable fork condition leaves the contact where they are, with the reason recorded", version: 2, branches: [fork(1, "0m", { favourite_colour: "red" }, 2, 3)], steps: [step(2, "0m", { next: "end" }), step(3, "0m", { next: "end" })], expect: { status: "active", currentStep: 1, messageOrders: [], error: /step 1 condition/ } },
+  { name: "a corrupt plan that loops stops after a fixed number of branches instead of spinning", version: 2, branches: [fork(1, "0m", { lifecycle_state: "engaged" }, 2, 2), fork(2, "0m", { lifecycle_state: "engaged" }, 1, 1)], steps: [step(3, "0m")], expect: { status: "active", currentStep: 2, messageOrders: [], error: /too many branches/ } },
+  { name: "a fork that points at a step the plan does not have completes the contact", version: 2, branches: [fork(1, "0m", { lifecycle_state: "engaged" }, 9, 9)], steps: [step(2, "0m")], expect: { status: "completed", currentStep: 9, messageOrders: [] } },
+  { name: "a straight-line plan never records an arrival time", steps: [step(1, "0m"), step(2, "1d")], expect: { status: "active", currentStep: 2, messageOrders: [1], stepEntered: false } },
 ];
 
 describe("the scan and the targeted job advance a membership identically", () => {
@@ -258,11 +297,14 @@ describe("the scan and the targeted job advance a membership identically", () =>
     const { viaScan, viaTargeted } = await runBoth(sc);
     expect(viaTargeted).toEqual(viaScan);
     if (sc.expect) {
+      const { stepEntered, error, ...shape } = sc.expect;
       expect({
         status: viaScan.status,
         currentStep: viaScan.currentStep,
         messageOrders: viaScan.messages.map((m) => m.order),
-      }).toEqual(sc.expect);
+      }).toEqual(shape);
+      if (stepEntered !== undefined) expect(viaScan.stepEnteredSet).toBe(stepEntered);
+      if (error) expect(viaScan.conditionError ?? "").toMatch(error);
     }
   });
 });

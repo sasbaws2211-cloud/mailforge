@@ -79,6 +79,7 @@ export async function handleAdvanceMembership(
       currentStep: flowMemberships.currentStep,
       enteredAt: flowMemberships.enteredAt,
       conditionError: flowMemberships.conditionError,
+      stepEnteredAt: flowMemberships.stepEnteredAt,
       status: flowMemberships.status,
     })
     .from(flowMemberships)
@@ -104,6 +105,11 @@ export async function handleAdvanceMembership(
       result.completed = true;
       break;
     case "step_skipped_by_condition":
+      if (outcome.completed) result.completed = true;
+      else result.advanced = true;
+      break;
+    case "branch_taken":
+      // A branching plan sent the contact on without an email, or to the end.
       if (outcome.completed) result.completed = true;
       else result.advanced = true;
       break;

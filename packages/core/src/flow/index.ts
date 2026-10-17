@@ -262,11 +262,13 @@ export const TEMPLATE_APPROVAL_MODES: readonly TemplateApprovalMode[] = [
 export {
   compiledPlanSchema,
   compiledStepSchema,
+  compiledBranchSchema,
   compiledTriggerSchema,
   planExitConditionSchema,
   stepConditionSchema,
   type CompiledPlan,
   type CompiledStep,
+  type CompiledBranch,
   type CompiledTrigger,
   type PlanExitCondition,
   type StepCondition,
@@ -282,3 +284,17 @@ export {
   type EventCondition,
   type LegacyCondition,
 } from "./condition.js";
+
+export {
+  analyzePlanGraph,
+  defaultNext,
+  stepTarget,
+  isBranchingPlan,
+  nodeTargetSchema,
+  MAX_PLAN_NODES,
+  MAX_BRANCH_DEPTH,
+  type NodeTarget,
+  type GraphStep,
+  type GraphBranch,
+  type PlanGraphInput,
+} from "./plan-graph.js";
