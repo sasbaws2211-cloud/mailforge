@@ -123,6 +123,8 @@ export interface Flow {
   reentry_policy: "once" | "cooldown" | "every_time";
   reentry_cooldown_days: number;
   prompt_source: string | null;
+  /** What success looks like for this flow, or null when it has no goal. */
+  goal: import("./goal.js").ApiGoal | null;
   compiled_plan: Record<string, unknown> | null;
   compiled_at: string | null;
   compile_status: "pending" | "ready" | "failed" | null;
@@ -205,6 +207,8 @@ export interface UpdateFlowInput {
   content_mode?: Flow["content_mode"];
   status?: Flow["status"];
   approval_mode?: Flow["approval_mode"];
+  /** Set, change, or (null) remove the flow's goal. Allowed at any time. */
+  goal?: import("./goal.js").ApiGoal | null;
 }
 
 function parseFlowError(status: number, body: unknown): FlowApiError {
@@ -1924,9 +1928,31 @@ export interface FlowStats {
   /** People currently moving through the flow. */
   in_flow: number;
   entered_total: number;
+  /** Whether the flow has a goal; the two numbers below mean nothing otherwise. */
+  has_goal: boolean;
+  entered_30d: number;
+  converted_30d: number;
   last_sent_at: string | null;
   health: FlowHealthState;
   health_note: string | null;
+}
+
+export interface FlowResults {
+  goal: import("./goal.js").ApiGoal | null;
+  range_days: number;
+  entered: number;
+  converted: number;
+  conversion_rate: number | null;
+  median_hours_to_convert: number | null;
+  /** For each email: how many people were sent it, and how many of them reached the goal. */
+  by_step: Array<{ step: number; sent: number; converted: number }>;
+}
+
+/** GET /v1/flows/:id/results - how the flow's goal is going for people who entered in the last `days` days. */
+export async function fetchFlowResults(id: string, days = 30): Promise<FlowResults> {
+  const res = await apiFetch(`/v1/flows/${id}/results?days=${days}`);
+  if (!res.ok) throw new Error(`/v1/flows/${id}/results returned ${res.status}`);
+  return (await res.json()) as FlowResults;
 }
 
 /** GET /v1/flows/stats - what each flow has done lately, keyed by flow id. */

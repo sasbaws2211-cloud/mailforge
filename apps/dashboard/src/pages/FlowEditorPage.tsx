@@ -86,6 +86,8 @@ import { describeSegment } from "../segment-rules.js";
 import { describeCondition, emptyConditionState, type ConditionState } from "../conditions.js";
 import { PromptGuidance } from "../components/prompt-guidance.js";
 import { AudienceEditor } from "../components/audience-editor.js";
+import { FlowGoalCard } from "../components/flow-goal-card.js";
+import type { ApiGoal } from "../goal.js";
 import {
   audienceToRows,
   describeAudience,
@@ -1540,6 +1542,16 @@ export default function FlowEditorPage() {
     }
   }
 
+  async function saveGoal(goal: ApiGoal | null): Promise<string | null> {
+    if (!existingFlow) return "The flow has not loaded yet.";
+    try {
+      await updateMutation.mutateAsync({ goal });
+      return null;
+    } catch (err) {
+      return toMessage(err);
+    }
+  }
+
   async function handleSavePlan() {
     if (!id) return;
     clearErrors();
@@ -2364,6 +2376,14 @@ export default function FlowEditorPage() {
               existingFlow.status !== "archived" && (
                 <AudienceCard flow={existingFlow} saving={updateMutation.isPending} onSave={saveAudience} />
               )}
+            {existingFlow && existingFlow.status !== "archived" && (
+              <FlowGoalCard
+                flow={existingFlow}
+                saving={updateMutation.isPending}
+                onSave={saveGoal}
+                eventSuggestions={eventNamesQuery.data ?? []}
+              />
+            )}
 
             <div className="mt-8">
               {isFixedContentEditor ? fixedContentSurface : aiSurface}

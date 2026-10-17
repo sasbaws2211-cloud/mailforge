@@ -408,3 +408,11 @@ export {
   type EmailShellInput,
   type TextShellInput,
 } from "./email-shell.js";
+
+export {
+  flowGoalSchema,
+  readFlowGoal,
+  GOAL_DEFAULT_WINDOW_DAYS,
+  GOAL_MAX_WINDOW_DAYS,
+  type FlowGoal,
+} from "./flow/goal.js";

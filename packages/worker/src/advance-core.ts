@@ -23,11 +23,13 @@
  */
 import { eq, and, gte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { contacts, events, flows, flowMemberships, lifecycleMessages } from "@loomail/db/schema";
+import { contacts, events, flows, flowMemberships, flowConversions, lifecycleMessages } from "@loomail/db/schema";
 import {
   parseDelay,
   delayToMs,
   stepTarget,
+  readFlowGoal,
+  type FlowGoal,
   type CompiledBranch,
   type CompiledStep,
   type NodeTarget,
@@ -63,6 +65,8 @@ export interface FlowPlanInfo {
   version: 1 | 2;
   /** Forks, for a version 2 plan. */
   branches: CompiledBranch[] | null;
+  /** The flow's goal, if it has one (flow-level configuration, not part of the compiled plan). */
+  goal?: FlowGoal | null;
 }
 
 /** What happened to the membership. Callers translate this into their own counters or result shape. */
@@ -137,7 +141,7 @@ export function extractBranches(compiledPlan: unknown): CompiledBranch[] | null 
 /** Load a flow's status and plan. A flow that no longer exists is treated as archived. */
 export async function loadFlowPlanInfo(db: Db, flowId: string): Promise<FlowPlanInfo> {
   const rows = await db
-    .select({ status: flows.status, compiledPlan: flows.compiledPlan })
+    .select({ status: flows.status, compiledPlan: flows.compiledPlan, goal: flows.goal })
     .from(flows)
     .where(eq(flows.id, flowId))
     .limit(1);
@@ -149,7 +153,104 @@ export async function loadFlowPlanInfo(db: Db, flowId: string): Promise<FlowPlan
     exitConditions: extractExitConditions(raw.compiledPlan),
     version: extractVersion(raw.compiledPlan),
     branches: extractBranches(raw.compiledPlan),
+    goal: readFlowGoal(raw.goal),
   };
+}
+
+/** Ways to ask "did this event happen since...?" about one contact. */
+export function eventCheckerFor(db: Db, contactId: string): EventChecker {
+  return {
+    async hasEventSince(eventName: string, since: Date): Promise<boolean> {
+      const found = await db
+        .select({ id: events.id })
+        .from(events)
+        .where(and(eq(events.contactId, contactId), eq(events.eventName, eventName), gte(events.timestamp, since)))
+        .limit(1);
+      return found.length > 0;
+    },
+    async countEventsSince(eventName: string, since: Date, limit: number): Promise<number> {
+      // Reads at most `limit` rows: "at least 3 times" never needs more than 3.
+      const found = await db
+        .select({ id: events.id })
+        .from(events)
+        .where(and(eq(events.contactId, contactId), eq(events.eventName, eventName), gte(events.timestamp, since)))
+        .limit(limit);
+      return found.length;
+    },
+  };
+}
+
+/**
+ * Did this membership reach the flow's goal? Used for people still in the flow (from advanceMembership) and for
+ * people who have left it but are still inside the goal window (from the goal scan).
+ *
+ *   window_over: the goal window has passed since entering; nothing is recorded.
+ *   already:     a conversion was recorded earlier.
+ *   converted:   the condition holds now; the conversion was just recorded (once, however many scans see it).
+ *   not_yet:     the condition does not hold.
+ *   error:       the stored condition cannot be read; nothing is recorded.
+ */
+export type GoalResult = "window_over" | "already" | "converted" | "not_yet" | "error";
+
+/**
+ * When the goal was actually reached, for the time-to-convert figure. For "did event X" (optionally "at least N
+ * times") that is the time of the Nth matching event, so a goal added to a flow that already has history, or a
+ * scan that runs late, still reports the real time. For any other condition it is not knowable after the fact, so
+ * it is `now` (the scan notices within about 15 minutes). Never before the contact entered, never after now.
+ */
+export async function goalReachedAt(db: Db, contactId: string, enteredAt: Date, condition: unknown, now: Date): Promise<Date> {
+  const c = (condition ?? {}) as Record<string, unknown>;
+  if (c.field === "event" && c.op === "performed" && typeof c.name === "string") {
+    const since = typeof c.within_days === "number" ? new Date(now.getTime() - c.within_days * 86_400_000) : enteredAt;
+    const nth = typeof c.min_count === "number" && c.min_count > 1 ? c.min_count - 1 : 0;
+    const rows = await db
+      .select({ at: events.timestamp })
+      .from(events)
+      .where(and(eq(events.contactId, contactId), eq(events.eventName, c.name), gte(events.timestamp, since)))
+      .orderBy(events.timestamp)
+      .limit(1)
+      .offset(nth);
+    const at = rows[0]?.at;
+    if (at) return at < enteredAt ? enteredAt : at > now ? now : at;
+  }
+  return now;
+}
+
+export async function checkGoal(
+  db: Db,
+  tenantId: string,
+  membership: { id: string; contactId: string; flowId: string; enteredAt: Date },
+  goal: FlowGoal,
+  contactState: ContactState,
+  eventChecker: EventChecker,
+  now: Date,
+): Promise<GoalResult> {
+  if (now.getTime() - membership.enteredAt.getTime() > goal.window_days * 86_400_000) return "window_over";
+  const existing = await db
+    .select({ id: flowConversions.id })
+    .from(flowConversions)
+    .where(eq(flowConversions.membershipId, membership.id))
+    .limit(1);
+  if (existing.length > 0) return "already";
+  const result = await evaluatePlanExitCondition({ condition: goal.condition }, contactState, eventChecker, membership.enteredAt, {
+    now,
+    enteredAt: membership.enteredAt,
+  });
+  if (result.outcome === "unknown_shape") return "error";
+  if (result.outcome !== "pass") return "not_yet";
+  const convertedAt = await goalReachedAt(db, membership.contactId, membership.enteredAt, goal.condition, now);
+  await db
+    .insert(flowConversions)
+    .values({
+      tenantId,
+      flowId: membership.flowId,
+      contactId: membership.contactId,
+      membershipId: membership.id,
+      goalName: goal.name,
+      convertedAt,
+    })
+    .onConflictDoNothing();
+  return "converted";
 }
 
 export async function advanceMembership(
@@ -203,37 +304,7 @@ export async function advanceMembership(
     return { kind: "skipped_no_contact" };
   }
   const contactState: ContactState = contactRow[0]!;
-  const eventChecker: EventChecker = {
-    async hasEventSince(eventName: string, since: Date): Promise<boolean> {
-      const found = await db
-        .select({ id: events.id })
-        .from(events)
-        .where(
-          and(
-            eq(events.contactId, membership.contactId),
-            eq(events.eventName, eventName),
-            gte(events.timestamp, since),
-          ),
-        )
-        .limit(1);
-      return found.length > 0;
-    },
-    async countEventsSince(eventName: string, since: Date, limit: number): Promise<number> {
-      // Reads at most `limit` rows: "at least 3 times" never needs more than 3.
-      const found = await db
-        .select({ id: events.id })
-        .from(events)
-        .where(
-          and(
-            eq(events.contactId, membership.contactId),
-            eq(events.eventName, eventName),
-            gte(events.timestamp, since),
-          ),
-        )
-        .limit(limit);
-      return found.length;
-    },
-  };
+  const eventChecker: EventChecker = eventCheckerFor(db, membership.contactId);
   const times = { now, enteredAt: membership.enteredAt };
 
   // Plan-level exit conditions come before any step logic.
@@ -257,6 +328,18 @@ export async function advanceMembership(
     }
     if (exitFired) {
       await exitMembership();
+      return { kind: "exited_condition" };
+    }
+  }
+
+  // The flow's goal: record the conversion, and leave the flow if it is set to.
+  if (flow.goal) {
+    const reached = await checkGoal(db, tenantId, membership, flow.goal, contactState, eventChecker, now);
+    if ((reached === "converted" || reached === "already") && flow.goal.exit_on_conversion) {
+      await db
+        .update(flowMemberships)
+        .set({ status: "exited", exitedAt: now, exitReason: "goal_reached", ...clearError })
+        .where(and(eq(flowMemberships.id, membership.id), eq(flowMemberships.status, "active")));
       return { kind: "exited_condition" };
     }
   }

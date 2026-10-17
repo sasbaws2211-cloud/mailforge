@@ -91,6 +91,16 @@ vi.mock("../src/scan-step-advancement.js", () => ({
   })),
 }));
 
+// Mock scan-goal-conversions module to avoid DB calls in unit tests
+vi.mock("../src/scan-goal-conversions.js", () => ({
+  phaseGoalConversions: vi.fn(async () => ({
+    flowsEvaluated: 0,
+    membershipsChecked: 0,
+    conversionsRecorded: 0,
+    flowsCapped: 0,
+  })),
+}));
+
 // Mock scan-engagement-depth module to avoid DB calls in unit tests
 vi.mock("../src/scan-engagement-depth.js", () => ({
   phaseEngagementDepth: vi.fn(async () => ({

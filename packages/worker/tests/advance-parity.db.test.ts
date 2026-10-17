@@ -13,7 +13,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
-import { tenants, contacts, events, flows, flowMemberships, lifecycleMessages } from "@loomail/db/schema";
+import { tenants, contacts, events, flows, flowMemberships, flowConversions, lifecycleMessages } from "@loomail/db/schema";
 import { phaseStepAdvancement } from "../src/scan-step-advancement.js";
 import { handleAdvanceMembership } from "../src/advance-membership.js";
 
@@ -32,7 +32,7 @@ let scanTenant: string;
 let targetedTenant: string;
 
 async function cleanup() {
-  for (const table of ["lifecycle_messages", "flow_memberships", "flows", "events", "lifecycle_transitions", "contacts", "scan_checkpoints"]) {
+  for (const table of ["flow_conversions", "lifecycle_messages", "flow_memberships", "flows", "events", "lifecycle_transitions", "contacts", "scan_checkpoints"]) {
     await db.execute(
       sql.raw(`DELETE FROM ${table} WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN ('${SLUG_SCAN}', '${SLUG_TARGETED}'))`),
     );
@@ -60,7 +60,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   if (!dbAvailable) return;
   for (const t of [scanTenant, targetedTenant]) {
-    for (const table of ["lifecycle_messages", "flow_memberships", "flows", "events", "lifecycle_transitions", "contacts", "scan_checkpoints"]) {
+    for (const table of ["flow_conversions", "lifecycle_messages", "flow_memberships", "flows", "events", "lifecycle_transitions", "contacts", "scan_checkpoints"]) {
       await db.execute(sql.raw(`DELETE FROM ${table} WHERE tenant_id = '${t}'`));
     }
   }
@@ -121,9 +121,11 @@ interface Scenario {
   /** A branching (version 2) plan: forks, and when the contact arrived at the current node. */
   version?: 2;
   branches?: unknown[];
+  /** The flow's goal (flow-level, not part of the plan). */
+  goal?: unknown;
   stepEnteredAgoMs?: number;
   /** What the membership must look like afterwards (checked on the scan's result; the targeted job must match it). */
-  expect?: { status: string; currentStep: number; messageOrders: number[]; stepEntered?: boolean; error?: RegExp };
+  expect?: { status: string; currentStep: number; messageOrders: number[]; stepEntered?: boolean; error?: RegExp; converted?: boolean; exitReason?: string };
 }
 
 async function build(tenantId: string, sc: Scenario, now: number): Promise<string> {
@@ -161,6 +163,7 @@ async function build(tenantId: string, sc: Scenario, now: number): Promise<strin
       compileStatus: plan ? "ready" : null,
       compiledPlan: plan,
       approvalMode: "require",
+      ...(sc.goal !== undefined ? { goal: sc.goal } : {}),
     })
     .returning({ id: flows.id });
   const [membership] = await db
@@ -198,7 +201,9 @@ async function build(tenantId: string, sc: Scenario, now: number): Promise<strin
 async function snapshot(membershipId: string) {
   const [m] = await db.select().from(flowMemberships).where(eq(flowMemberships.id, membershipId));
   const msgs = await db.select().from(lifecycleMessages).where(eq(lifecycleMessages.membershipId, membershipId));
+  const conversions = await db.select().from(flowConversions).where(eq(flowConversions.membershipId, membershipId));
   return {
+    conversions: conversions.map((c) => c.goalName),
     status: m!.status,
     currentStep: m!.currentStep,
     exitReason: m!.exitReason,
@@ -304,6 +309,15 @@ const scenarios: Scenario[] = [
   { name: "a corrupt plan that loops stops after a fixed number of branches instead of spinning", version: 2, branches: [fork(1, "0m", { lifecycle_state: "engaged" }, 2, 2), fork(2, "0m", { lifecycle_state: "engaged" }, 1, 1)], steps: [step(3, "0m")], expect: { status: "active", currentStep: 2, messageOrders: [], error: /too many branches/ } },
   { name: "a fork that points at a step the plan does not have completes the contact", version: 2, branches: [fork(1, "0m", { lifecycle_state: "engaged" }, 9, 9)], steps: [step(2, "0m")], expect: { status: "completed", currentStep: 9, messageOrders: [] } },
   { name: "a straight-line plan never records an arrival time", steps: [step(1, "0m"), step(2, "1d")], expect: { status: "active", currentStep: 2, messageOrders: [1], stepEntered: false } },
+  // Goals: a conversion is recorded once, and the contact leaves the flow if the goal says so.
+  { name: "goal: reached while in the flow records a conversion and exits with reason goal_reached", steps: [step(1, "1d"), step(2, "2d")], enteredAgoMs: HOUR, events: [["project_created", 10 * 60_000]], goal: {"name": "Created a project", "condition": {"field": "event", "name": "project_created", "op": "performed", "since": "flow"}, "window_days": 30, "exit_on_conversion": true}, expect: { status: "exited", currentStep: 1, messageOrders: [], converted: true, exitReason: "goal_reached" } },
+  { name: "goal: not reached, nothing recorded and the flow carries on", steps: [step(1, "0m"), step(2, "2d")], goal: {"name": "Created a project", "condition": {"field": "event", "name": "project_created", "op": "performed", "since": "flow"}, "window_days": 30, "exit_on_conversion": true}, expect: { status: "active", currentStep: 2, messageOrders: [1], converted: false } },
+  { name: "goal: reached but exit_on_conversion is off, so recorded and the flow carries on", steps: [step(1, "0m"), step(2, "2d")], events: [["project_created", 10 * 60_000]], goal: {"name": "Created a project", "condition": {"field": "event", "name": "project_created", "op": "performed", "since": "flow"}, "window_days": 30, "exit_on_conversion": false}, expect: { status: "active", currentStep: 2, messageOrders: [1], converted: true } },
+  { name: "goal: reached after the window has passed is not a conversion", steps: [step(1, "0m"), step(2, "2d")], enteredAgoMs: 40 * DAY, events: [["project_created", DAY]], goal: {"name": "Created a project", "condition": {"field": "event", "name": "project_created", "op": "performed", "since": "flow"}, "window_days": 30, "exit_on_conversion": true}, expect: { status: "active", currentStep: 2, messageOrders: [1], converted: false } },
+  { name: "goal: an event from before the contact entered does not count", steps: [step(1, "0m"), step(2, "2d")], enteredAgoMs: DAY, events: [["project_created", 3 * DAY]], goal: {"name": "Created a project", "condition": {"field": "event", "name": "project_created", "op": "performed", "since": "flow"}, "window_days": 30, "exit_on_conversion": true}, expect: { status: "active", currentStep: 2, messageOrders: [1], converted: false } },
+  { name: "goal: a contact fact works as the goal", steps: [step(1, "1d")], paymentStatus: "paid", goal: {"name": "Became paid", "condition": {"field": "payment_status", "op": "is", "value": "paid"}, "window_days": 30, "exit_on_conversion": true}, expect: { status: "exited", currentStep: 1, messageOrders: [], converted: true, exitReason: "goal_reached" } },
+  { name: "goal: a stored goal that cannot be read is ignored, not fatal", steps: [step(1, "0m"), step(2, "2d")], goal: { name: "", condition: { nope: 1 } }, expect: { status: "active", currentStep: 2, messageOrders: [1], converted: false } },
+  { name: "goal: reached in a branching plan exits before the fork is decided", version: 2, branches: [fork(1, "0m", { lifecycle_state: "engaged" }, 2, 3)], steps: [step(2, "0m", { next: "end" }), step(3, "0m", { next: "end" })], events: [["project_created", 10 * 60_000]], goal: {"name": "Created a project", "condition": {"field": "event", "name": "project_created", "op": "performed", "since": "flow"}, "window_days": 30, "exit_on_conversion": true}, expect: { status: "exited", currentStep: 1, messageOrders: [], converted: true, exitReason: "goal_reached" } },
 ];
 
 describe("the scan and the targeted job advance a membership identically", () => {
@@ -312,7 +326,7 @@ describe("the scan and the targeted job advance a membership identically", () =>
     const { viaScan, viaTargeted } = await runBoth(sc);
     expect(viaTargeted).toEqual(viaScan);
     if (sc.expect) {
-      const { stepEntered, error, ...shape } = sc.expect;
+      const { stepEntered, error, converted, exitReason, ...shape } = sc.expect;
       expect({
         status: viaScan.status,
         currentStep: viaScan.currentStep,
@@ -320,6 +334,8 @@ describe("the scan and the targeted job advance a membership identically", () =>
       }).toEqual(shape);
       if (stepEntered !== undefined) expect(viaScan.stepEnteredSet).toBe(stepEntered);
       if (error) expect(viaScan.conditionError ?? "").toMatch(error);
+      if (converted !== undefined) expect(viaScan.conversions.length).toBe(converted ? 1 : 0);
+      if (exitReason !== undefined) expect(viaScan.exitReason).toBe(exitReason);
     }
   });
 });

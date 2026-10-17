@@ -153,6 +153,35 @@ A split can also **wait for an event instead of waiting a fixed time.** In the e
 
 The API accepts more shapes than the editor builds: paths may rejoin (two emails can both lead to a shared one), and a step can jump over others with `next`. The plan preview shows these as "Continues at step N". The editor itself only builds the tree shape above.
 
+## Goals: did the flow work?
+
+A **goal** says what success looks like for a flow, so Loomail can tell you how many people who entered it got there. Set it on any flow, from the *Goal* card on the flow page. It can be changed at any time, even on an active flow, with no recompile.
+
+> Flow: "Welcome". **Goal: Created a project**, counted if it happens within 30 days of entering.
+
+A goal has a name, a condition (the same vocabulary as everywhere else: an event, a contact fact, a lifecycle stage, or all-of / any-of), a window of 1 to 90 days (default 30), and a choice of whether to **leave the flow** when it is reached (default yes, so someone who already succeeded is not sent "Stuck? Here is a quick guide").
+
+What you see on the flow page and in the Flows list:
+
+- **Entered**, **reached the goal**, the **conversion rate**, and the **typical time** to get there (the median), for people who entered in the last 30 days.
+- **Per email:** how many people were sent each email, and how many of those reached the goal.
+
+How it works, and what it does not tell you:
+
+- **Checked on the 15-minute scan.** People still in the flow are checked as they move through it. People who already finished or left are still checked until their window ends, so "converted a week after the last email" counts. A conversion is recorded once per person per entry.
+- **Use "since entering the flow" for events.** Otherwise something that happened before they joined can count. A fact like "payment status is paid" also counts people who were already paid when they joined.
+- **It shows who got there after joining, not that the emails caused it.** Proving cause needs a holdout group (a share of people deliberately left out), which Loomail does not offer yet.
+- **Changing a goal changes the future, not the past.** Conversions already recorded keep the goal name they had. Removing the goal stops new conversions but keeps the history.
+- **The older plan-level exit condition** still works unchanged. A goal with "leave the flow" does the same job and also counts the result, so for new flows prefer a goal.
+- **Plain-English flows:** the AI does not write goals. Set the goal on the flow page after it is created.
+- **Through the API:** `goal` on `POST` and `PATCH /v1/flows` (`null` removes it), `GET /v1/flows/:id/results?days=30` for the numbers, and `entered_30d`, `converted_30d` and `has_goal` in `GET /v1/flows/stats`.
+
+```json
+{ "goal": { "name": "Created a project",
+            "condition": { "field": "event", "name": "project_created", "op": "performed", "since": "flow" },
+            "window_days": 30, "exit_on_conversion": true } }
+```
+
 ## The approval queue
 
 AI-drafted flows default to `approval_mode: require`: every generated message waits in **Approvals** until a human approves or rejects it. This is the trust mechanism. The AI writes, you publish.

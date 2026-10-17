@@ -26,6 +26,8 @@ export const flows = pgTable("flows", {
   flowClass: text("flow_class").default("nurture").notNull(), // [v2] critical|nurture
   reentryPolicy: text("reentry_policy").default("cooldown").notNull(), // [v2] once|cooldown|every_time
   reentryCooldownDays: integer("reentry_cooldown_days").default(30), // [v2]
+  // What success looks like for this flow: { name, condition, window_days, exit_on_conversion }, or null for none.
+  goal: jsonb("goal"),
   promptSource: text("prompt_source"), // original natural language prompt
   compiledPlan: jsonb("compiled_plan"), // deterministic execution plan
   compiledAt: timestamp("compiled_at", { withTimezone: true }),

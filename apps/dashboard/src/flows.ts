@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   fetchFlows,
   fetchFlowStats,
+  fetchFlowResults,
   fetchFlow,
   fetchEventNames,
   createFlow,
@@ -36,6 +37,16 @@ export function useFlowStats() {
     queryFn: fetchFlowStats,
     staleTime: 30_000,
     refetchInterval: 60_000,
+  });
+}
+
+/** How a flow's goal is going (conversions, rate, time to convert, per email). Refreshed when the page is opened. */
+export function useFlowResults(id: string | undefined, days = 30, enabled = true) {
+  return useQuery({
+    queryKey: [...FLOWS_QUERY_KEY, "results", id, days] as const,
+    queryFn: () => fetchFlowResults(id!, days),
+    enabled: enabled && !!id,
+    staleTime: 30_000,
   });
 }
 

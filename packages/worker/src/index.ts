@@ -30,6 +30,7 @@ import { phaseTimeTransitions } from "./scan-time-transitions.js";
 import { phaseEnrollment } from "./scan-enrollment.js";
 import { phaseSegmentEnrollment } from "./scan-segment-enrollment.js";
 import { phaseStepAdvancement } from "./scan-step-advancement.js";
+import { phaseGoalConversions } from "./scan-goal-conversions.js";
 import { phaseEngagementDepth } from "./scan-engagement-depth.js";
 import { handleTriggerCheck } from "./trigger-check.js";
 import { processDrainTick, fetchDrainBatchSimple, type FetchDrainBatch } from "./drain.js";
@@ -81,6 +82,7 @@ export type { ContentTickResult, ContentCandidate, ContentOutcome } from "./cont
 export { handleTriggerCheck } from "./trigger-check.js";
 export type { TriggerCheckResult } from "./trigger-check.js";
 export { phaseStepAdvancement } from "./scan-step-advancement.js";
+export { phaseGoalConversions } from "./scan-goal-conversions.js";
 export type { PhaseStepAdvancementResult } from "./scan-step-advancement.js";
 export { handleAdvanceMembership } from "./advance-membership.js";
 export type { AdvanceMembershipResult } from "./advance-membership.js";
@@ -226,6 +228,15 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
           `${phase3.membershipsCompleted} completed, ` +
           `${phase3.membershipsExitedArchived} exited (archived)`,
       );
+
+      // Phase 3b: goal conversions for people who already left their flows but are still inside the goal window.
+      const phase3b = await phaseGoalConversions(db, now);
+      if (phase3b.flowsEvaluated > 0) {
+        console.log(
+          `[scan] goal-conversions: ${phase3b.flowsEvaluated} flows, ${phase3b.membershipsChecked} checked, ` +
+            `${phase3b.conversionsRecorded} conversions`,
+        );
+      }
 
       // Phase 4: engagement_depth computation for engaged contacts.
       // Runs unconditionally every tick (one aggregate query per tenant).

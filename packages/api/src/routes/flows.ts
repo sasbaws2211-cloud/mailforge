@@ -54,6 +54,8 @@ import {
   wrapInShell,
   wrapInTextShell,
   audienceSchema,
+  flowGoalSchema,
+  readFlowGoal,
   savedSegmentTriggerSchema,
   conditionSchema,
   compiledBranchSchema,
@@ -119,6 +121,8 @@ const createFlowSchema = z.object({
     .optional(),
   reentry_cooldown_days: z.number().int().min(1).optional(),
   prompt_source: z.string().optional(),
+  /** What success looks like for the flow; null removes it. Changeable any time, no recompile. */
+  goal: flowGoalSchema.nullable().optional(),
 });
 
 // Update: all create fields optional, plus status
@@ -270,6 +274,7 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
         reentryPolicy: body.reentry_policy ?? "cooldown",
         reentryCooldownDays: body.reentry_cooldown_days ?? 30,
         promptSource: body.prompt_source ?? null,
+        goal: body.goal ?? null,
         compiledPlan: null,
         compiledAt: null,
       })
@@ -453,8 +458,18 @@ ${note}`,
       FROM flow_memberships
       WHERE tenant_id = ${tenantId}::uuid
       GROUP BY flow_id`);
+    // Conversions: of the people who entered in the last 30 days, how many reached the goal.
+    const conv = await db.execute<{ flow_id: string; entered30: number; converted30: number }>(sql`
+      SELECT m.flow_id,
+             count(*)::int AS entered30,
+             count(c.id)::int AS converted30
+      FROM flow_memberships m
+      LEFT JOIN flow_conversions c ON c.membership_id = m.id
+      WHERE m.tenant_id = ${tenantId}::uuid AND m.entered_at >= now() - interval '30 days'
+      GROUP BY m.flow_id`);
+    const cBy = new Map(conv.rows.map((r) => [r.flow_id, r]));
     const flowRows = await db
-      .select({ id: flows.id, status: flows.status, createdAt: flows.createdAt, updatedAt: flows.updatedAt })
+      .select({ id: flows.id, status: flows.status, createdAt: flows.createdAt, updatedAt: flows.updatedAt, goal: flows.goal })
       .from(flows)
       .where(and(eq(flows.tenantId, tenantId), ne(flows.status, "archived")));
 
@@ -482,6 +497,10 @@ ${note}`,
         complained_30d: m?.complained30 ?? 0,
         in_flow: p?.active ?? 0,
         entered_total: p?.total ?? 0,
+        // Only meaningful for a flow with a goal; the list shows it only then.
+        has_goal: readFlowGoal(f.goal) !== null,
+        entered_30d: cBy.get(f.id)?.entered30 ?? 0,
+        converted_30d: cBy.get(f.id)?.converted30 ?? 0,
         last_sent_at: m?.last_sent_at ? new Date(m.last_sent_at).toISOString() : null,
         health: health.state,
         health_note: health.note,
@@ -489,6 +508,65 @@ ${note}`,
     }
     return { stats };
   });
+
+  /**
+   * GET /v1/flows/:id/results?days=30
+   * How the flow's goal is going, for people who entered in the last `days` (1-365, default 30):
+   * who entered, who reached the goal, how long it took (median), and, for each email, how many people were
+   * sent it and how many of them converted. Counts people who converted after entering; it does not prove the
+   * flow caused it. `goal` is null when the flow has none (the numbers are then zero).
+   */
+  app.get<{ Params: { id: string }; Querystring: { days?: string } }>(
+    "/:id/results",
+    { config: { minRole: "member" } },
+    async (request, reply) => {
+      const db: Db = request.server.db;
+      const tenantId = request.tenant!.id;
+      const idOk = z.string().uuid().safeParse(request.params.id);
+      const daysParsed = z.coerce.number().int().min(1).max(365).default(30).safeParse(request.query.days);
+      if (!idOk.success || !daysParsed.success) {
+        reply.status(400);
+        return { error: "Invalid request.", issues: [...(idOk.success ? [] : [{ path: "id", message: "must be a uuid" }]), ...(daysParsed.success ? [] : [{ path: "days", message: "must be a whole number from 1 to 365" }])] };
+      }
+      const days = daysParsed.data;
+      const flow = (await db.select({ id: flows.id, goal: flows.goal }).from(flows).where(and(eq(flows.id, idOk.data), eq(flows.tenantId, tenantId))).limit(1))[0];
+      if (!flow) {
+        reply.status(404);
+        return { error: "Flow not found." };
+      }
+      const since = new Date(Date.now() - days * 86_400_000);
+      const totals = await db.execute<{ entered: number; converted: number; median_seconds: number | null }>(sql`
+        SELECT count(*)::int AS entered,
+               count(c.id)::int AS converted,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM (c.converted_at - m.entered_at)))
+                 FILTER (WHERE c.id IS NOT NULL) AS median_seconds
+        FROM flow_memberships m
+        LEFT JOIN flow_conversions c ON c.membership_id = m.id
+        WHERE m.tenant_id = ${tenantId}::uuid AND m.flow_id = ${flow.id}::uuid AND m.entered_at >= ${since}`);
+      const steps = await db.execute<{ step: number; sent: number; converted: number }>(sql`
+        SELECT lm.flow_step_order AS step,
+               count(DISTINCT lm.membership_id)::int AS sent,
+               count(DISTINCT c.membership_id)::int AS converted
+        FROM lifecycle_messages lm
+        JOIN flow_memberships m ON m.id = lm.membership_id
+        LEFT JOIN flow_conversions c ON c.membership_id = lm.membership_id
+        WHERE lm.tenant_id = ${tenantId}::uuid AND lm.flow_id = ${flow.id}::uuid
+          AND lm.sent_at IS NOT NULL AND lm.flow_step_order IS NOT NULL AND m.entered_at >= ${since}
+        GROUP BY lm.flow_step_order
+        ORDER BY lm.flow_step_order`);
+      const t = totals.rows[0] ?? { entered: 0, converted: 0, median_seconds: null };
+      const median = t.median_seconds === null || t.median_seconds === undefined ? null : Number(t.median_seconds);
+      return {
+        goal: readFlowGoal(flow.goal),
+        range_days: days,
+        entered: t.entered,
+        converted: t.converted,
+        conversion_rate: t.entered > 0 ? t.converted / t.entered : null,
+        median_hours_to_convert: median === null ? null : Math.round((median / 3600) * 10) / 10,
+        by_step: steps.rows.map((r) => ({ step: r.step, sent: r.sent, converted: r.converted })),
+      };
+    },
+  );
 
   /**
    * GET /v1/flows/:id
@@ -632,6 +710,7 @@ ${note}`,
         setClauses.reentryCooldownDays = body.reentry_cooldown_days;
       }
       if (body.status !== undefined)            setClauses.status = body.status;
+      if (body.goal !== undefined)              setClauses.goal = body.goal;
 
       // prompt_source: update and clear stale compiled_plan/compiled_at
       if (
@@ -1149,6 +1228,7 @@ function serializeFlow(row: typeof flows.$inferSelect) {
     reentry_policy: row.reentryPolicy,
     reentry_cooldown_days: row.reentryCooldownDays,
     prompt_source: row.promptSource,
+    goal: readFlowGoal(row.goal),
     compiled_plan: row.compiledPlan,
     compiled_at: row.compiledAt,
     compile_status: row.compileStatus,

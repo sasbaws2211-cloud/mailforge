@@ -22,6 +22,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Plus, Workflow } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useFlows, useFlowStats, FLOWS_QUERY_KEY } from "../flows.js";
+import { formatRate } from "../goal.js";
 import { updateFlow, type Flow, type FlowApiError, type FlowHealthState, type FlowStats } from "../api.js";
 import { SetupStrip } from "../components/setup-strip.js";
 import { StarterPacks } from "../components/starter-packs.js";
@@ -91,6 +92,12 @@ function StatsCell({ stats }: { stats: FlowStats | undefined }) {
       <span className="font-medium text-foreground tabular-nums">{stats.sent_30d.toLocaleString("en-US")}</span>
       <span className="text-muted-foreground"> sent</span>
       <span className="text-muted-foreground"> &middot; {pct(stats.opened_30d, stats.sent_30d)} opened</span>
+      {stats.has_goal && stats.entered_30d > 0 && (
+        <span className="block text-muted-foreground">
+          {formatRate(stats.converted_30d / stats.entered_30d)} reached the goal ({stats.converted_30d.toLocaleString("en-US")} of{" "}
+          {stats.entered_30d.toLocaleString("en-US")})
+        </span>
+      )}
       {stats.in_flow > 0 && <span className="block text-muted-foreground">{stats.in_flow.toLocaleString("en-US")} in the flow now</span>}
     </div>
   );
