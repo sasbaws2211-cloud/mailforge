@@ -2010,3 +2010,19 @@ export async function stopAutoRenewal(kind: string): Promise<void> {
   const res = await apiFetch(`/v1/billing/addons/auto/${encodeURIComponent(kind)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Could not stop the repeat (${res.status})`);
 }
+
+/** POST /v1/contacts/import - create or update up to 500 contacts from parsed CSV rows. */
+export async function importContactRows(
+  rows: import("./contact-import.js").ImportRow[],
+): Promise<import("./contact-import.js").ImportChunkResult> {
+  const res = await apiFetch(`/v1/contacts/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rows }),
+  });
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(errBody.error ?? `Import failed (${res.status})`);
+  }
+  return res.json();
+}

@@ -18,7 +18,7 @@
 import { DemoDataButton } from "../components/sample-event.js";
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { Search, Users, SearchX } from "lucide-react";
+import { Search, Users, SearchX, Upload } from "lucide-react";
 import { useContacts } from "../contacts.js";
 import { useSegment, useSegments } from "../segments.js";
 import { stateFromFilters } from "../segment-rules.js";
@@ -29,6 +29,7 @@ import { Input } from "../components/ui/input.js";
 import { Select } from "../components/ui/select.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { PageHeader } from "../components/page-header.js";
+import { ContactImportPanel } from "../components/contact-import-panel.js";
 import { EmptyState } from "../components/empty-state.js";
 import {
   Table,
@@ -179,6 +180,7 @@ function EmptyFiltered({ onClear }: { onClear: () => void }) {
 export default function PeoplePage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [importing, setImporting] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [state, setState] = useState<Contact["lifecycle_state"] | "">("");
@@ -275,6 +277,12 @@ export default function PeoplePage() {
       <PageHeader
         eyebrow="Contacts"
         title="People"
+        actions={
+          <Button variant="outline" size="sm" onClick={() => setImporting(true)} disabled={importing}>
+            <Upload size={14} />
+            Import CSV
+          </Button>
+        }
         subtitle={
           list.isLoading
             ? "Every contact your events have created."
@@ -285,6 +293,8 @@ export default function PeoplePage() {
                 : `${contacts.length}${list.hasNextPage ? "+" : ""} ${contacts.length === 1 ? "contact" : "contacts"}`
         }
       />
+
+      {importing && <ContactImportPanel onClose={() => setImporting(false)} />}
 
       {segmentId && (
         <div

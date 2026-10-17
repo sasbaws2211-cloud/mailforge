@@ -9,6 +9,7 @@
  *   GET /v1/contacts              list contacts (cursor-paginated; search + filters)
  *   GET /v1/contacts/:id          one contact: profile, flow memberships, suppression
  *   GET /v1/contacts/:id/timeline merged event/transition/message timeline (cursor-paginated)
+ *   POST /v1/contacts/import      create or update up to 500 contacts from parsed CSV rows
  *
  * Tenant isolation: enforced in every WHERE clause. A contact that exists but
  * belongs to another tenant returns 404 (not 403), matching flows/kb.
@@ -38,6 +39,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import {
+  PlanLimitError,
   resolveLifecycleConfig,
   tenureBucketRange,
   recencyBucketRange,
@@ -46,6 +48,7 @@ import {
   type LifecycleConfig,
 } from "@loomail/core";
 import type { Db } from "../plugins/db.js";
+import { processIdentifyEvent } from "./ingest.js";
 import { compileSegment } from "@loomail/db/segments";
 import { LIST_TIMEOUT_MS, SegmentTooSlowError, loadSegment, withStatementTimeout } from "../segments/run.js";
 
@@ -149,7 +152,131 @@ function isUuid(v: string): boolean {
 // Route plugin
 // ---------------------------------------------------------------------------
 
+/** Rows per import request. The dashboard sends a file in chunks of this size. */
+export const IMPORT_MAX_ROWS = 500;
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const importRowSchema = z.object({
+  /** Becomes the contact's external id. Falls back to the email when absent. */
+  user_id: z.string().trim().max(255).optional(),
+  email: z.string().trim().max(320).optional(),
+  /** name, company, payment_status, plan and anything else, exactly as identify traits. */
+  traits: z
+    .record(z.union([z.string().max(2000), z.number().finite(), z.boolean()]))
+    .optional()
+    .refine((t) => !t || (Object.keys(t).length <= 100 && Object.keys(t).every((k) => k.length > 0 && k.length <= 64)), {
+      message: "Up to 100 traits per contact, with names of 1 to 64 characters.",
+    }),
+});
+
+const importBodySchema = z.object({ rows: z.array(z.unknown()).min(1).max(IMPORT_MAX_ROWS) });
+
+export interface ImportRowError {
+  /** Position of the row in the request (0-based). */
+  index: number;
+  message: string;
+}
+
 const contactsRoutes: FastifyPluginAsync = async (app) => {
+  /**
+   * POST /v1/contacts/import
+   *
+   * Body: { rows: [{ user_id?, email?, traits? }] }, at most 500 rows. The dashboard parses the CSV in the
+   * browser and sends it in chunks; the API takes already-structured rows so the same endpoint serves scripts.
+   *
+   * Each row goes through exactly the identify path (POST /v1/identify): reserved traits map to their columns,
+   * the rest merge into properties, an email held by another contact is recorded as a conflict and not applied,
+   * new contacts count against the plan, and an identify event is written (context.source = "csv_import").
+   * A row with no user_id is keyed by its email, lowercased. Empty cells are not sent, so an import never
+   * clears what a contact already has.
+   *
+   * One bad row fails only itself; the response counts created and updated contacts and lists failures. Rows
+   * are processed in order, so a repeated person later in the file updates the earlier row.
+   */
+  app.post<{ Body: unknown }>(
+    "/import",
+    { bodyLimit: 2 * 1024 * 1024, config: { minRole: "member" } },
+    async (request, reply) => {
+      const db: Db = request.server.db;
+      const tenantId = request.tenant!.id;
+
+      const envelope = importBodySchema.safeParse(request.body);
+      if (!envelope.success) {
+        reply.status(400);
+        return {
+          error: `Send between 1 and ${IMPORT_MAX_ROWS} rows as { "rows": [...] }.`,
+          issues: envelope.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+        };
+      }
+
+      type Prepared = { index: number; userId: string; traits: Record<string, string | number | boolean> };
+      const errors: ImportRowError[] = [];
+      const prepared: Prepared[] = [];
+      envelope.data.rows.forEach((raw, index) => {
+        const parsed = importRowSchema.safeParse(raw);
+        if (!parsed.success) {
+          errors.push({ index, message: parsed.error.issues[0]?.message ?? "Not a valid row." });
+          return;
+        }
+        const { user_id, email, traits } = parsed.data;
+        const cleanEmail = email ? email.toLowerCase() : "";
+        if (cleanEmail && !EMAIL_SHAPE.test(cleanEmail)) {
+          errors.push({ index, message: `"${email}" is not an email address.` });
+          return;
+        }
+        const userId = user_id || cleanEmail;
+        if (!userId) {
+          errors.push({ index, message: "The row has neither an id nor an email." });
+          return;
+        }
+        prepared.push({ index, userId, traits: { ...(traits ?? {}), ...(cleanEmail ? { email: cleanEmail } : {}) } });
+      });
+
+      // Which of these people already exist, to tell "created" from "updated".
+      const known = new Set<string>();
+      if (prepared.length > 0) {
+        const ids = [...new Set(prepared.map((r) => r.userId))];
+        const found = (
+          await db.execute<{ external_id: string }>(sql`
+            SELECT external_id FROM contacts
+            WHERE tenant_id = ${tenantId} AND external_id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})
+          `)
+        ).rows;
+        for (const r of found) known.add(r.external_id);
+      }
+
+      let created = 0;
+      let updated = 0;
+      let planLimit: ReturnType<PlanLimitError["toJSON"]> | null = null;
+      for (const row of prepared) {
+        try {
+          await processIdentifyEvent(db, tenantId, {
+            userId: row.userId,
+            traits: row.traits,
+            context: { source: "csv_import" },
+          });
+          if (known.has(row.userId)) updated++;
+          else {
+            created++;
+            known.add(row.userId);
+          }
+        } catch (err) {
+          if (err instanceof PlanLimitError) {
+            planLimit = err.toJSON();
+            errors.push({ index: row.index, message: err.message });
+            continue;
+          }
+          request.log.error({ err }, "contact import row failed");
+          errors.push({ index: row.index, message: "Could not save this row." });
+        }
+      }
+
+      errors.sort((a, b) => a.index - b.index);
+      return { created, updated, failed: errors.length, errors, ...(planLimit ? { plan_limit: planLimit } : {}) };
+    },
+  );
+
   /**
    * GET /v1/contacts
    *
