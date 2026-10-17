@@ -342,7 +342,7 @@ function CellDetail({
               disabled={count === 0}
               onClick={() => navigate(`/flows/new?segment=${tenure}:${recency}`)}
             >
-              Create flow for this segment
+              Create flow for this cell
             </Button>
           )}
           <Button
@@ -358,7 +358,7 @@ function CellDetail({
 
           {existingSegmentFlow ? (
             <p className="text-[13px] leading-relaxed text-muted-foreground">
-              A segment flow already targets this cell:{" "}
+              A flow already starts from this cell:{" "}
               <Link
                 to={`/flows/${existingSegmentFlow.id}/edit`}
                 className="text-accent-text underline underline-offset-4"

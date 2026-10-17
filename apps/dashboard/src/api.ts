@@ -941,6 +941,8 @@ export interface ContactFilters {
   engagement_depth?: "power" | "regular" | "casual" | "minimal";
   tenure_bucket?: "new" | "growing" | "established" | "loyal";
   recency_bucket?: "active" | "cooling" | "idle" | "dormant";
+  /** Only members of this saved segment. */
+  segment_id?: string;
   search?: string;
 }
 
@@ -955,6 +957,7 @@ export async function fetchContacts(
   if (filters.engagement_depth) params.set("engagement_depth", filters.engagement_depth);
   if (filters.tenure_bucket) params.set("tenure_bucket", filters.tenure_bucket);
   if (filters.recency_bucket) params.set("recency_bucket", filters.recency_bucket);
+  if (filters.segment_id) params.set("segment_id", filters.segment_id);
   if (filters.search) params.set("search", filters.search);
   const qs = params.size > 0 ? `?${params.toString()}` : "";
   const res = await apiFetch(`/v1/contacts${qs}`);

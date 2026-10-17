@@ -39,6 +39,7 @@ import inviteRoutes from "./routes/invite.js";
 import ingestRoutes from "./routes/ingest.js";
 import flowsRoutes from "./routes/flows.js";
 import contactsRoutes from "./routes/contacts.js";
+import segmentsRoutes from "./routes/segments.js";
 import analyticsRoutes from "./routes/analytics.js";
 import kbRoutes from "./routes/kb.js";
 import suppressionRoutes from "./routes/suppressions.js";
@@ -352,6 +353,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       // contacts: People list, person detail, merged timeline
       if (opts.db) {
         await v1.register(contactsRoutes, { prefix: "/contacts" });
+      }
+
+      // segments: saved groups of contacts, described by rules
+      if (opts.db) {
+        await v1.register(segmentsRoutes, { prefix: "/segments" });
       }
 
       // plan: workspace plan, trial status and usage against limits

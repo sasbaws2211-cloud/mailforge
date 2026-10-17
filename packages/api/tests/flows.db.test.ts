@@ -105,6 +105,8 @@ beforeAll(async () => {
   // Clean up from previous runs (reverse dependency order)
   await db.execute(sql`DELETE FROM templates WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
   await db.execute(sql`DELETE FROM flows WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
+  await db.execute(sql`DELETE FROM segments WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
+  await db.execute(sql`DELETE FROM flows WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
   await db.execute(sql`DELETE FROM api_keys WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
   await db.execute(sql`DELETE FROM sessions WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
   await db.execute(sql`DELETE FROM users WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
@@ -170,6 +172,7 @@ afterAll(async () => {
   if (dbAvailable) {
     await db.execute(sql`DELETE FROM templates WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
     await db.execute(sql`DELETE FROM flows WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
+    await db.execute(sql`DELETE FROM segments WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
     await db.execute(sql`DELETE FROM api_keys WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
     await db.execute(sql`DELETE FROM sessions WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
     await db.execute(sql`DELETE FROM users WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN (${TEST_SLUG_A}, ${TEST_SLUG_B}))`);
@@ -443,6 +446,99 @@ describe("flow CRUD", () => {
       });
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toMatch(/[Dd]uplicate/);
+    });
+
+    describe("segment triggers", () => {
+      const mkSegment = async (tenantId: string, name: string, archived = false) => {
+        const [row] = await db.execute<{ id: string }>(sql`
+          INSERT INTO segments (tenant_id, name, definition, archived_at)
+          VALUES (${tenantId}::uuid, ${name}, ${JSON.stringify({ match: "all", rules: [{ field: "payment_status", op: "is", value: "paid" }] })}::jsonb,
+                  ${archived ? sql`now()` : sql`NULL`})
+          RETURNING id`).then((r) => r.rows);
+        return row!.id;
+      };
+
+      it("accepts a flow that starts from a saved segment of this workspace", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await mkSegment(tenantAId, `trigger ok ${Date.now()}`);
+        const res = await app.inject({
+          method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+          payload: minimalFlow({ trigger_type: "segment", trigger_config: { segment_id: id } }),
+        });
+        expect(res.statusCode).toBe(201);
+        expect(res.json().trigger_config).toEqual({ segment_id: id });
+      });
+
+      it("refuses a segment that does not exist, belongs to another workspace, or is archived", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const others = await mkSegment(tenantBId, `other ws ${Date.now()}`);
+        const archived = await mkSegment(tenantAId, `archived ${Date.now()}`, true);
+        for (const segment_id of ["00000000-0000-0000-0000-000000000000", others, archived]) {
+          const res = await app.inject({
+            method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+            payload: minimalFlow({ trigger_type: "segment", trigger_config: { segment_id } }),
+          });
+          expect(res.statusCode).toBe(400);
+          expect(res.json().issues[0].path).toBe("trigger_config.segment_id");
+          expect(res.json().issues[0].message).toMatch(/does not exist, or has been archived/);
+        }
+      });
+
+      it("refuses a malformed segment_id and extra keys beside it", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await mkSegment(tenantAId, `shape ${Date.now()}`);
+        for (const trigger_config of [{ segment_id: "nope" }, { segment_id: id, tenure_bucket: "new" }, { segment_id: 5 }]) {
+          const res = await app.inject({
+            method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+            payload: minimalFlow({ trigger_type: "segment", trigger_config }),
+          });
+          expect(res.statusCode).toBe(400);
+        }
+      });
+
+      it("an audience is still refused on a segment trigger (the segment is the audience)", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await mkSegment(tenantAId, `aud ${Date.now()}`);
+        const res = await app.inject({
+          method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+          payload: minimalFlow({
+            trigger_type: "segment",
+            trigger_config: { segment_id: id, audience: { conditions: [{ field: "has_email", op: "is", value: true }] } },
+          }),
+        });
+        expect(res.statusCode).toBe(400);
+      });
+
+      it("the original retention-cell form is accepted exactly as before", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const res = await app.inject({
+          method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+          payload: minimalFlow({ trigger_type: "segment", trigger_config: { tenure_bucket: "new", recency_bucket: "active" } }),
+        });
+        expect(res.statusCode).toBe(201);
+      });
+
+      it("PATCH checks the segment too when the trigger changes", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const created = await app.inject({ method: "POST", url: "/v1/flows", headers: { cookie: cookieA }, payload: minimalFlow() });
+        const id = await mkSegment(tenantAId, `patch ${Date.now()}`);
+        const good = await app.inject({
+          method: "PATCH", url: `/v1/flows/${created.json().id}`, headers: { cookie: cookieA },
+          payload: { trigger_type: "segment", trigger_config: { segment_id: id } },
+        });
+        expect(good.statusCode).toBe(200);
+        const bad = await app.inject({
+          method: "PATCH", url: `/v1/flows/${created.json().id}`, headers: { cookie: cookieA },
+          payload: { trigger_config: { segment_id: "00000000-0000-0000-0000-000000000000" } },
+        });
+        expect(bad.statusCode).toBe(400);
+      });
     });
 
     describe("trigger audience", () => {

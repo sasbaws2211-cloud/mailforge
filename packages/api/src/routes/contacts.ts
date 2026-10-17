@@ -46,6 +46,8 @@ import {
   type LifecycleConfig,
 } from "@loomail/core";
 import type { Db } from "../plugins/db.js";
+import { compileSegment } from "@loomail/db/segments";
+import { LIST_TIMEOUT_MS, SegmentTooSlowError, loadSegment, withStatementTimeout } from "../segments/run.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -118,6 +120,7 @@ const listQuerySchema = z.object({
   engagement_depth: z.enum(ENGAGEMENT_DEPTHS).optional(),
   tenure_bucket: z.enum(RETENTION_TENURE_BUCKETS).optional(),
   recency_bucket: z.enum(RETENTION_RECENCY_BUCKETS).optional(),
+  segment_id: z.string().uuid().optional(),
   search: z.string().max(200).optional(),
 });
 
@@ -161,6 +164,7 @@ const contactsRoutes: FastifyPluginAsync = async (app) => {
    *   ?engagement_depth=<d>   exact match on power|regular|casual|minimal
    *   ?tenure_bucket=<t>      retention-grid tenure bucket (new|growing|established|loyal)
    *   ?recency_bucket=<r>     retention-grid recency bucket (active|cooling|idle|dormant)
+   *   ?segment_id=<uuid>      only members of this saved segment (404 if it is not this workspace's, or is archived)
    *   ?search=<text>          case-insensitive substring on email, name, external_id
    *
    * The bucket filters apply the same core day-range functions as the
@@ -177,6 +181,7 @@ const contactsRoutes: FastifyPluginAsync = async (app) => {
       engagement_depth?: string;
       tenure_bucket?: string;
       recency_bucket?: string;
+      segment_id?: string;
       search?: string;
     };
   }>("/", { config: { minRole: "member" } }, async (request, reply) => {
@@ -231,8 +236,24 @@ const contactsRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const rows = (
-      await db.execute<{
+    // A saved segment narrows the list to its members: the same rules, run the same way, as everywhere else.
+    let segmentCondition = sql``;
+    if (parsed.data.segment_id) {
+      const loaded = await loadSegment(db, tenantId, parsed.data.segment_id);
+      if (!loaded.ok) {
+        reply.status(loaded.reason === "unreadable" ? 422 : 404);
+        return {
+          error:
+            loaded.reason === "unreadable"
+              ? "This segment's rules can no longer be read. Edit and save it again."
+              : "Segment not found.",
+        };
+      }
+      segmentCondition = sql`AND ${compileSegment(loaded.definition)}`;
+    }
+
+    const fetchRows = async (d: Db) => (
+      await d.execute<{
         id: string;
         tenant_id: string;
         external_id: string;
@@ -260,11 +281,23 @@ const contactsRoutes: FastifyPluginAsync = async (app) => {
           AND (${tenureMax}::int IS NULL OR first_seen_at > now() - make_interval(days => ${tenureMax}))
           AND (${recencyMin}::int IS NULL OR last_seen_at <= now() - make_interval(days => ${recencyMin}))
           AND (${recencyMax}::int IS NULL OR last_seen_at > now() - make_interval(days => ${recencyMax}))
+          ${segmentCondition}
           ${cursorClause}
         ORDER BY created_at DESC, id DESC
         LIMIT ${fetchLimit}
       `)
     ).rows;
+
+    let rows: Awaited<ReturnType<typeof fetchRows>>;
+    try {
+      rows = parsed.data.segment_id ? await withStatementTimeout(db, LIST_TIMEOUT_MS, fetchRows) : await fetchRows(db);
+    } catch (err) {
+      if (err instanceof SegmentTooSlowError) {
+        reply.status(422);
+        return { error: err.message };
+      }
+      throw err;
+    }
 
     const hasNextPage = rows.length > limit;
     const pageRows = hasNextPage ? rows.slice(0, limit) : rows;

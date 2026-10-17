@@ -54,6 +54,7 @@ import {
   wrapInShell,
   wrapInTextShell,
   audienceSchema,
+  savedSegmentTriggerSchema,
   conditionSchema,
   compiledBranchSchema,
   nodeTargetSchema,
@@ -65,6 +66,7 @@ import {
 } from "@loomail/core";
 import { draft } from "@loomail/brain-oss";
 import type { Db } from "../plugins/db.js";
+import { loadSegment } from "../segments/run.js";
 import { loadAiStatus, resolveProviderForRequest } from "../ai/resolver.js";
 import { createLimiter } from "../marketing/signup-logic.js";
 import { resolveAuthTransport } from "./auth.js";
@@ -170,6 +172,38 @@ export function audienceIssues(triggerType: string | undefined, triggerConfig: R
 }
 
 /**
+ * A segment trigger can start from a saved segment, { segment_id }. That segment must exist in this workspace and
+ * not be archived, or the flow would silently never start anyone. The original form (a retention-grid cell, with
+ * no segment_id) is left as it always was. Returns issues in the shape of a schema failure, or null when fine.
+ */
+async function segmentTriggerIssues(
+  db: Db,
+  tenantId: string,
+  triggerType: string | undefined,
+  triggerConfig: Record<string, unknown> | undefined,
+): Promise<z.ZodIssue[] | null> {
+  if (triggerType !== "segment" || !triggerConfig || !("segment_id" in triggerConfig)) return null;
+  const shape = savedSegmentTriggerSchema.safeParse(triggerConfig);
+  if (!shape.success) {
+    return shape.error.issues.map((i) => ({
+      ...i,
+      path: ["trigger_config", ...i.path],
+      message: i.path.length === 0 ? "a segment trigger takes only a segment_id" : i.message,
+    }));
+  }
+  const loaded = await loadSegment(db, tenantId, shape.data.segment_id);
+  if (loaded.ok) return null;
+  return [{
+    code: "custom",
+    path: ["trigger_config", "segment_id"],
+    message:
+      loaded.reason === "unreadable"
+        ? "that segment's rules can no longer be read: edit and save it again"
+        : "that segment does not exist, or has been archived",
+  }];
+}
+
+/**
  * Validate that step.order values are unique within the array.
  * Returns an error string if duplicate orders exist, null otherwise.
  */
@@ -206,6 +240,8 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
 
     const audienceProblems = audienceIssues(body.trigger_type, body.trigger_config);
     if (audienceProblems) return validationError(reply, audienceProblems);
+    const segmentProblems = await segmentTriggerIssues(db, tenantId, body.trigger_type, body.trigger_config);
+    if (segmentProblems) return validationError(reply, segmentProblems);
 
     // Validate step order uniqueness
     if (body.steps.length > 0) {
@@ -520,6 +556,8 @@ ${note}`,
         const nextConfig = (body.trigger_config ?? (rows[0]!.triggerConfig as Record<string, unknown>)) as Record<string, unknown>;
         const audienceProblems = audienceIssues(nextType, nextConfig);
         if (audienceProblems) return validationError(reply, audienceProblems);
+        const segmentProblems = await segmentTriggerIssues(db, tenantId, nextType, nextConfig);
+        if (segmentProblems) return validationError(reply, segmentProblems);
       }
 
       const current = rows[0]!;

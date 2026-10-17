@@ -20,6 +20,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Search, Users, SearchX } from "lucide-react";
 import { useContacts } from "../contacts.js";
+import { useSegment, useSegments } from "../segments.js";
+import { stateFromFilters } from "../segment-rules.js";
 import type { Contact, ContactFilters } from "../api.js";
 import { Badge, type BadgeVariant } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
@@ -191,6 +193,13 @@ export default function PeoplePage() {
   const recency = isRecencyBucket(recencyParam) ? recencyParam : null;
   const cellFiltering = tenure !== null || recency !== null;
 
+  // A saved segment narrows the list to its members. Like the cell filter it lives in the address bar
+  // (/people?segment=<id>), so it can be linked to and the back button works.
+  const segmentParam = searchParams.get("segment");
+  const segmentId = segmentParam && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segmentParam) ? segmentParam : null;
+  const segmentList = useSegments();
+  const segmentInfo = useSegment(segmentId ?? undefined);
+
   // Debounce the search term; the query key carries the settled value.
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput.trim()), 300);
@@ -204,10 +213,36 @@ export default function PeoplePage() {
       ...(depth ? { engagement_depth: depth } : {}),
       ...(tenure ? { tenure_bucket: tenure } : {}),
       ...(recency ? { recency_bucket: recency } : {}),
+      ...(segmentId ? { segment_id: segmentId } : {}),
     }),
-    [search, state, depth, tenure, recency],
+    [search, state, depth, tenure, recency, segmentId],
   );
-  const filtering = search !== "" || state !== "" || depth !== "" || cellFiltering;
+  const filtering = search !== "" || state !== "" || depth !== "" || cellFiltering || segmentId !== null;
+
+  // "Save as segment": the current filters as the first rules of a new segment, when they can be.
+  const asSegment = stateFromFilters({
+    ...(search ? { search } : {}),
+    ...(state ? { lifecycle_state: state } : {}),
+    ...(depth ? { engagement_depth: depth } : {}),
+    ...(tenure ? { tenure_bucket: tenure } : {}),
+    ...(recency ? { recency_bucket: recency } : {}),
+  });
+  const saveAsSegmentLink = `/segments/new?${new URLSearchParams({
+    ...(state ? { lifecycle_state: state } : {}),
+    ...(depth ? { engagement_depth: depth } : {}),
+  }).toString()}`;
+
+  function chooseSegment(id: string) {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (id) next.set("segment", id);
+        else next.delete("segment");
+        return next;
+      },
+      { replace: true },
+    );
+  }
 
   const list = useContacts(filters);
   const contacts = useMemo(
@@ -250,6 +285,39 @@ export default function PeoplePage() {
                 : `${contacts.length}${list.hasNextPage ? "+" : ""} ${contacts.length === 1 ? "contact" : "contacts"}`
         }
       />
+
+      {segmentId && (
+        <div
+          role="status"
+          className="animate-rise-in mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md bg-accent-soft px-4 py-3"
+        >
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-accent-text">From a segment</p>
+            <p className="mt-0.5 text-[14px] text-foreground">
+              {segmentInfo.isError ? (
+                "That segment was not found. It may have been archived."
+              ) : (
+                <>
+                  Showing the people in <span className="font-semibold">{segmentInfo.data?.name ?? "this segment"}</span>
+                </>
+              )}
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            {!segmentInfo.isError && (
+              <Link
+                to={`/segments/${segmentId}`}
+                className="text-[13px] text-accent-text underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Edit segment
+              </Link>
+            )}
+            <Button variant="outline" size="sm" onClick={() => chooseSegment("")}>
+              Clear filter
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Wayfinding banner: arriving from the retention grid with a cell
           filter must not look like the plain People screen. */}
@@ -325,6 +393,31 @@ export default function PeoplePage() {
             ))}
           </Select>
         </div>
+        {(segmentList.data?.length ?? 0) > 0 && (
+          <div className="w-full sm:w-52">
+            <Select aria-label="Filter by segment" value={segmentId ?? ""} onChange={(e) => chooseSegment(e.target.value)}>
+              <option value="">Any segment</option>
+              {segmentList.data!.map((seg) => (
+                <option key={seg.id} value={seg.id}>
+                  {seg.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
+        {filtering && segmentId === null && (
+          asSegment.state ? (
+            <Link to={saveAsSegmentLink}>
+              <Button variant="outline" size="sm">
+                Save as segment
+              </Button>
+            </Link>
+          ) : (
+            <Button variant="outline" size="sm" disabled title={asSegment.reason}>
+              Save as segment
+            </Button>
+          )
+        )}
         {filtering && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             Clear

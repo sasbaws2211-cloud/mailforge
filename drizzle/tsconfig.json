@@ -16,5 +16,5 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["schema", "purge", "llm"]
+  "include": ["schema", "purge", "llm", "segments"]
 }

@@ -160,10 +160,29 @@ You can mix approaches across flows, and reference your own templates (`@templat
 |---|---|---|
 | `event` | an event name, e.g. `signed_up` | Yes, near-instant. Only `track` calls trigger flows; `identify` does not |
 | `lifecycle_transition` | from-state, to-state | Yes, on the 15-minute scan |
-| `segment` | one cell of the retention grid (tenure bucket x recency bucket) | Yes, on the 15-minute scan, capped at 200 enrollments per flow per scan |
+| `segment` | a saved segment (`{segment_id}`), or one cell of the retention grid (`{tenure_bucket, recency_bucket}`) | Yes, on the 15-minute scan, capped at 200 enrollments per flow per scan |
 | `manual` | - | Accepted by the API but not wired to enrollment yet |
 
-There is no general-purpose segment builder. "Segment" means exactly one cell of the retention grid: tenure (`new`, `growing`, `established`, `loyal`) crossed with recency (`active`, `cooling`, `idle`, `dormant`). The grid you see in Analytics is the same set a segment-triggered flow enrolls.
+A segment trigger starts the flow for everyone who is in the segment now and anyone who joins later. The rules are read at each scan, so editing a segment changes who enters from then on; people already in the flow stay. The older form, one **retention-grid cell** (tenure `new`, `growing`, `established`, `loyal` crossed with recency `active`, `cooling`, `idle`, `dormant`), still works unchanged and is what the Analytics grid links to.
+
+## Segments
+
+A **segment** is a saved description of a group of people ("paid customers not seen in 14 days"), not a fixed list. Loomail works out who matches whenever it is asked. Build them under **Segments**, or press *Save as segment* on the People page.
+
+A segment has a match mode (**all** or **any**) and up to 20 rules in total. One level of nested groups is allowed, with up to 10 rules per group, so "paid AND (power OR regular)" is expressible. Rules can be about:
+
+- **Contact facts**: payment status, engagement depth, plan, has an email, or a custom trait.
+- **Lifecycle stage**: is, is not, or is one of.
+- **First or last seen**: within, or more than, N days ago.
+- **What they did**: performed or did not perform an event in the last N days (up to 365), optionally at least N times.
+
+Things to know:
+
+- **Counts are cached.** The list shows the count from the last time it was worked out, with the time; press recount to refresh. Counting stops at 100,000 (shown as "100,000+") and a count that takes more than a few seconds is refused rather than left running.
+- **A flow that uses a segment pins it.** A segment cannot be archived while a flow starts from it; the API (422) and the page name the flows.
+- **Suppressed people never enroll**, and the usual re-entry and concurrency settings of the flow still apply. Candidates are filtered before the 200-per-scan cap so blocked people cannot starve the rest.
+- **Event rules on a name never sent** match nobody (or everybody, for "did not"); the editor warns when the name has never been seen.
+- **Through the API**: `GET/POST /v1/segments`, `GET/PATCH/DELETE /v1/segments/:id`, `POST /v1/segments/:id/refresh`, `POST /v1/segments/preview`, and `GET /v1/contacts?segment_id=`.
 
 **Audience (optional).** An `event` or `lifecycle_transition` trigger can carry an audience: "only enroll contacts where...". In the flow editor it is the *Only for certain contacts* section, and unlike the trigger it can be changed at any time, even on an active flow, without recompiling. Up to 5 conditions, all of which must hold:
 

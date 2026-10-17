@@ -7,6 +7,7 @@ export { apiKeys } from "./api-keys.js";
 export { contacts } from "./contacts.js";
 export { events } from "./events.js";
 export { flows } from "./flows.js";
+export { segments } from "./segments.js";
 export { flowMemberships } from "./flow-memberships.js";
 export { lifecycleMessages } from "./lifecycle-messages.js";
 export { kbEntries } from "./kb-entries.js";

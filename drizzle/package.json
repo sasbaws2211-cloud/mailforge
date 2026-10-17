@@ -15,6 +15,10 @@
     "./llm": {
       "import": "./dist/llm/index.js",
       "types": "./dist/llm/index.d.ts"
+    },
+    "./segments": {
+      "import": "./dist/segments/index.js",
+      "types": "./dist/segments/index.d.ts"
     }
   },
   "scripts": {

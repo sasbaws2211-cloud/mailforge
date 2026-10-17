@@ -35,6 +35,7 @@ export const EXPORT_TABLES: readonly ExportTable[] = [
   { key: "contact_conflicts", table: "contact_conflicts" },
   { key: "retention_grid_snapshots", table: "retention_grid_snapshots", orderBy: "snapshot_date, tenure_bucket, recency_bucket" },
   { key: "flows", table: "flows" },
+  { key: "segments", table: "segments" },
   { key: "flow_memberships", table: "flow_memberships" },
   { key: "messages", table: "lifecycle_messages" },
   { key: "message_events", table: "message_events" },

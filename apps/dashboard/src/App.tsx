@@ -27,6 +27,8 @@ import FlowEditorPage from "./pages/FlowEditorPage.js";
 import ApprovalsPage from "./pages/ApprovalsPage.js";
 import PeoplePage from "./pages/PeoplePage.js";
 import PersonPage from "./pages/PersonPage.js";
+import SegmentsPage from "./pages/SegmentsPage.js";
+import SegmentEditorPage from "./pages/SegmentEditorPage.js";
 import LifecyclePage from "./pages/LifecyclePage.js";
 import AnalyticsPage from "./pages/AnalyticsPage.js";
 import KbPage from "./pages/KbPage.js";
@@ -127,6 +129,9 @@ export default function App() {
         <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="people" element={<PeoplePage />} />
         <Route path="people/:id" element={<PersonPage />} />
+        <Route path="segments" element={<SegmentsPage />} />
+        <Route path="segments/new" element={<SegmentEditorPage />} />
+        <Route path="segments/:id" element={<SegmentEditorPage />} />
         <Route path="lifecycle" element={<LifecyclePage />} />
         <Route path="analytics" element={<AnalyticsPage />} />
         <Route path="sent" element={<SentLogPage />} />

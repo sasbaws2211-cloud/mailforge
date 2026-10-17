@@ -81,6 +81,8 @@ import {
   type SequenceData,
 } from "../flow-tree.js";
 import { ConditionEditor } from "../components/condition-editor.js";
+import { useSegments } from "../segments.js";
+import { describeSegment } from "../segment-rules.js";
 import { describeCondition, emptyConditionState, type ConditionState } from "../conditions.js";
 import { PromptGuidance } from "../components/prompt-guidance.js";
 import { AudienceEditor } from "../components/audience-editor.js";
@@ -133,10 +135,10 @@ const TRIGGER_TYPE_OPTIONS: ReadonlyArray<{
   },
   {
     value: "segment",
-    label: "Segment (retention grid cell)",
+    label: "Segment",
     enabled: true,
     description:
-      "Targets a retention-grid cell: everyone in it now, and anyone who enters it later.",
+      "Starts for everyone in a saved segment, or in one retention-grid cell: everyone in it now, and anyone who joins later.",
   },
   {
     value: "manual",
@@ -301,6 +303,7 @@ function FlowNameInput({
 /** Read-only trigger summary for edit mode. The trigger is immutable. */
 function TriggerSummary({ flow }: { flow: Flow }) {
   const cfg = (flow.trigger_config ?? {}) as Record<string, string>;
+  const segmentList = useSegments();
   let body: React.ReactNode;
   if (flow.trigger_type === "lifecycle_transition") {
     body = (
@@ -315,6 +318,21 @@ function TriggerSummary({ flow }: { flow: Flow }) {
       <>
         The event <code className="font-mono text-[13px]">{cfg.event}</code>{" "}
         is received
+      </>
+    );
+  } else if (flow.trigger_type === "segment" && cfg.segment_id) {
+    const saved = segmentList.data?.find((seg) => seg.id === cfg.segment_id);
+    body = (
+      <>
+        A contact is in the segment{" "}
+        {saved ? (
+          <Link to={`/segments/${saved.id}`} className="font-semibold text-accent-text underline underline-offset-4">
+            {saved.name}
+          </Link>
+        ) : (
+          <span className="font-semibold">a saved segment</span>
+        )}
+        {saved && <span className="text-muted-foreground"> ({describeSegment(saved.definition)})</span>}
       </>
     );
   } else if (flow.trigger_type === "segment") {
@@ -566,7 +584,7 @@ interface SegmentConfigProps {
   disabled?: boolean;
 }
 
-function SegmentTriggerConfig({
+function RetentionCellFields({
   tenure,
   recency,
   onTenureChange,
@@ -615,6 +633,88 @@ function SegmentTriggerConfig({
   );
 }
 
+export function SegmentTriggerConfig({
+  kind,
+  segmentId,
+  onKindChange,
+  onSegmentChange,
+  segmentError,
+  tenure,
+  recency,
+  onTenureChange,
+  onRecencyChange,
+  tenureError,
+  recencyError,
+  disabled,
+}: SegmentConfigProps & {
+  kind: "saved" | "cell";
+  segmentId: string;
+  onKindChange: (v: "saved" | "cell") => void;
+  onSegmentChange: (v: string) => void;
+  segmentError?: string;
+}) {
+  const segments = useSegments();
+  const list = segments.data ?? [];
+  return (
+    <div className="space-y-4">
+      <div>
+        <Label htmlFor="tc-segment-kind" required>Start from</Label>
+        <Select id="tc-segment-kind" value={kind} onChange={(e) => onKindChange(e.target.value === "cell" ? "cell" : "saved")} disabled={disabled}>
+          <option value="saved">A saved segment</option>
+          <option value="cell">One cell of the retention grid</option>
+        </Select>
+      </div>
+
+      {kind === "saved" ? (
+        <div>
+          <Label htmlFor="tc-segment" required>Segment</Label>
+          {segments.isLoading ? (
+            <p className="text-[14px] text-muted-foreground">Loading your segments...</p>
+          ) : list.length === 0 ? (
+            <p className="text-[14px] text-muted-foreground">
+              You have no segments yet.{" "}
+              <Link to="/segments/new" className="text-accent-text underline underline-offset-4">
+                Create one
+              </Link>{" "}
+              and come back.
+            </p>
+          ) : (
+            <>
+              <Select id="tc-segment" value={segmentId} onChange={(e) => onSegmentChange(e.target.value)} disabled={disabled}>
+                <option value="">Select a segment</option>
+                {list.map((seg) => (
+                  <option key={seg.id} value={seg.id}>
+                    {seg.name}
+                    {seg.member_count !== null ? ` (${seg.member_count.toLocaleString("en-US")}${seg.count_capped ? "+" : ""} people)` : ""}
+                  </option>
+                ))}
+              </Select>
+              <FieldError message={segmentError} />
+              <p className="mt-1.5 text-[13px] text-muted-foreground">
+                Everyone in the segment enrolls on the next scan (up to 200 per scan), and anyone who joins it later. The rules are
+                read each time, so editing the segment changes who enters from then on.{" "}
+                <Link to="/segments/new" className="text-accent-text underline underline-offset-4">
+                  Create a segment
+                </Link>
+              </p>
+            </>
+          )}
+        </div>
+      ) : (
+        <RetentionCellFields
+          tenure={tenure}
+          recency={recency}
+          onTenureChange={onTenureChange}
+          onRecencyChange={onRecencyChange}
+          tenureError={tenureError}
+          recencyError={recencyError}
+          disabled={disabled}
+        />
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Form state
 // ---------------------------------------------------------------------------
@@ -625,6 +725,9 @@ interface FormState {
   lc_from: string;
   lc_to: string;
   ev_event: string;
+  /** A segment trigger starts from a saved segment, or from one retention-grid cell. */
+  sg_kind: "saved" | "cell";
+  sg_segment: string;
   sg_tenure: string;
   sg_recency: string;
   audience_rows: AudienceRow[];
@@ -645,6 +748,8 @@ function defaultFormState(): FormState {
     lc_from: "",
     lc_to: "",
     ev_event: "",
+    sg_kind: "saved",
+    sg_segment: "",
     sg_tenure: "",
     sg_recency: "",
     audience_rows: [],
@@ -665,6 +770,8 @@ function formStateFromFlow(flow: Flow): FormState {
     lc_from: flow.trigger_type === "lifecycle_transition" ? String(cfg.from ?? "") : "",
     lc_to: flow.trigger_type === "lifecycle_transition" ? String(cfg.to ?? "") : "",
     ev_event: flow.trigger_type === "event" ? String(cfg.event ?? "") : "",
+    sg_kind: flow.trigger_type === "segment" && !cfg.segment_id ? "cell" : "saved",
+    sg_segment: flow.trigger_type === "segment" ? String(cfg.segment_id ?? "") : "",
     sg_tenure: flow.trigger_type === "segment" ? String(cfg.tenure_bucket ?? "") : "",
     sg_recency: flow.trigger_type === "segment" ? String(cfg.recency_bucket ?? "") : "",
     audience_rows: audienceToRows((flow.trigger_config as Record<string, unknown> | null)?.audience).rows,
@@ -689,7 +796,9 @@ function buildTriggerConfig(
     return { event: state.ev_event, ...(audience ? { audience } : {}) };
   }
   if (type === "segment") {
-    return { tenure_bucket: state.sg_tenure, recency_bucket: state.sg_recency };
+    return state.sg_kind === "saved"
+      ? { segment_id: state.sg_segment }
+      : { tenure_bucket: state.sg_tenure, recency_bucket: state.sg_recency };
   }
   // manual is disabled; should not reach here
   return {};
@@ -1190,7 +1299,11 @@ export default function FlowEditorPage() {
     if (isNew && !initialised) {
       const segment = searchParams.get("segment");
       const transition = searchParams.get("transition");
-      if (segment) {
+      const savedSegment = searchParams.get("segment_id");
+      if (savedSegment && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(savedSegment)) {
+        // From the Segments list: "Start a flow from this segment"
+        setForm({ ...defaultFormState(), trigger_type: "segment", sg_kind: "saved", sg_segment: savedSegment });
+      } else if (segment) {
         const [tenure, recency] = segment.split(":");
         const tenureOpt = TENURE_BUCKET_OPTIONS.find((o) => o.value === tenure);
         const recencyOpt = RECENCY_BUCKET_OPTIONS.find((o) => o.value === recency);
@@ -1199,6 +1312,7 @@ export default function FlowEditorPage() {
             ...defaultFormState(),
             name: `${tenureOpt.label.split(" (")[0]} · ${recencyOpt.label.split(" (")[0]}`,
             trigger_type: "segment",
+            sg_kind: "cell",
             sg_tenure: tenureOpt.value,
             sg_recency: recencyOpt.value,
           });
@@ -1233,7 +1347,9 @@ export default function FlowEditorPage() {
       ? form.lc_from !== "" && form.lc_to !== ""
       : form.trigger_type === "event"
         ? form.ev_event.trim() !== ""
-        : form.sg_tenure !== "" && form.sg_recency !== "";
+        : form.sg_kind === "saved"
+          ? form.sg_segment !== ""
+          : form.sg_tenure !== "" && form.sg_recency !== "";
 
   // As soon as the trigger is complete, step 2 opens with the default writer
   // (ai_drafted) pre-selected so the writing surface is already visible.
@@ -1313,6 +1429,8 @@ export default function FlowEditorPage() {
       lc_from: "",
       lc_to: "",
       ev_event: "",
+      sg_kind: "saved",
+      sg_segment: "",
       sg_tenure: "",
       sg_recency: "",
       audience_rows: [],
@@ -1325,6 +1443,7 @@ export default function FlowEditorPage() {
       delete next["trigger_config.event"];
       delete next["trigger_config.tenure_bucket"];
       delete next["trigger_config.recency_bucket"];
+      delete next["trigger_config.segment_id"];
       delete next["trigger_config"];
       return next;
     });
@@ -2041,6 +2160,11 @@ export default function FlowEditorPage() {
               )}
               {form.trigger_type === "segment" && (
                 <SegmentTriggerConfig
+                  kind={form.sg_kind}
+                  segmentId={form.sg_segment}
+                  onKindChange={(v) => setField("sg_kind", v)}
+                  onSegmentChange={(v) => setField("sg_segment", v)}
+                  segmentError={fieldErrors["trigger_config.segment_id"] ?? fieldErrors["trigger_config"]}
                   tenure={form.sg_tenure}
                   recency={form.sg_recency}
                   onTenureChange={(v) => setField("sg_tenure", v)}

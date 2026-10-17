@@ -71,6 +71,27 @@ export {
 } from "./audience.js";
 
 export {
+  SEGMENT_MAX_LEAVES,
+  SEGMENT_MAX_GROUP_LEAVES,
+  SEGMENT_MAX_EVENT_DAYS,
+  SEGMENT_LIFECYCLE_STATES,
+  segmentDefinitionSchema,
+  segmentGroupSchema,
+  segmentLeafSchema,
+  isSegmentGroup,
+  countSegmentLeaves,
+  segmentEventNames,
+  savedSegmentTriggerSchema,
+  isSavedSegmentTriggerConfig,
+  savedSegmentIdOf,
+  type SavedSegmentTriggerConfig,
+  type SegmentDefinition,
+  type SegmentGroup,
+  type SegmentLeaf,
+  type SegmentRule,
+} from "./segment.js";
+
+export {
   LIFECYCLE_STATES,
   VALID_TRANSITIONS,
   VALID_TRANSITION_MAP,
