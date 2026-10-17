@@ -186,6 +186,50 @@ describe("loomail.js snippet", () => {
       return { b, l };
     };
 
+    describe("with anonymousTracking: true", () => {
+      const bootServerMode = (storage = makeStorage()) => {
+        const b = makeBrowser({ storage });
+        b.run(b.win, b.nav, undefined as never);
+        const l = b.win.loomail as Loomail;
+        l("init", "mf_pub_x", { endpoint: "http://x.test", anonymousTracking: true });
+        return { b, l };
+      };
+
+      it("sends anonymous events straight to the server under the anonymous id, with no userId", () => {
+        const { b, l } = bootServerMode();
+        l("track", "viewed_pricing", { plan: "pro" });
+        l("page");
+        expect(b.sent.map((s) => s.url)).toEqual(["http://x.test/v1/track", "http://x.test/v1/track"]);
+        const first = b.sent[0]!.body;
+        expect(first).toMatchObject({ event: "viewed_pricing", properties: { plan: "pro" } });
+        expect(first.userId).toBeUndefined();
+        expect(typeof first.anonymousId).toBe("string");
+        expect((first.context as { anonymousId: string }).anonymousId).toBe(first.anonymousId);
+        expect(String(first.messageId)).toMatch(/^anon:/);
+        expect(b.sent[1]!.body.anonymousId).toBe(first.anonymousId);
+        expect(b.sent[1]!.body.event).toBe("page_viewed");
+      });
+
+      it("identify then carries the same anonymous id, so the server can move the events", () => {
+        const { b, l } = bootServerMode();
+        l("track", "viewed_pricing");
+        l("identify", "u1", { email: "a@b.c" });
+        const aid = b.sent[0]!.body.anonymousId;
+        expect(b.sent.map((s) => s.url)).toEqual(["http://x.test/v1/track", "http://x.test/v1/identify"]);
+        expect((b.sent[1]!.body.context as { anonymousId: string }).anonymousId).toBe(aid);
+        expect(b.sent[1]!.body).toMatchObject({ userId: "u1" });
+        // Once identified, later events carry the userId as usual.
+        l("track", "upgraded");
+        expect(b.sent[2]!.body).toMatchObject({ userId: "u1", event: "upgraded" });
+      });
+
+      it("the default still holds events in the browser", () => {
+        const { b, l } = boot(makeStorage());
+        l("track", "viewed_pricing");
+        expect(b.sent.length).toBe(0);
+      });
+    });
+
     it("holds anonymous events in the browser and never sends them", () => {
       const { b, l } = boot(makeStorage());
       l("track", "viewed_pricing");

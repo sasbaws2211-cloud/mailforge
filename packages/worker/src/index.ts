@@ -35,6 +35,7 @@ import { phaseEngagementDepth } from "./scan-engagement-depth.js";
 import { handleTriggerCheck } from "./trigger-check.js";
 import { processDrainTick, fetchDrainBatchSimple, type FetchDrainBatch } from "./drain.js";
 import { processReapTick } from "./reap.js";
+import { sweepAnonymous } from "./anonymous-retention.js";
 import { processCounterRollover } from "./counter-rollover.js";
 import { processPartitionMaintenance } from "./partition-maintenance.js";
 import { processContentTick } from "./content.js";
@@ -366,6 +367,16 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
         for (const f of purge.failed) console.error(`[purge] FAILED for ${f.tenantId}: ${f.error}`);
       } catch (err) {
         console.error("[purge] tick failed:", err);
+      }
+
+      // And the anonymous-visitor sweep: events nobody ever claimed, and old anonymous-id links.
+      try {
+        const swept = await sweepAnonymous(db as never, now);
+        if (swept.eventsDeleted + swept.aliasesDeleted > 0) {
+          console.log(`[anonymous] swept ${swept.eventsDeleted} unclaimed events and ${swept.aliasesDeleted} old links`);
+        }
+      } catch (err) {
+        console.error("[anonymous] sweep failed:", err);
       }
 
       const total =

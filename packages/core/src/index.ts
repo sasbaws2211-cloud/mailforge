@@ -22,6 +22,14 @@ export const LOOMAIL_CORE_VERSION = "0.0.0";
  */
 export const INGEST_TIMESTAMP_CLAMP_HOURS = 72;
 
+/**
+ * How long events from an anonymous visitor who never identifies are kept (anonymous_events), and how long the link
+ * from an anonymous id to a contact is kept (anonymous_aliases). The API writes both tables; the worker's hourly
+ * sweep enforces these.
+ */
+export const ANONYMOUS_EVENT_RETENTION_DAYS = 30;
+export const ANONYMOUS_ALIAS_RETENTION_DAYS = 90;
+
 export {
   QUEUE,
   type QueueName,

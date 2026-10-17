@@ -52,7 +52,7 @@ Open the claim URL printed to the console, enter your email, and you are the own
 - Schedule/cron triggers and manual-trigger enrollment (flows enroll on events, lifecycle transitions, and retention-grid segments today)
 - SES API-mode transport and non-Resend feedback webhooks (SES works today through its SMTP endpoint)
 - Knowledge base file upload and site crawl
-- Anonymous identity stitching (contacts key on `userId` today)
+- Cross-device identity stitching (anonymous visitors are merged per browser, on `identify`; see `guide/INGESTION.md`)
 - Multiple workspaces per self-hosted instance
 
 ## Documentation

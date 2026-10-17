@@ -12,10 +12,10 @@ calls and `/v1/batch`, with `messageId` (server-side dedup), `timestamp`
 (clamped to +/- 72 hours of server time), `traits` (shallow merge on
 identify; explicit `null` clears a trait), and `properties`.
 
-Not supported: `page`, `screen`, `group`, `alias`, and anonymous-only events
-(every call needs a `userId`; items without one are rejected with a per-item
-error in batches). This is a deliberate scope line: Loomail acts on product
-lifecycle events, not web analytics.
+Not supported: `page`, `screen`, `group` and `alias`. A `track` call may have
+an `anonymousId` instead of a `userId` (see "Anonymous visitors" below);
+`identify` always needs a `userId`. Loomail acts on product lifecycle events,
+not web analytics.
 
 ## Keys
 
@@ -72,8 +72,8 @@ route changes in a single-page app), and `reset()`.
 
 ### Anonymous visitors and remembering people
 
-Loomail contacts need a `userId`, so an anonymous visitor is never sent to the server.
-Instead the snippet keeps their `track`/`page` calls in the browser's localStorage (up to
+By default an anonymous visitor is never sent to the server.
+The snippet keeps their `track`/`page` calls in the browser's localStorage (up to
 50 events, up to 48 hours old) and, the moment you call `identify`, sends them under the
 real `userId` with their original timestamps. Visitors who never sign up cost nothing and
 create no contacts. The snippet also remembers the identified user across page loads, so
@@ -84,6 +84,43 @@ Limits: this is per browser. A visitor who browses on one device and signs up on
 is not stitched, and events older than 48 hours are dropped rather than re-dated by the
 server's clock-skew clamp. If localStorage is blocked, the snippet works for the life of
 the page only. Every call also carries a stable `context.anonymousId`.
+
+#### Server-side anonymous tracking (opt-in)
+
+To lift those limits, turn on `anonymousTracking`:
+
+```js
+loomail("init", "mf_pub_YOUR_PUBLISHABLE_KEY", { endpoint: "https://YOUR_LOOMAIL_HOST", anonymousTracking: true });
+```
+
+The snippet then sends `track` and `page` calls from a visitor who has not been identified straight to
+Loomail, keyed by the visitor's `anonymousId`. No contact is created. When you call
+`loomail("identify", userId, traits)`, the identify carries the same `anonymousId`, and everything stored for that
+visitor moves onto the contact with its original timestamps, with no 48-hour or 50-event limit. After that,
+calls from the same browser go straight to the contact until `reset()` starts a new anonymous visitor.
+
+You can do the same from any client with the HTTP API:
+
+```bash
+# before sign-up: a visitor you cannot name yet
+curl -X POST https://YOUR_LOOMAIL_HOST/v1/track   -H "Authorization: Bearer mf_live_YOUR_SECRET_KEY" -H "Content-Type: application/json"   -d '{"anonymousId": "a1b2c3", "event": "viewed_pricing", "properties": {"plan": "pro"}}'
+
+# at sign-up: say who that visitor turned out to be
+curl -X POST https://YOUR_LOOMAIL_HOST/v1/identify   -H "Authorization: Bearer mf_live_YOUR_SECRET_KEY" -H "Content-Type: application/json"   -d '{"userId": "user_123", "anonymousId": "a1b2c3", "traits": {"email": "user@example.com"}}'
+```
+
+`anonymousId` may be sent at the top level or as `context.anonymousId`. Limits and behaviour:
+
+- At most 100 events are kept per visitor; later ones are dropped until they identify.
+- Events from visitors who never identify are deleted after 30 days. The link from an anonymous id to a contact
+  is kept 90 days.
+- Moved events behave like any other event: they can move the contact's lifecycle state and trigger flows.
+- Merging is by `anonymousId` per workspace and happens on `identify` only. A visitor on two devices has two
+  anonymous ids and is joined when each device identifies.
+- If the same browser identifies as a second person without `reset()`, later events belong to the second person;
+  history already moved stays with the first.
+- This stores data about visitors who never sign up. Turn it on only where your privacy notice and consent setup
+  allow it.
 
 Properties worth knowing:
 
@@ -189,8 +226,8 @@ await analytics.flush({ close: true });
 
 Notes:
 
-- Events with only an `anonymousId` are rejected (`userId` required); they
-  appear as per-item errors in the batch response, not as silent drops.
+- A `track` item with only an `anonymousId` is accepted as an anonymous visitor's event. An item with neither id,
+  or an `identify` with no `userId`, appears as a per-item error in the batch response, not as a silent drop.
 - `page`/`screen`/`group`/`alias` calls have no endpoint here. Do not set
   `path` to anything but `/v1/batch`.
 - Payload caps: 100 items and 512 KB per batch request. Segment's own limits

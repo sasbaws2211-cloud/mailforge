@@ -7,11 +7,13 @@
  * body `key` field for the browser beacon path), NOT via session cookies.
  *
  * Design decisions:
- * - Anonymous tracking (no userId) is explicitly out of scope. All endpoints
- *   require userId, which maps to contacts.external_id. This is a deliberate
- *   decision, not an omission - see docs/BACKLOG.md. In a batch, anonymous
- *   items fail validation and are reported in errors[] without aborting the
- *   rest.
+ * - Anonymous tracking: a track call may carry an anonymousId (top level or
+ *   context.anonymousId) instead of a userId. Those events wait in
+ *   anonymous_events, create no contact, and move onto the contact when an
+ *   identify names the same anonymousId (see processAnonymousTrack and
+ *   mergeAnonymousEvents). identify itself always needs a userId. In a batch,
+ *   an item with no id of either kind fails validation and is reported in
+ *   errors[] without aborting the rest.
  * - Server-side dedup: clients sending messageId get at-most-once insert via
  *   a transaction-scoped advisory lock plus a lookup on
  *   idx_events_dedup_lookup. Clients that omit it keep insert-always
@@ -59,8 +61,16 @@
 import { rebaseTrialOnFirstEvent } from "../onboarding/trial.js";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { eq, and, ne, sql, inArray } from "drizzle-orm";
-import { contacts, events, contactConflicts, lifecycleTransitions, tenants } from "@loomail/db/schema";
+import { eq, and, ne, sql, inArray, asc } from "drizzle-orm";
+import {
+  contacts,
+  events,
+  contactConflicts,
+  lifecycleTransitions,
+  tenants,
+  anonymousEvents,
+  anonymousAliases,
+} from "@loomail/db/schema";
 import {
   evaluateEventTransition,
   isActivationRelevantEvent,
@@ -118,8 +128,13 @@ const contextSchema = z
   .passthrough() // Allow additional context fields
   .optional();
 
+/** An id the browser (or any client) makes up for a visitor nobody has identified yet. */
+const anonymousIdSchema = z.string().min(1).max(200);
+
 const trackBodySchema = z.object({
-  userId: z.string().min(1, "userId is required"),
+  // Required unless the call is from an anonymous visitor (anonymousId, here or in context).
+  userId: z.string().min(1, "userId is required").optional(),
+  anonymousId: anonymousIdSchema.optional(),
   event: z.string().min(1, "event name is required"),
   properties: z.record(z.unknown()).optional(),
   timestamp: z.string().datetime({ offset: true }).optional(),
@@ -131,7 +146,9 @@ const trackBodySchema = z.object({
 });
 
 const identifyBodySchema = z.object({
-  userId: z.string().min(1, "userId is required"),
+  userId: z.string().min(1, "userId is required").optional(),
+  // Names the anonymous visitor this person was until now; their stored events move onto the contact.
+  anonymousId: anonymousIdSchema.optional(),
   traits: z.record(z.unknown()).optional(),
   timestamp: z.string().datetime({ offset: true }).optional(),
   context: contextSchema,
@@ -141,6 +158,24 @@ const identifyBodySchema = z.object({
 
 export type TrackBody = z.infer<typeof trackBodySchema>;
 export type IdentifyBody = z.infer<typeof identifyBodySchema>;
+
+/** A call that is about a known person. The process* functions below need this, not the looser wire shape. */
+export type KnownTrackBody = TrackBody & { userId: string };
+export type KnownIdentifyBody = IdentifyBody & { userId: string };
+
+/** Most events kept for one anonymous visitor; further ones are dropped until they identify or the rows expire. */
+export const ANONYMOUS_MAX_EVENTS_PER_VISITOR = 100;
+/** Most stored events moved onto a contact by one identify call. */
+const ANONYMOUS_MERGE_LIMIT = 200;
+
+/** The anonymous id of a call: the top-level field, or context.anonymousId (what the browser snippet sends). */
+export function anonymousIdOf(body: { anonymousId?: string; context?: { [k: string]: unknown } | undefined }): string | null {
+  if (body.anonymousId) return body.anonymousId;
+  const fromContext = body.context?.anonymousId;
+  return typeof fromContext === "string" && fromContext.length > 0 && fromContext.length <= 200 ? fromContext : null;
+}
+
+const NEEDS_AN_ID = { path: "userId", message: "userId is required (or anonymousId, for a visitor who has not signed in)" };
 
 /** Batch envelope (Segment-compatible): items carry a type discriminator. */
 const batchItemSchema = z.discriminatedUnion("type", [
@@ -613,13 +648,17 @@ export async function processTrackEvent(
   db: Db,
   enqueue: EnqueueFn | undefined,
   tenantId: string,
-  body: TrackBody,
+  body: KnownTrackBody,
+  /** trustTimestamp: the time was already checked when the event was first received (stored anonymous events). */
+  opts: { trustTimestamp?: boolean } = {},
 ): Promise<{ deduplicated: boolean }> {
   const now = new Date();
   // A trial restarts once, when the customer's own app sends its first event.
   void rebaseTrialOnFirstEvent(db, tenantId, body.userId, now);
   const rawTimestamp = body.timestamp ? new Date(body.timestamp) : now;
-  const { timestamp: eventTimestamp, clamped } = clampTimestamp(rawTimestamp, now);
+  const { timestamp: eventTimestamp, clamped } = opts.trustTimestamp
+    ? { timestamp: rawTimestamp, clamped: false }
+    : clampTimestamp(rawTimestamp, now);
 
   // Build context, annotating if timestamp was clamped
   const eventContext = clamped
@@ -724,6 +763,138 @@ export async function processTrackEvent(
 }
 
 /**
+ * A track call from a visitor nobody has identified (anonymousId, no userId).
+ *
+ * If this anonymous id was already tied to a contact by an earlier identify, the event simply belongs to that
+ * contact. Otherwise it is kept in anonymous_events, capped per visitor, until an identify names the same id
+ * (mergeAnonymousEvents) or the retention sweep removes it. No contact is created, so a visitor who never signs
+ * up costs one capped handful of rows and counts against nothing.
+ */
+export async function processAnonymousTrack(
+  db: Db,
+  enqueue: EnqueueFn | undefined,
+  tenantId: string,
+  body: TrackBody,
+  anonymousId: string,
+): Promise<{ deduplicated: boolean; stored: boolean }> {
+  const [alias] = await db
+    .select({ externalId: contacts.externalId })
+    .from(anonymousAliases)
+    .innerJoin(contacts, eq(contacts.id, anonymousAliases.contactId))
+    .where(and(eq(anonymousAliases.tenantId, tenantId), eq(anonymousAliases.anonymousId, anonymousId)))
+    .limit(1);
+  if (alias) {
+    const { deduplicated } = await processTrackEvent(db, enqueue, tenantId, { ...body, userId: alias.externalId });
+    return { deduplicated, stored: true };
+  }
+
+  const now = new Date();
+  const { timestamp, clamped } = clampTimestamp(body.timestamp ? new Date(body.timestamp) : now, now);
+  const context = { ...(body.context ?? {}), anonymousId, ...(clamped ? { _timestamp_clamped: true } : {}) };
+
+  const [{ n } = { n: 0 }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(anonymousEvents)
+    .where(and(eq(anonymousEvents.tenantId, tenantId), eq(anonymousEvents.anonymousId, anonymousId)));
+  if (n >= ANONYMOUS_MAX_EVENTS_PER_VISITOR) return { deduplicated: false, stored: false };
+
+  const inserted = await db
+    .insert(anonymousEvents)
+    .values({
+      tenantId,
+      anonymousId,
+      eventName: body.event,
+      properties: body.properties ?? null,
+      context,
+      messageId: body.messageId ?? null,
+      timestamp,
+    })
+    .onConflictDoNothing()
+    .returning({ id: anonymousEvents.id });
+  const duplicate = inserted.length === 0;
+  return { deduplicated: duplicate && !!body.messageId, stored: !duplicate };
+}
+
+/**
+ * Move what an anonymous visitor did onto the contact they turned out to be.
+ *
+ * The anonymous id is tied to the contact first (so later anonymous calls from the same browser go straight to
+ * them), then each stored event is replayed as an ordinary track call with its original time: lifecycle and flow
+ * triggers see it like any other event. Replays carry a stable messageId, so a repeated or interrupted merge never
+ * doubles an event; a row that fails is left for the next identify. Returns how many events moved.
+ */
+export async function mergeAnonymousEvents(
+  db: Db,
+  enqueue: EnqueueFn | undefined,
+  tenantId: string,
+  userId: string,
+  anonymousId: string,
+): Promise<{ moved: number }> {
+  const [contact] = await db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(and(eq(contacts.tenantId, tenantId), eq(contacts.externalId, userId)))
+    .limit(1);
+  if (!contact) return { moved: 0 };
+
+  await db
+    .insert(anonymousAliases)
+    .values({ tenantId, anonymousId, contactId: contact.id })
+    .onConflictDoUpdate({
+      target: [anonymousAliases.tenantId, anonymousAliases.anonymousId],
+      set: { contactId: contact.id, createdAt: new Date() },
+    });
+
+  const rows = await db
+    .select()
+    .from(anonymousEvents)
+    .where(and(eq(anonymousEvents.tenantId, tenantId), eq(anonymousEvents.anonymousId, anonymousId)))
+    .orderBy(asc(anonymousEvents.timestamp))
+    .limit(ANONYMOUS_MERGE_LIMIT);
+
+  const done: string[] = [];
+  for (const row of rows) {
+    try {
+      await processTrackEvent(
+        db,
+        enqueue,
+        tenantId,
+        {
+          userId,
+          event: row.eventName,
+          properties: (row.properties ?? undefined) as Record<string, unknown> | undefined,
+          context: { ...((row.context ?? {}) as Record<string, unknown>), anonymousId, merged_from_anonymous: true },
+          timestamp: row.timestamp.toISOString(),
+          messageId: `anon:${anonymousId}:${row.id}`,
+        },
+        { trustTimestamp: true },
+      );
+      done.push(row.id);
+    } catch {
+      // Left in place: the next identify with this id tries again.
+    }
+  }
+  if (done.length > 0) {
+    await db.delete(anonymousEvents).where(and(eq(anonymousEvents.tenantId, tenantId), inArray(anonymousEvents.id, done)));
+  }
+  return { moved: done.length };
+}
+
+/** A track call of either kind: about a known person, or about an anonymous visitor. */
+export async function ingestTrack(
+  db: Db,
+  enqueue: EnqueueFn | undefined,
+  tenantId: string,
+  body: TrackBody,
+): Promise<{ deduplicated: boolean } | { missingId: true }> {
+  if (body.userId) return processTrackEvent(db, enqueue, tenantId, { ...body, userId: body.userId });
+  const anonymousId = anonymousIdOf(body);
+  if (!anonymousId) return { missingId: true };
+  const { deduplicated } = await processAnonymousTrack(db, enqueue, tenantId, body, anonymousId);
+  return { deduplicated };
+}
+
+/**
  * Process one identify event: contact upsert with trait processing, event
  * insert, conflict recording, lifecycle transition.
  * Shared by POST /v1/identify and POST /v1/batch.
@@ -731,7 +902,22 @@ export async function processTrackEvent(
 export async function processIdentifyEvent(
   db: Db,
   tenantId: string,
-  body: IdentifyBody,
+  body: KnownIdentifyBody,
+  enqueue?: EnqueueFn,
+): Promise<{ deduplicated: boolean }> {
+  const result = await processIdentifyCore(db, tenantId, body);
+  // The identify names the visitor this person was until now: bring what they did as a stranger across.
+  const anonymousId = anonymousIdOf(body);
+  if (anonymousId && !result.deduplicated) {
+    await mergeAnonymousEvents(db, enqueue, tenantId, body.userId, anonymousId);
+  }
+  return result;
+}
+
+async function processIdentifyCore(
+  db: Db,
+  tenantId: string,
+  body: KnownIdentifyBody,
 ): Promise<{ deduplicated: boolean }> {
   const now = new Date();
   const rawTimestamp = body.timestamp ? new Date(body.timestamp) : now;
@@ -1030,7 +1216,12 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
     const db: Db = request.server.db;
     let deduplicated: boolean;
     try {
-      ({ deduplicated } = await processTrackEvent(db, request.server.enqueue, tenantId, parsed.data));
+      const outcome = await ingestTrack(db, request.server.enqueue, tenantId, parsed.data);
+      if ("missingId" in outcome) {
+        reply.status(400);
+        return { error: "Validation failed", issues: [NEEDS_AN_ID] };
+      }
+      deduplicated = outcome.deduplicated;
     } catch (err) {
       // Plan limit reached: 402 with a machine-readable body, not a 500.
       if (err instanceof PlanLimitError) {
@@ -1071,9 +1262,16 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
 
     const tenantId = request.ingestTenant!.id;
     const db: Db = request.server.db;
+    if (!parsed.data.userId) {
+      reply.status(400);
+      return {
+        error: "Validation failed",
+        issues: [{ path: "userId", message: "userId is required: identify is for a person you can name. Anonymous visitors are tracked with track and an anonymousId." }],
+      };
+    }
     let deduplicated: boolean;
     try {
-      ({ deduplicated } = await processIdentifyEvent(db, tenantId, parsed.data));
+      ({ deduplicated } = await processIdentifyEvent(db, tenantId, { ...parsed.data, userId: parsed.data.userId }, request.server.enqueue));
     } catch (err) {
       if (err instanceof PlanLimitError) {
         reply.status(402);
@@ -1100,8 +1298,8 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
    * - 200 with per-item results; invalid items are reported in errors[] and
    *   do not abort the batch (Segment's own behavior: a batch is accepted
    *   or rejected as a unit only on auth/size failure).
-   * - Anonymous items (no userId) fail validation and land in errors[] -
-   *   anonymous tracking is out of scope (see file header).
+   * - A track item with an anonymousId and no userId is an anonymous visitor's event and is accepted
+   *   (see processAnonymousTrack). An item with neither id, or an identify with no userId, lands in errors[].
    * - Caps: 100 items per batch, 512 KB request body (route bodyLimit),
    *   matching the spirit of Segment's 32KB/event + 500KB/batch contract.
    * - The whole batch counts as ONE request against the key's rate limit.
@@ -1140,9 +1338,16 @@ const ingestRoutes: FastifyPluginAsync = async (app) => {
       const item = itemParsed.data;
       try {
         if (item.type === "track") {
-          await processTrackEvent(db, enqueue, tenantId, item);
+          const outcome = await ingestTrack(db, enqueue, tenantId, item);
+          if ("missingId" in outcome) {
+            errors.push({ index, message: `${NEEDS_AN_ID.path}: ${NEEDS_AN_ID.message}` });
+            continue;
+          }
+        } else if (item.userId) {
+          await processIdentifyEvent(db, tenantId, { ...item, userId: item.userId }, enqueue);
         } else {
-          await processIdentifyEvent(db, tenantId, item);
+          errors.push({ index, message: "userId: userId is required: identify is for a person you can name" });
+          continue;
         }
         received += 1;
       } catch (err) {

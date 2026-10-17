@@ -26,6 +26,11 @@
  *   identify cost nothing and create no contacts. Events older than the
  *   server's clock-skew window would be re-dated, so they are dropped here.
  *
+ *   Opt in with init(..., { anonymousTracking: true }) to send them to the server instead: they are stored
+ *   against the anonymous id (capped per visitor, deleted after 30 days if the visitor never identifies) and
+ *   moved onto the contact when identify() runs, with no 48-hour or 50-event limit. This keeps data about
+ *   visitors who never sign up, so turn it on only where your privacy notice and consent setup allow it.
+ *
  * Usage:
  *   <script>
  *     window.loomail = window.loomail || function () {
@@ -58,6 +63,7 @@
     key: null,
     endpoint: null,
     ready: false,
+    anonymousTracking: false,
   };
 
   // ---------------------------------------------------------------------
@@ -160,6 +166,17 @@
     send("/v1/track", payload);
   }
 
+  function sendAnonymous(anonymousId, event, properties) {
+    send("/v1/track", {
+      anonymousId: anonymousId,
+      event: event,
+      properties: properties || {},
+      context: { anonymousId: anonymousId },
+      timestamp: new Date().toISOString(),
+      messageId: "anon:" + newId(),
+    });
+  }
+
   // ---------------------------------------------------------------------
   // Events
   // ---------------------------------------------------------------------
@@ -168,6 +185,12 @@
     if (typeof event !== "string" || !event) return;
     if (data.uid) {
       sendTrack(data.uid, data.aid, event, properties);
+      return;
+    }
+    // Anonymous, server mode: the server keeps it until identify() says who this is.
+    if (state.anonymousTracking) {
+      save(data); // keeps the anonymous id: load() makes a new one if it was never stored
+      sendAnonymous(data.aid, event, properties);
       return;
     }
     // Anonymous: hold it until identify() tells us who this is.
@@ -235,6 +258,7 @@
         var opts = args[2] || {};
         state.endpoint = String(opts.endpoint || "").replace(/\/+$/, "");
         state.ready = !!(state.key && state.endpoint);
+        state.anonymousTracking = opts.anonymousTracking === true;
         if (state.ready && opts.autoPage) record(load(), PAGE_EVENT, pageProperties());
         return;
       }
