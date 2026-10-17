@@ -31,6 +31,7 @@ import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { PageHeader } from "../components/page-header.js";
+import { InboundSourcesCard } from "../components/inbound-sources-card.js";
 import { SampleEventButton } from "../components/sample-event.js";
 import {
   Table,
@@ -758,6 +759,8 @@ export default function IntegratePage() {
         ) : null}
 
         {!isLoading && <KeysCard keys={keys} onCreated={setCreatedKey} />}
+
+        <InboundSourcesCard />
       </div>
     </div>
   );

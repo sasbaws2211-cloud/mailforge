@@ -57,8 +57,10 @@ import billingPublicRoutes from "./routes/billing-public.js";
 import { resolveBillingRuntime, type BillingRuntime } from "./billing/config.js";
 import ingestionRoutes from "./routes/ingestion.js";
 import webhookSecretRoutes from "./routes/webhook-secret.js";
+import inboundSourcesRoutes from "./routes/inbound-sources.js";
 import resendWebhookRoute from "./routes/webhooks/resend.js";
 import resendPlatformWebhookRoute from "./routes/webhooks/resend-platform.js";
+import inboundWebhookRoute from "./routes/webhooks/inbound.js";
 import sendingRoutes from "./routes/sending.js";
 import settingsRoutes from "./routes/settings.js";
 import libraryRoutes from "./routes/library.js";
@@ -304,6 +306,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     await app.register(resendWebhookRoute, { prefix: "/webhooks/resend" });
     // Managed sending: one webhook for the operator's own Resend account (one signing secret).
     await app.register(resendPlatformWebhookRoute, { prefix: "/webhooks/resend-platform" });
+    // Inbound sources: other systems (Stripe, any JSON sender) posting events to a URL of the customer's own.
+    // Authenticated per source (a token, or Stripe's signature), not by session.
+    await app.register(inboundWebhookRoute, { prefix: "/webhooks/in" });
   }
 
   // --- Authenticated scope (dashboard) ----------------------------------------
@@ -429,6 +434,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       // Integrate screen (dashboard operators only)
       if (opts.db) {
         await v1.register(ingestionRoutes, { prefix: "/ingestion" });
+      }
+
+      // inbound-sources: places other systems (Stripe, any JSON sender) send events to
+      if (opts.db) {
+        await v1.register(inboundSourcesRoutes, { prefix: "/inbound-sources" });
       }
 
       // webhook-secret: the secret flow webhooks are signed with (owners only)

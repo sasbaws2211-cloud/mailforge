@@ -48,6 +48,8 @@ export const EXPORT_TABLES: readonly ExportTable[] = [
   { key: "knowledge_base", table: "kb_entries", drop: ["embedding"] },
   { key: "suppressions", table: "suppressions" },
   { key: "api_keys", table: "api_keys", drop: ["key_hash"] },
+  { key: "inbound_sources", table: "inbound_sources", drop: ["secret_sealed", "token_hash"] },
+  { key: "inbound_source_log", table: "inbound_source_log" },
   { key: "email_transports", table: "transport_configs", drop: ["config"] },
   { key: "llm_providers", table: "llm_configs", drop: ["config"] },
   { key: "managed_sending", table: "managed_sending", orderBy: "created_at" },

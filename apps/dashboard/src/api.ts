@@ -2077,3 +2077,54 @@ export async function rotateWebhookSecret(): Promise<WebhookSecret> {
   if (!res.ok) throw new Error(res.status === 403 ? "Only a workspace owner can rotate the signing secret." : `Could not rotate the signing secret (${res.status})`);
   return res.json() as Promise<WebhookSecret>;
 }
+
+// ---------------------------------------------------------------------------
+// Inbound sources
+// ---------------------------------------------------------------------------
+
+export interface InboundSource {
+  id: string;
+  name: string;
+  kind: "generic" | "stripe";
+  enabled: boolean;
+  config: Record<string, unknown>;
+  token_prefix: string | null;
+  has_signing_secret: boolean;
+  created_at: string;
+  last_received_at: string | null;
+}
+
+export interface InboundLogLine {
+  id: string;
+  status: "processed" | "ignored" | "rejected" | "error";
+  summary: string;
+  created_at: string;
+}
+
+async function inboundFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(`/v1/inbound-sources${path}`, init);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string; issues?: Array<{ message: string }> };
+    throw new Error(body.issues?.[0]?.message ?? body.error ?? `Request failed (${res.status})`);
+  }
+  return res.json() as Promise<T>;
+}
+const jsonInit = (method: string, body?: unknown): RequestInit => ({
+  method,
+  ...(body !== undefined ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
+});
+
+/** GET /v1/inbound-sources */
+export const fetchInboundSources = () => inboundFetch<{ sources: InboundSource[] }>("");
+/** POST /v1/inbound-sources - a generic source's token comes back once. */
+export const createInboundSource = (input: { kind: "generic" | "stripe"; name: string; config?: unknown; stripe_signing_secret?: string }) =>
+  inboundFetch<{ source: InboundSource; token?: string }>("", jsonInit("POST", input));
+/** PATCH /v1/inbound-sources/:id */
+export const updateInboundSource = (id: string, input: { name?: string; enabled?: boolean; config?: unknown; stripe_signing_secret?: string }) =>
+  inboundFetch<{ source: InboundSource }>(`/${id}`, jsonInit("PATCH", input));
+/** POST /v1/inbound-sources/:id/rotate-token */
+export const rotateInboundToken = (id: string) => inboundFetch<{ source: InboundSource; token: string }>(`/${id}/rotate-token`, jsonInit("POST"));
+/** DELETE /v1/inbound-sources/:id */
+export const deleteInboundSource = (id: string) => inboundFetch<{ deleted: true }>(`/${id}`, jsonInit("DELETE"));
+/** GET /v1/inbound-sources/:id/log */
+export const fetchInboundLog = (id: string) => inboundFetch<{ log: InboundLogLine[] }>(`/${id}/log`);

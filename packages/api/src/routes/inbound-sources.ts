@@ -1,0 +1,199 @@
+/**
+ * Inbound sources: the places other systems send data to (see routes/webhooks/inbound.ts for the receiving side).
+ *
+ *   GET    /v1/inbound-sources              list (never returns a token or a signing secret)
+ *   POST   /v1/inbound-sources              create; a generic source's token is returned ONCE
+ *   PATCH  /v1/inbound-sources/:id          rename, enable or disable, change its settings or Stripe secret
+ *   POST   /v1/inbound-sources/:id/rotate-token   a new token for a generic source (the old one stops working)
+ *   DELETE /v1/inbound-sources/:id          delete it and its log
+ *   GET    /v1/inbound-sources/:id/log      what it received lately, newest first (last 50)
+ *
+ * Dashboard operator scope (session cookie), any member, like API keys. The source's URL is
+ * `<your host>/webhooks/in/<id>`; the id is not a secret, the token or Stripe signature is.
+ *
+ * Mirror side: PUBLIC (packages/api is mirrored).
+ */
+import type { FastifyPluginAsync } from "fastify";
+import { randomBytes } from "node:crypto";
+import { z } from "zod";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { sealWebhookSecret } from "@loomail/adapters";
+import { inboundSources, inboundSourceLog } from "@loomail/db/schema";
+import type { Db } from "../plugins/db.js";
+import { genericConfigSchema, stripeConfigSchema } from "../inbound/mapping.js";
+import { sha256 } from "./webhooks/inbound.js";
+
+export const MAX_INBOUND_SOURCES = 20;
+
+const stripeSecretSchema = z
+  .string()
+  .trim()
+  .regex(/^whsec_[A-Za-z0-9]{16,}$/, "That does not look like a Stripe signing secret. It starts with whsec_ and is on the endpoint's page in Stripe.");
+
+const createSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("generic"), name: z.string().trim().min(1).max(100), config: z.unknown() }),
+  z.object({ kind: z.literal("stripe"), name: z.string().trim().min(1).max(100), config: z.unknown().optional(), stripe_signing_secret: stripeSecretSchema }),
+]);
+
+const patchSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100).optional(),
+    enabled: z.boolean().optional(),
+    config: z.unknown().optional(),
+    stripe_signing_secret: stripeSecretSchema.optional(),
+  })
+  .strict();
+
+function view(r: typeof inboundSources.$inferSelect) {
+  return {
+    id: r.id,
+    name: r.name,
+    kind: r.kind,
+    enabled: r.enabled,
+    config: r.config,
+    token_prefix: r.tokenPrefix,
+    has_signing_secret: r.secretSealed !== null,
+    created_at: r.createdAt.toISOString(),
+    last_received_at: r.lastReceivedAt ? r.lastReceivedAt.toISOString() : null,
+  };
+}
+
+const newToken = () => `mf_in_${randomBytes(24).toString("base64url")}`;
+
+const issues = (error: z.ZodError) => error.issues.map((i) => ({ path: i.path.join("."), message: i.message }));
+
+const inboundSourcesRoutes: FastifyPluginAsync = async (app) => {
+  app.get("/", { config: { minRole: "member" } }, async (request) => {
+    const db: Db = request.server.db;
+    const rows = await db.select().from(inboundSources).where(eq(inboundSources.tenantId, request.tenant!.id)).orderBy(desc(inboundSources.createdAt));
+    return { sources: rows.map(view) };
+  });
+
+  app.post<{ Body: unknown }>("/", { config: { minRole: "member" } }, async (request, reply) => {
+    const db: Db = request.server.db;
+    const tenantId = request.tenant!.id;
+    const parsed = createSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.status(400);
+      return { error: "Validation failed", issues: issues(parsed.error) };
+    }
+    const count = (await db.select({ n: sql<number>`count(*)::int` }).from(inboundSources).where(eq(inboundSources.tenantId, tenantId)))[0]!.n;
+    if (count >= MAX_INBOUND_SOURCES) {
+      reply.status(409);
+      return { error: `A workspace can have at most ${MAX_INBOUND_SOURCES} sources.` };
+    }
+
+    if (parsed.data.kind === "generic") {
+      const config = genericConfigSchema.safeParse(parsed.data.config ?? {});
+      if (!config.success) {
+        reply.status(400);
+        return { error: "Validation failed", issues: issues(config.error).map((i) => ({ ...i, path: `config.${i.path}` })) };
+      }
+      const token = newToken();
+      const [row] = await db
+        .insert(inboundSources)
+        .values({ tenantId, name: parsed.data.name, kind: "generic", config: config.data, tokenHash: sha256(token), tokenPrefix: token.slice(0, 10) })
+        .returning();
+      reply.status(201);
+      return { source: view(row!), token };
+    }
+
+    const config = stripeConfigSchema.safeParse(parsed.data.config ?? {});
+    if (!config.success) {
+      reply.status(400);
+      return { error: "Validation failed", issues: issues(config.error).map((i) => ({ ...i, path: `config.${i.path}` })) };
+    }
+    const [row] = await db
+      .insert(inboundSources)
+      .values({ tenantId, name: parsed.data.name, kind: "stripe", config: config.data, secretSealed: sealWebhookSecret(parsed.data.stripe_signing_secret) })
+      .returning();
+    reply.status(201);
+    return { source: view(row!) };
+  });
+
+  const own = async (db: Db, tenantId: string, id: string) => {
+    if (!z.string().uuid().safeParse(id).success) return undefined;
+    return (await db.select().from(inboundSources).where(and(eq(inboundSources.id, id), eq(inboundSources.tenantId, tenantId))).limit(1))[0];
+  };
+
+  app.patch<{ Params: { id: string }; Body: unknown }>("/:id", { config: { minRole: "member" } }, async (request, reply) => {
+    const db: Db = request.server.db;
+    const tenantId = request.tenant!.id;
+    const existing = await own(db, tenantId, request.params.id);
+    if (!existing) {
+      reply.status(404);
+      return { error: "Source not found." };
+    }
+    const parsed = patchSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.status(400);
+      return { error: "Validation failed", issues: issues(parsed.error) };
+    }
+    const set: Partial<typeof inboundSources.$inferInsert> = {};
+    if (parsed.data.name !== undefined) set.name = parsed.data.name;
+    if (parsed.data.enabled !== undefined) set.enabled = parsed.data.enabled;
+    if (parsed.data.config !== undefined) {
+      const config = (existing.kind === "stripe" ? stripeConfigSchema : genericConfigSchema).safeParse(parsed.data.config);
+      if (!config.success) {
+        reply.status(400);
+        return { error: "Validation failed", issues: issues(config.error).map((i) => ({ ...i, path: `config.${i.path}` })) };
+      }
+      set.config = config.data;
+    }
+    if (parsed.data.stripe_signing_secret !== undefined) {
+      if (existing.kind !== "stripe") {
+        reply.status(400);
+        return { error: "Validation failed", issues: [{ path: "stripe_signing_secret", message: "Only a Stripe source has a signing secret." }] };
+      }
+      set.secretSealed = sealWebhookSecret(parsed.data.stripe_signing_secret);
+    }
+    if (Object.keys(set).length === 0) return { source: view(existing) };
+    const [row] = await db.update(inboundSources).set(set).where(eq(inboundSources.id, existing.id)).returning();
+    return { source: view(row!) };
+  });
+
+  app.post<{ Params: { id: string } }>("/:id/rotate-token", { config: { minRole: "member" } }, async (request, reply) => {
+    const db: Db = request.server.db;
+    const existing = await own(db, request.tenant!.id, request.params.id);
+    if (!existing) {
+      reply.status(404);
+      return { error: "Source not found." };
+    }
+    if (existing.kind !== "generic") {
+      reply.status(400);
+      return { error: "Only a generic source has a token. A Stripe source is checked by Stripe's signature." };
+    }
+    const token = newToken();
+    const [row] = await db.update(inboundSources).set({ tokenHash: sha256(token), tokenPrefix: token.slice(0, 10) }).where(eq(inboundSources.id, existing.id)).returning();
+    return { source: view(row!), token };
+  });
+
+  app.delete<{ Params: { id: string } }>("/:id", { config: { minRole: "member" } }, async (request, reply) => {
+    const db: Db = request.server.db;
+    const existing = await own(db, request.tenant!.id, request.params.id);
+    if (!existing) {
+      reply.status(404);
+      return { error: "Source not found." };
+    }
+    await db.delete(inboundSources).where(eq(inboundSources.id, existing.id));
+    return { deleted: true };
+  });
+
+  app.get<{ Params: { id: string } }>("/:id/log", { config: { minRole: "member" } }, async (request, reply) => {
+    const db: Db = request.server.db;
+    const existing = await own(db, request.tenant!.id, request.params.id);
+    if (!existing) {
+      reply.status(404);
+      return { error: "Source not found." };
+    }
+    const rows = await db
+      .select({ id: inboundSourceLog.id, status: inboundSourceLog.status, summary: inboundSourceLog.summary, created_at: inboundSourceLog.createdAt })
+      .from(inboundSourceLog)
+      .where(eq(inboundSourceLog.sourceId, existing.id))
+      .orderBy(desc(inboundSourceLog.createdAt), desc(inboundSourceLog.id))
+      .limit(50);
+    return { log: rows.map((r) => ({ ...r, created_at: r.created_at.toISOString() })) };
+  });
+};
+
+export default inboundSourcesRoutes;

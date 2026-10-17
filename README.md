@@ -40,6 +40,7 @@ Open the claim URL printed to the console, enter your email, and you are the own
 - **Brain** - compile, decide, draft, assess. Real LLM calls to any OpenAI-compatible endpoint, only at compile time and content time, never in the execution path
 - **Approval queue** - AI-drafted messages are held for human review by default; per-flow auto-approve when you trust it
 - **Webhook steps** - a flow step can call your own system (CRM, Slack, your product) instead of sending an email: signed, retried, with a delivery log
+- **Inbound sources** - connect Stripe or any JSON webhook (forms, Zapier, your own app) from the Integrate page: no code, a log of what arrived
 - **Event ingestion** - Segment-compatible `/v1/track`, `/v1/identify`, `/v1/batch`. Publishable and secret API keys, rate limits, browser snippet at `/loomail.js`
 - **Transports** - Resend (with open/click/bounce webhooks) and generic SMTP (including the Amazon SES SMTP endpoint)
 - **Compliance built in** - RFC 8058 one-click unsubscribe and a CAN-SPAM postal footer on every outgoing email, suppression list enforced before everything

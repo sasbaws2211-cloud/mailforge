@@ -271,6 +271,67 @@ Keep Segment exactly as it is and add Loomail as a second sink:
   to Loomail. (This is the zero-code option; it depends on Segment's webhook
   retry behavior for delivery guarantees.)
 
+## 7a. Receiving events from other tools (Stripe, forms, Zapier)
+
+When a tool can post a webhook but you do not want to write code against `/v1/track`, add a **source** on the
+**Integrate** page (**Connect other tools**). Each source has its own address, `https://YOUR_LOOMAIL_HOST/webhooks/in/<id>`,
+and a log of what it received (kept 30 days). Up to 20 sources per workspace.
+
+### Any JSON webhook
+
+Choose **Any JSON webhook** and say where things are in the payload, using dotted paths such as `data.user.email` or
+`answers.0.text`:
+
+- **The person**: a user id field, an email field, or both. With only an email, the person is matched to an existing
+  contact with that email, or created keyed by it (like the CSV import).
+- **The event**: a fixed name, a name read from a field, or none (the request then only sets traits).
+- **Traits**: any number of `trait name` from `field` pairs (up to 20). Empty or missing fields are skipped, so a request
+  never clears a trait. `company`, `name`, `email`, `plan` and `payment_status` set the built-in fields, as in `identify`.
+- **Payload**: by default the whole JSON body is kept on the event, so flows and segments can use any of it.
+
+The source gives you a token, shown once. Send it as `Authorization: Bearer <token>`, as `X-Loomail-Token: <token>`, or
+as `?token=<token>` on the address for tools that cannot set headers (the address then is a secret; do not share it).
+An optional `X-Loomail-Event-Id` header makes a repeat of the same request harmless.
+
+```bash
+curl -X POST 'https://YOUR_LOOMAIL_HOST/webhooks/in/SOURCE_ID' \
+  -H 'Authorization: Bearer mf_in_YOUR_TOKEN' -H 'Content-Type: application/json' \
+  -d '{"event_type":"form_response","user":{"id":"u_1","email":"ada@example.com"}}'
+```
+
+Answers: `200` when handled, or deliberately ignored (nothing to record); `400` for a body that is not a JSON object or has no
+person at the configured paths; `401` for a wrong token, a disabled source or an unknown address (all the same answer, so
+the address cannot be used to find out which sources exist); `402` when your plan's contact limit stopped a new person;
+`429` past 600 requests a minute for one source.
+
+### Stripe
+
+Choose **Stripe**, then in Stripe (Developers, Webhooks) add an endpoint at the address shown, select these events, and paste
+the endpoint's signing secret (`whsec_...`) into Loomail:
+
+| Stripe event | What Loomail records |
+|---|---|
+| `checkout.session.completed` | event `checkout_completed`; the Stripe customer id is remembered on the person |
+| `customer.subscription.created` | event `subscription_started`; payment status and plan |
+| `customer.subscription.updated` | event `subscription_updated`; payment status and plan |
+| `customer.subscription.deleted` | event `subscription_cancelled`; payment status `cancelled` |
+| `invoice.paid` | event `payment_succeeded`; payment status `paid` (not for a zero-amount invoice) |
+| `invoice.payment_failed` | event `payment_failed`; payment status `past_due` |
+
+Payment status comes from the subscription: `trialing` is `trial`, `active` is `paid`, `past_due` and `unpaid` are `past_due`,
+`canceled` is `cancelled`; an incomplete or paused subscription leaves it alone. The plan is the price's nickname, else its
+lookup key, else its id. Other event types are acknowledged and ignored.
+
+**Matching people.** Loomail uses, in order: your own user id in a Stripe metadata field (the key is configurable, default
+`user_id`; set it on customers, subscriptions or checkout sessions), the checkout's `client_reference_id`, a person who already
+carries this Stripe customer id, a person with this email, and otherwise creates one keyed by the email. Subscription events carry
+no email, which is why the customer id is remembered the first time Loomail sees it (usually at checkout). Events Loomail cannot
+match to anyone are acknowledged and noted in the log, not retried. A person's own email is never overwritten.
+
+Calls are verified with Stripe's signature (`Stripe-Signature`, HMAC-SHA256 over the exact body, five-minute window) before
+anything is read. Each Stripe event is recorded once, whatever number of times Stripe sends it. The dashboard stores the signing
+secret encrypted with `ENCRYPTION_KEY` when the install has one, and never shows it again.
+
 ## What the AI sees of the data you send
 
 AI-drafted emails use only a few of the things you send, so it pays to send them in the right fields:
