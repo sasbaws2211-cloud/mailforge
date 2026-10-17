@@ -485,7 +485,10 @@ async function advanceBranching(c: BranchingContext): Promise<AdvanceOutcome> {
 
     const delay = parseDelay((stepDef ?? branchDef)!.delay);
     if (delay === null) return done({ kind: "skipped_invalid_delay" });
-    if (now.getTime() - arrivedAt.getTime() < delayToMs(delay)) {
+    const due = now.getTime() - arrivedAt.getTime() >= delayToMs(delay);
+    // A wait-until fork is looked at before its time is up: it goes on early the moment its condition holds.
+    const waitingEarly = !due && branchDef?.early === true;
+    if (!due && !waitingEarly) {
       // Not due. The plan read fine, so any old condition error is stale.
       if (staleError !== null) {
         await db.update(flowMemberships).set({ conditionError: null }).where(eq(flowMemberships.id, c.membership.id));
@@ -497,6 +500,14 @@ async function advanceBranching(c: BranchingContext): Promise<AdvanceOutcome> {
     // A fork: check its condition and go one way or the other. No email.
     if (branchDef) {
       const result = await evaluateStepCondition(branchDef.condition, c.contactState, c.eventChecker, arrivedAt, c.times);
+      if (waitingEarly && result.outcome === "fail") {
+        // Still waiting: the thing has not happened yet and there is time left.
+        if (staleError !== null) {
+          await db.update(flowMemberships).set({ conditionError: null }).where(eq(flowMemberships.id, c.membership.id));
+          staleError = null;
+        }
+        return done(hops > 0 ? { kind: "branch_taken", completed: false, applied: true } : { kind: "waiting_delay" });
+      }
       if (result.outcome === "unknown_shape") {
         await c.recordError(formatConditionError({ type: "step_condition", stepOrder: at }, result.message));
         return done({ kind: "stuck_condition_error" });

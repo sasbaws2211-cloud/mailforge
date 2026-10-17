@@ -19,6 +19,7 @@ import { newConditionRow } from "../conditions.js";
 import {
   MAX_FLOW_NODES,
   MAX_FORK_DEPTH,
+  WAIT_LIMIT_PRESETS,
   canAddFork,
   newFork,
   type ForkData,
@@ -67,7 +68,7 @@ export function ForkEditor({
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
           <GitFork size={18} strokeWidth={1.5} aria-hidden="true" className="text-accent-text" />
-          <h3 className="text-[15px] font-semibold text-foreground">Split into two paths</h3>
+          <h3 className="text-[15px] font-semibold text-foreground">{fork.early ? "Wait until something happens" : "Split into two paths"}</h3>
         </div>
         <Button type="button" variant="secondary" size="sm" disabled={ctx.disabled} onClick={onRemove} aria-label="Remove this split">
           <X size={16} strokeWidth={1.5} /> Remove split
@@ -75,23 +76,49 @@ export function ForkEditor({
       </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2 text-[14px] text-foreground">
-        <span>After the emails above, wait</span>
+        <div className="w-72">
+          <Select
+            aria-label="When to check"
+            value={fork.early ? "early" : "after"}
+            disabled={ctx.disabled}
+            onChange={(e) => {
+              const early = e.target.value === "early";
+              // Waiting up to "immediately" means nothing, so start a wait-until at a day.
+              onChange({ ...fork, early, delay: early && fork.delay === "0m" ? "1d" : fork.delay });
+            }}
+          >
+            <option value="after">Wait the full time, then check</option>
+            <option value="early">Wait for it to happen, up to a limit</option>
+          </Select>
+        </div>
+        <span>{fork.early ? "Wait up to" : "After the emails above, wait"}</span>
         <div className="w-40">
           <Select
-            aria-label="How long to wait before checking"
+            aria-label={fork.early ? "The longest to wait" : "How long to wait before checking"}
             value={fork.delay}
             disabled={ctx.disabled}
             onChange={(e) => onChange({ ...fork, delay: e.target.value })}
           >
-            {DELAY_PRESETS.map((d) => (
+            {(fork.early ? WAIT_LIMIT_PRESETS : DELAY_PRESETS).map((d) => (
               <option key={d.value} value={d.value}>
                 {d.label}
               </option>
             ))}
           </Select>
         </div>
-        <span>then check:</span>
+        <span>{fork.early ? "for:" : "then check:"}</span>
       </div>
+      {fork.early && (
+        <p className="mb-3 text-[13px] text-muted-foreground">
+          The contact goes down "If it holds" as soon as it happens, checked every 15 minutes. If the time runs out first they go down
+          "Otherwise". For an event, choose "since this step" to count only what happens after they reach this point.
+        </p>
+      )}
+      {ctx.conditionErrors[`${fork.id}-delay`] && (
+        <p className="mb-3 text-[13px] text-danger" role="alert">
+          {ctx.conditionErrors[`${fork.id}-delay`]}
+        </p>
+      )}
 
       <ConditionEditor
         state={fork.condition}

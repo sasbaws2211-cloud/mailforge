@@ -263,6 +263,7 @@ export {
   compiledPlanSchema,
   compiledStepSchema,
   compiledBranchSchema,
+  BRANCH_MAX_WAIT_DAYS,
   compiledTriggerSchema,
   planExitConditionSchema,
   stepConditionSchema,

@@ -1049,8 +1049,16 @@ function BranchingSteps({
             )}
             {line.kind === "fork" && (
               <p className="rounded-md border border-border bg-sunken px-3 py-2 text-[14px] text-foreground">
-                <span className="font-medium">Split.</span> Check {renderDelay(line.delay)}: if{" "}
-                {describeCondition(line.condition)}
+                {line.early ? (
+                  <>
+                    <span className="font-medium">Wait.</span> Up to {renderDelay(line.delay)} for: {describeCondition(line.condition)}
+                  </>
+                ) : (
+                  <>
+                    <span className="font-medium">Split.</span> Check {renderDelay(line.delay)}: if{" "}
+                    {describeCondition(line.condition)}
+                  </>
+                )}
               </p>
             )}
             {line.kind === "path" && (

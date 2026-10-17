@@ -1367,6 +1367,27 @@ describe("flow CRUD", () => {
         expect((await savePlan(app, id, { version: 2, steps: [email(1), email(3, { next: "end" })], branches: [fork(2, 3, "end", { delay: "soon" })] })).statusCode).toBe(400);
       });
 
+      it("saves a wait-until fork and keeps its early flag", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        const waitFork = fork(2, 3, 4, { early: true, condition: { field: "event", name: "project_created", op: "performed", since: "step" } });
+        const res = await savePlan(app, id, { version: 2, steps: [email(1), email(3, { next: "end" }), email(4, { next: "end" })], branches: [waitFork] });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().compiled_plan.branches[0].early).toBe(true);
+      });
+
+      it("400 for a wait-until fork with no deadline or one over 90 days", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const id = await fixedFlow(app);
+        for (const delay of ["0m", "91d"]) {
+          const res = await savePlan(app, id, { version: 2, steps: [email(1), email(3, { next: "end" }), email(4, { next: "end" })], branches: [fork(2, 3, 4, { early: true, delay })] });
+          expect(res.statusCode, delay).toBe(400);
+          expect(JSON.stringify(res.json().issues)).toMatch(/wait/);
+        }
+      });
+
       it("saving a new plan replaces the old one, including its forks", async () => {
         if (!dbAvailable) return;
         const app = await buildApp({ db, logger: false });

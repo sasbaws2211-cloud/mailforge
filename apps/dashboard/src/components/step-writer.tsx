@@ -665,6 +665,8 @@ export interface PlanBody {
     condition: ApiFlowCondition;
     then: number | "end";
     else: number | "end";
+    /** Wait-until: `delay` is the longest to wait; goes to `then` as soon as the condition holds. */
+    early?: boolean;
   }>;
   /** 2 for a plan with branches; absent for a straight-line plan. */
   version?: 2;

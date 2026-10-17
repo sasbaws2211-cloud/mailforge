@@ -31,11 +31,27 @@ import { stateToCondition, type ApiFlowCondition, type ConditionState } from "./
 export const MAX_FLOW_NODES = 30;
 export const MAX_FORK_DEPTH = 3;
 
+/** The longest a wait-until split may wait; mirrors the API's limit. */
+export const WAIT_LIMIT_PRESETS = [
+  { value: "1h", label: "1 hour" },
+  { value: "1d", label: "1 day" },
+  { value: "2d", label: "2 days" },
+  { value: "3d", label: "3 days" },
+  { value: "5d", label: "5 days" },
+  { value: "7d", label: "7 days" },
+  { value: "14d", label: "14 days" },
+  { value: "30d", label: "30 days" },
+  { value: "60d", label: "60 days" },
+  { value: "90d", label: "90 days" },
+] as const;
+
 export interface ForkData {
   /** Keys the split in the editor and in error reports (not sent anywhere). */
   id: string;
-  /** How long to wait, from reaching the split, before checking. */
+  /** How long to wait, from reaching the split, before checking (or, with `early`, the longest to wait). */
   delay: string;
+  /** Wait-until mode: go down the "yes" path the moment the condition holds, or "no" when the delay runs out. */
+  early: boolean;
   /** What decides the path: the "yes" path if it holds. */
   condition: ConditionState;
   yes: SequenceData;
@@ -56,6 +72,7 @@ export function newFork(firstRow: ConditionState["rows"][number]): ForkData {
   return {
     id: `fork-${++counter}`,
     delay: "3d",
+    early: false,
     condition: { match: "all", rows: [firstRow] },
     yes: emptySequence(),
     no: emptySequence(),
@@ -136,9 +153,11 @@ export function buildPlanFromTree(root: SequenceData, planExit?: ConditionState)
       const result = stateToCondition(seq.fork.condition);
       Object.assign(errors, result.errors);
       if (seq.fork.condition.rows.length === 0) errors[seq.fork.id] = "Add at least one condition to decide the path.";
+      if (seq.fork.early && seq.fork.delay === "0m") errors[`${seq.fork.id}-delay`] = "Choose the longest to wait. Waiting 0 minutes is the same as checking straight away.";
       branches.push({
         order: forkId,
         delay: seq.fork.delay,
+        ...(seq.fork.early ? { early: true } : {}),
         condition: (result.condition ?? { lifecycle_state: "signed_up" }) as ApiFlowCondition,
         then: yesEntry,
         else: noEntry,
@@ -163,7 +182,7 @@ export type OutlineLine =
   /** An email step. */
   | { kind: "email"; depth: number; order: number; step: Record<string, unknown> }
   /** A split: wait, then check. */
-  | { kind: "fork"; depth: number; order: number; delay: string; condition: unknown }
+  | { kind: "fork"; depth: number; order: number; delay: string; condition: unknown; early: boolean }
   /** The heading of one path out of a split. */
   | { kind: "path"; depth: number; label: "If yes" | "Otherwise" }
   /** A path that finishes the flow. */
@@ -224,7 +243,7 @@ export function planOutline(plan: unknown): OutlineLine[] {
     }
     const branch = branchAt.get(target);
     if (branch) {
-      lines.push({ kind: "fork", depth, order: target, delay: String(branch.delay ?? ""), condition: branch.condition });
+      lines.push({ kind: "fork", depth, order: target, delay: String(branch.delay ?? ""), condition: branch.condition, early: branch.early === true });
       lines.push({ kind: "path", depth: depth + 1, label: "If yes" });
       walk(branch.then, depth + 2);
       lines.push({ kind: "path", depth: depth + 1, label: "Otherwise" });

@@ -215,6 +215,42 @@ describe("any tree the editor can build is a plan the server accepts", () => {
   });
 });
 
+describe("wait-until splits", () => {
+  it("a normal split never writes early", () => {
+    const { body } = buildPlanFromTree(sequence([email()], fork()));
+    expect("early" in body.branches![0]!).toBe(false);
+  });
+
+  it("a wait-until split writes early and keeps its deadline", () => {
+    const { body, errors } = buildPlanFromTree(sequence([email()], fork(emptySequence(), emptySequence(), { early: true, delay: "7d" })));
+    expect(errors).toEqual({});
+    expect(body.branches![0]).toMatchObject({ order: 2, delay: "7d", early: true });
+  });
+
+  it("refuses a wait-until split with no deadline, naming the split", () => {
+    const f = fork(emptySequence(), emptySequence(), { early: true, delay: "0m" });
+    const { errors } = buildPlanFromTree(sequence([email()], f));
+    expect(errors[`${f.id}-delay`]).toMatch(/longest to wait/);
+  });
+
+  it("an ordinary split may still check immediately", () => {
+    const f = fork(emptySequence(), emptySequence(), { delay: "0m" });
+    expect(buildPlanFromTree(sequence([email()], f)).errors).toEqual({});
+  });
+
+  it("the outline marks a wait-until split and leaves normal ones alone", () => {
+    const e = (order: number, extra: Record<string, unknown> = {}) => ({ order, action_type: "x", delay: "0m", ...extra });
+    const plan = (early: boolean) => ({
+      version: 2,
+      steps: [e(1, { next: 2 }), e(3, { next: "end" }), e(4, { next: "end" })],
+      branches: [{ order: 2, delay: "3d", condition: { lifecycle_state: "a" }, then: 3, else: 4, ...(early ? { early: true } : {}) }],
+    });
+    const forkLine = (early: boolean) => planOutline(plan(early)).find((l) => l.kind === "fork") as { early: boolean };
+    expect(forkLine(true).early).toBe(true);
+    expect(forkLine(false).early).toBe(false);
+  });
+});
+
 describe("planOutline", () => {
   const emailStep = (order: number, extra: Record<string, unknown> = {}) => ({ order, action_type: "x", delay: "0m", ...extra });
   const branch = (order: number, then: unknown, otherwise: unknown) => ({ order, delay: "3d", condition: { lifecycle_state: "a" }, then, else: otherwise });

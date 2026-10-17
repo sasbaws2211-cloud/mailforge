@@ -9,6 +9,7 @@ import {
   stepTarget,
   MAX_PLAN_NODES,
   MAX_BRANCH_DEPTH,
+  BRANCH_MAX_WAIT_DAYS,
   type PlanGraphInput,
 } from "../src/index.js";
 
@@ -162,5 +163,43 @@ describe("through the plan schema", () => {
     const plain = { trigger: { type: "event", condition: {} }, steps: [{ order: 1, action_type: "x", delay: "0m" }, { order: 2, action_type: "y", delay: "1d" }] };
     expect(compiledPlanSchema.safeParse(plain).success).toBe(true);
     expect(compiledPlanSchema.safeParse({ ...plain, steps: [{ ...plain.steps[0], next: 2 }, plain.steps[1]] }).success).toBe(false);
+  });
+});
+
+describe("wait-until forks (early)", () => {
+  const plan = (branch: Record<string, unknown>) => ({
+    version: 2,
+    trigger: { type: "event", condition: {} },
+    steps: [
+      { order: 3, action_type: "nurture_value", delay: "0m", next: "end" },
+      { order: 4, action_type: "nurture_reactivate", delay: "0m", next: "end" },
+    ],
+    branches: [{ order: 1, delay: "3d", condition: { field: "event", name: "project_created", op: "performed", since: "step" }, then: 3, else: 4, ...branch }],
+  });
+  const ok = (branch: Record<string, unknown>) => compiledPlanSchema.safeParse(plan(branch));
+
+  it("accepts early on a fork with a delay up to the limit", () => {
+    expect(ok({ early: true }).success).toBe(true);
+    expect(ok({ early: true, delay: `${BRANCH_MAX_WAIT_DAYS}d` }).success).toBe(true);
+    expect(ok({ early: true, delay: `${BRANCH_MAX_WAIT_DAYS * 24}h` }).success).toBe(true);
+  });
+  it("needs a deadline above zero and no more than the limit", () => {
+    for (const delay of ["0m", "0d", `${BRANCH_MAX_WAIT_DAYS + 1}d`, `${BRANCH_MAX_WAIT_DAYS * 24 + 1}h`]) {
+      const r = ok({ early: true, delay });
+      expect(r.success, delay).toBe(false);
+      expect(JSON.stringify(r.error?.issues)).toMatch(/wait/);
+    }
+  });
+  it("a fork without early is unchanged: zero or long delays stay fine", () => {
+    expect(ok({ delay: "0m" }).success).toBe(true);
+    expect(ok({ delay: "400d" }).success).toBe(true);
+    expect(ok({ early: false, delay: "0m" }).success).toBe(true);
+  });
+  it("early must be a boolean", () => {
+    expect(ok({ early: "yes" }).success).toBe(false);
+  });
+  it("keeps early when parsed", () => {
+    const r = ok({ early: true });
+    expect(r.success && r.data.branches?.[0]?.early).toBe(true);
   });
 });

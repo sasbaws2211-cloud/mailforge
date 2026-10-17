@@ -84,8 +84,27 @@ export const compiledBranchSchema = z
     condition: stepConditionSchema,
     then: nodeTargetSchema,
     else: nodeTargetSchema,
+    /**
+     * Wait-until mode. The `delay` becomes "wait at most this long": on every pass before it is over the
+     * condition is also checked, and as soon as it holds the contact goes to `then`. If the time runs out first
+     * the usual check decides. Absent or false: the fork waits the whole delay, as before.
+     */
+    early: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((b, ctx) => {
+    if (b.early !== true) return;
+    const m = /^(\d+)(m|h|d)$/.exec(b.delay);
+    const ms = m ? Number(m[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "m" | "h" | "d"] : null;
+    if (ms === null || ms <= 0) {
+      ctx.addIssue({ code: "custom", path: ["delay"], message: "a wait-until fork needs a delay above zero: how long to wait at most" });
+    } else if (ms > BRANCH_MAX_WAIT_DAYS * 86_400_000) {
+      ctx.addIssue({ code: "custom", path: ["delay"], message: `a wait-until fork can wait at most ${BRANCH_MAX_WAIT_DAYS} days` });
+    }
+  });
+
+/** The longest a wait-until fork may wait. */
+export const BRANCH_MAX_WAIT_DAYS = 90;
 
 // ---------------------------------------------------------------------------
 // Exit condition schema (plan-level)

@@ -130,6 +130,27 @@ The same through the API, on `POST /v1/flows/:id/plan`. A plan with splits has `
       "then": 3, "else": 4 } ] }
 ```
 
+### Waiting for something to happen
+
+A split can also **wait for an event instead of waiting a fixed time.** In the editor, choose *Wait for it to happen, up to a limit* on a split. The time you pick becomes the longest the contact will wait.
+
+> Welcome email. **Wait up to 3 days for "created a project".**
+> They did, at any point in those 3 days: send "Nice work", straight away.
+> 3 days passed and they did not: send "Stuck? Here is a quick guide".
+
+- **The condition is checked on every 15-minute scan while they wait**, so "straight away" means within about 15 minutes of it happening. When the time runs out the normal check decides, so something that happens on the last day still counts.
+- **Use "since this step" for events** so only what happens after the contact reached the wait counts. With "within the last N days" an event from before they arrived can end the wait at once.
+- **It works for any condition,** not just events: "wait up to 7 days for payment status to become paid" is the same thing.
+- **The limit is required, from 1 minute up to 90 days.** Nobody waits forever.
+- **Everything else about splits applies:** the decision is made once, a split is the last thing in its path, no loops, and the same node limits. A condition the engine cannot read is reported while waiting, not guessed.
+- **Through the API:** add `"early": true` to the branch. Its `delay` is the longest to wait. A branch without `early` is unchanged.
+
+```json
+{ "order": 2, "delay": "3d", "early": true,
+  "condition": { "field": "event", "name": "project_created", "op": "performed", "since": "step" },
+  "then": 3, "else": 4 }
+```
+
 The API accepts more shapes than the editor builds: paths may rejoin (two emails can both lead to a shared one), and a step can jump over others with `next`. The plan preview shows these as "Continues at step N". The editor itself only builds the tree shape above.
 
 ## The approval queue

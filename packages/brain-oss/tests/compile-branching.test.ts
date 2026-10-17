@@ -56,6 +56,23 @@ describe("the branching section of the prompt", () => {
   });
 });
 
+describe("the wait-until part of the prompt", () => {
+  it("explains when to use early and its limits", () => {
+    for (const phrase of ['"early": true', "at most 90 days", 'Use "since": "step"', "Do NOT add \"early\" for a plain"]) {
+      expect(systemPrompt).toContain(phrase);
+    }
+  });
+
+  it("the fork shown in the prompt is valid inside a plan", () => {
+    const line = systemPrompt.split("\n").find((l) => l.trim().startsWith('{ "order": 2, "delay": "3d", "early": true'));
+    expect(line).toBeDefined();
+    const fork = JSON.parse(line!.trim());
+    const email = (order: number) => ({ order, action_type: "nurture_value", delay: "0m", window_policy: "respect_window", next: "end" });
+    const plan = { version: 2, trigger: { type: "event", condition: { event: "signed_up" } }, steps: [{ ...email(1), next: 2 }, email(3), email(4)], branches: [fork] };
+    expect(compiledPlanSchema.safeParse(plan).success).toBe(true);
+  });
+});
+
 describe("compile() with branching plans", () => {
   const provider = (plan: unknown): LlmProvider => ({
     async complete() {
@@ -106,5 +123,17 @@ describe("compile() with branching plans", () => {
     const result = await compile(provider(plain), ctx);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.plan.version).toBeUndefined();
+  });
+
+  it("accepts a wait-until fork and keeps early", async () => {
+    const waiting = { ...base, branches: [{ ...base.branches[0], early: true, condition: { ...base.branches[0].condition, since: "step" } }] };
+    const result = await compile(provider(waiting), ctx);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.plan.branches?.[0]?.early).toBe(true);
+  });
+
+  it("refuses a wait-until fork with no deadline", async () => {
+    const waiting = { ...base, branches: [{ ...base.branches[0], early: true, delay: "0m" }] };
+    expect((await compile(provider(waiting), ctx)).ok).toBe(false);
   });
 });

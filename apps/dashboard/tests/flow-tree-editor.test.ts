@@ -141,3 +141,32 @@ describe("limits", () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Add step/);
   });
 });
+
+describe("a wait-until split", () => {
+  const waiting = (over: Partial<ForkData> = {}): SequenceData => ({ steps: [email()], fork: { ...fork(), early: true, delay: "7d", ...over } });
+
+  it("reads as a wait, with the deadline choices and the explanation", () => {
+    const html = render(waiting());
+    expect(html).toContain("Wait until something happens");
+    expect(html).toContain("Wait up to");
+    expect(html).toContain("90 days");
+    expect(html).toContain("checked every 15 minutes");
+    expect(html).toContain("choose &quot;since this step&quot; to count only what happens after they reach this point");
+  });
+
+  it("does not offer 'Immediately' as a deadline, but a normal split still does", () => {
+    const wait = render(waiting());
+    const waitSelect = /aria-label="The longest to wait"[\s\S]*?<\/select>/.exec(wait)?.[0] ?? "";
+    expect(waitSelect).not.toContain("Immediately");
+    const normal = render({ steps: [email()], fork: fork() });
+    expect(normal).toContain("Split into two paths");
+    expect(normal).toContain("Immediately");
+    expect(normal).not.toContain("checked every 15 minutes");
+  });
+
+  it("shows the no-deadline problem next to the split", () => {
+    const value = waiting({ delay: "0m" });
+    const html = render(value, ctx({ conditionErrors: { [`${value.fork!.id}-delay`]: "Choose the longest to wait. Waiting 0 minutes is the same as checking straight away." } }));
+    expect(html).toContain("Choose the longest to wait");
+  });
+});
