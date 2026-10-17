@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QUEUE } from "@loomail/core";
 import { LOOMAIL_WORKER_VERSION, startWorker, createBoss, fromDrizzle } from "../src/index.js";
+import { handleTriggerCheck } from "../src/trigger-check.js";
 
 // ---------------------------------------------------------------------------
 // pg-boss mock
@@ -22,6 +23,7 @@ const registrations: Array<{
 }> = [];
 
 const mockBoss = {
+  send: vi.fn(async (_queue: string, _data: unknown, _opts?: unknown) => "job-id"),
   createQueue: vi.fn(async (_name: string) => undefined),
   work: vi.fn(
     async (
@@ -257,5 +259,42 @@ describe("failure path", () => {
 describe("fromDrizzle re-export", () => {
   it("fromDrizzle is a function exported from @loomail/worker", () => {
     expect(typeof fromDrizzle).toBe("function");
+  });
+});
+
+describe("the trigger-check job chains advance jobs", () => {
+  const register = async () => {
+    registrations.length = 0;
+    vi.clearAllMocks();
+    mockBoss.work.mockImplementation(async (name: string, _opts: unknown, handler: never) => {
+      registrations.push({ queue: name, handler });
+      return `worker-id-${name}`;
+    });
+    await startWorker(mockBoss as never, mockDb);
+    return registrations.find((r) => r.queue === QUEUE.TRIGGER_CHECK)!;
+  };
+  const job = { id: "j1", name: QUEUE.TRIGGER_CHECK, data: { tenant_id: "t1", contact_id: "c1", event_name: "project_created" } };
+
+  it("sends one advance job for each newly enrolled membership and each membership waiting on the event", async () => {
+    const reg = await register();
+    vi.mocked(handleTriggerCheck).mockResolvedValueOnce({ enrolledMembershipIds: ["enrolled-1"], watchingMembershipIds: ["waiting-1", "waiting-2"] });
+    await reg.handler([job]);
+    const sent = mockBoss.send.mock.calls.filter((c) => c[0] === QUEUE.ADVANCE_MEMBERSHIP);
+    expect(sent.map((c) => (c[1] as { membership_id: string }).membership_id)).toEqual(["enrolled-1", "waiting-1", "waiting-2"]);
+    for (const c of sent) expect((c[1] as { tenant_id: string }).tenant_id).toBe("t1");
+  });
+
+  it("sends nothing when nobody is enrolled or waiting", async () => {
+    const reg = await register();
+    vi.mocked(handleTriggerCheck).mockResolvedValueOnce({ enrolledMembershipIds: [], watchingMembershipIds: [] });
+    await reg.handler([job]);
+    expect(mockBoss.send).not.toHaveBeenCalled();
+  });
+
+  it("still works with a result that has no watching list", async () => {
+    const reg = await register();
+    vi.mocked(handleTriggerCheck).mockResolvedValueOnce({ enrolledMembershipIds: ["e1"] } as never);
+    await reg.handler([job]);
+    expect(mockBoss.send).toHaveBeenCalledTimes(1);
   });
 });

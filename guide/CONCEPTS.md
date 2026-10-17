@@ -86,6 +86,7 @@ These are the same contact checks a trigger audience uses (see *Audience* above)
 
 Things to know:
 
+- **A plan-level exit on an event acts within seconds.** "Exit when `upgraded` happens" ends the contact's flow as soon as the event arrives. Step-level conditions and exits, and anything about a contact fact or lifecycle stage, are checked when the step comes due or on the 15-minute scan.
 - **An event check needs a window.** Say `within_days` (back from now), `since: "step"` or `since: "flow"`. `since: "step"` has no meaning in a plan-level exit, where it counts from entering the flow.
 - **Checked when the step comes due**, not when the contact entered. Contact fields are read at that moment, so a contact who upgrades during a wait is judged on their plan then.
 - **A condition the engine cannot read does not guess.** The contact stays where they are and the reason is recorded on the membership (`condition_error`); it clears when the flow is fixed or recompiled. The API refuses to save one, so this only happens to hand-edited data.
@@ -138,7 +139,7 @@ A split can also **wait for an event instead of waiting a fixed time.** In the e
 > They did, at any point in those 3 days: send "Nice work", straight away.
 > 3 days passed and they did not: send "Stuck? Here is a quick guide".
 
-- **The condition is checked on every 15-minute scan while they wait**, so "straight away" means within about 15 minutes of it happening. When the time runs out the normal check decides, so something that happens on the last day still counts.
+- **An event ends the wait within seconds.** When the event arrives, Loomail looks at the contacts waiting on exactly that event and moves them on straight away. Conditions about a contact fact (payment status, plan, a trait) or a lifecycle stage are not events, so those are checked on the 15-minute scan instead. If a background job is ever lost, the scan catches up. When the time runs out the normal check decides, so something that happens on the last day still counts.
 - **Use "since this step" for events** so only what happens after the contact reached the wait counts. With "within the last N days" an event from before they arrived can end the wait at once.
 - **It works for any condition,** not just events: "wait up to 7 days for payment status to become paid" is the same thing.
 - **The limit is required, from 1 minute up to 90 days.** Nobody waits forever.
@@ -168,7 +169,7 @@ What you see on the flow page and in the Flows list:
 
 How it works, and what it does not tell you:
 
-- **Checked on the 15-minute scan.** People still in the flow are checked as they move through it. People who already finished or left are still checked until their window ends, so "converted a week after the last email" counts. A conversion is recorded once per person per entry.
+- **Event goals are recorded within seconds; other goals on the 15-minute scan.** When the goal's event arrives, the contact is checked at once, whether they are still in the flow or already finished it (until their window ends, so "converted a week after the last email" counts). A goal on a contact fact such as payment status is checked on the scan. A conversion is recorded once per person per entry.
 - **Use "since entering the flow" for events.** Otherwise something that happened before they joined can count. A fact like "payment status is paid" also counts people who were already paid when they joined.
 - **It shows who got there after joining, not that the emails caused it.** Proving cause needs a holdout group (a share of people deliberately left out), which Loomail does not offer yet.
 - **Changing a goal changes the future, not the past.** Conversions already recorded keep the goal name they had. Removing the goal stops new conversions but keeps the history.

@@ -416,3 +416,5 @@ export {
   GOAL_MAX_WINDOW_DAYS,
   type FlowGoal,
 } from "./flow/goal.js";
+
+export { conditionEventNames, planExitEventNames } from "./flow/watch.js";

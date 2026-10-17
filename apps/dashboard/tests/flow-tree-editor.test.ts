@@ -150,7 +150,7 @@ describe("a wait-until split", () => {
     expect(html).toContain("Wait until something happens");
     expect(html).toContain("Wait up to");
     expect(html).toContain("90 days");
-    expect(html).toContain("checked every 15 minutes");
+    expect(html).toContain("within seconds of the event arriving");
     expect(html).toContain("choose &quot;since this step&quot; to count only what happens after they reach this point");
   });
 
@@ -161,7 +161,7 @@ describe("a wait-until split", () => {
     const normal = render({ steps: [email()], fork: fork() });
     expect(normal).toContain("Split into two paths");
     expect(normal).toContain("Immediately");
-    expect(normal).not.toContain("checked every 15 minutes");
+    expect(normal).not.toContain("within seconds of the event arriving");
   });
 
   it("shows the no-deadline problem next to the split", () => {

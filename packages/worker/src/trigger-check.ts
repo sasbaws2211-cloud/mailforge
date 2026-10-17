@@ -20,6 +20,7 @@ import {
   type TriggerCheckJobData,
 } from "@loomail/core";
 import { enrollContactInFlows } from "./enroll.js";
+import { handleEventWatchers } from "./event-watchers.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,6 +31,11 @@ type Db = NodePgDatabase<Record<string, never>>;
 export interface TriggerCheckResult {
   /** IDs of memberships successfully enrolled. */
   enrolledMembershipIds: string[];
+  /**
+   * IDs of memberships already in a flow that are waiting on this event (a wait-until fork, a goal, a plan-level
+   * exit). The caller sends them through the advance job so they react now instead of on the next scan.
+   */
+  watchingMembershipIds: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -43,8 +49,10 @@ export interface TriggerCheckResult {
  *   1. Load active, compiled event-trigger flows for the tenant
  *   2. Filter to flows whose trigger_config.event matches the event name
  *   3. Run enrollment guards via enrollContactInFlows (advisory-locked)
+ *   4. Find memberships already in flows that are waiting on this event (event-watchers.ts), and record goal
+ *      conversions for people who have left their flow. This runs whether or not step 2 matched anything.
  *
- * Returns the enrolled membership IDs so the caller can chain targeted
+ * Returns the enrolled and the watching membership IDs so the caller can chain targeted
  * step-advancement jobs.
  */
 export async function handleTriggerCheck(
@@ -92,25 +100,35 @@ export async function handleTriggerCheck(
       reentryCooldownDays: f.reentryCooldownDays ?? 30,
     }));
 
-  if (matchingFlows.length === 0) return { enrolledMembershipIds: [] };
-
-  // Enroll within a transaction (advisory lock acquired inside)
   const now = new Date();
   let results: Awaited<ReturnType<typeof enrollContactInFlows>> = [];
-  await db.transaction(async (tx) => {
-    results = await enrollContactInFlows(
-      tx as unknown as Db,
-      contact_id,
-      tenant_id,
-      matchingFlows,
-      now,
-    );
-  });
+  if (matchingFlows.length > 0) {
+    // Enroll within a transaction (advisory lock acquired inside)
+    await db.transaction(async (tx) => {
+      results = await enrollContactInFlows(
+        tx as unknown as Db,
+        contact_id,
+        tenant_id,
+        matchingFlows,
+        now,
+      );
+    });
+  }
 
   // Collect successfully enrolled membership IDs
   const enrolledMembershipIds = results
     .filter((r) => r.enrolled)
     .map((r) => (r as { enrolled: true; membershipId: string }).membershipId);
 
-  return { enrolledMembershipIds };
+  // Contacts already in flows who are waiting on this very event. A failure here must not lose the enrollment
+  // above, and the 15-minute scan covers anything missed, so it is logged rather than thrown.
+  let watchingMembershipIds: string[] = [];
+  try {
+    const watch = await handleEventWatchers(db, tenant_id, contact_id, event_name, now);
+    watchingMembershipIds = watch.advanceMembershipIds.filter((id) => !enrolledMembershipIds.includes(id));
+  } catch (err) {
+    console.error(`[trigger-check] event watchers failed for contact ${contact_id}, event "${event_name}" (the scan will catch up):`, err);
+  }
+
+  return { enrolledMembershipIds, watchingMembershipIds };
 }

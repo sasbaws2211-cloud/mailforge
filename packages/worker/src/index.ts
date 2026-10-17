@@ -278,7 +278,7 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
         try {
           const result = await handleTriggerCheck(job.data, db);
           // Chain: enqueue targeted step advancement for each enrolled membership
-          for (const membershipId of result.enrolledMembershipIds) {
+          for (const membershipId of [...result.enrolledMembershipIds, ...(result.watchingMembershipIds ?? [])]) {
             await boss.send(
               QUEUE.ADVANCE_MEMBERSHIP,
               { tenant_id: job.data.tenant_id, membership_id: membershipId },

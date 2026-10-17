@@ -110,7 +110,7 @@ export function ForkEditor({
       </div>
       {fork.early && (
         <p className="mb-3 text-[13px] text-muted-foreground">
-          The contact goes down "If it holds" as soon as it happens, checked every 15 minutes. If the time runs out first they go down
+          The contact goes down "If it holds" within seconds of the event arriving (other conditions, such as payment status, are checked every 15 minutes). If the time runs out first they go down
           "Otherwise". For an event, choose "since this step" to count only what happens after they reach this point.
         </p>
       )}
