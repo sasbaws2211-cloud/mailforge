@@ -83,6 +83,7 @@ export async function clearDemoData(db: Db, tenantId: string): Promise<number> {
   if (ids.rows.length === 0) return 0;
   const list = ids.rows.map((r) => r.id).join(",");
   await db.execute(sql`DELETE FROM events WHERE tenant_id = ${tenantId}::uuid AND contact_id = ANY(string_to_array(${list}, ',')::uuid[])`);
+  await db.execute(sql`DELETE FROM flow_split_choices WHERE tenant_id = ${tenantId}::uuid AND membership_id IN (SELECT id FROM flow_memberships WHERE tenant_id = ${tenantId}::uuid AND contact_id = ANY(string_to_array(${list}, ',')::uuid[]))`);
   await db.execute(sql`DELETE FROM flow_conversions WHERE tenant_id = ${tenantId}::uuid AND contact_id = ANY(string_to_array(${list}, ',')::uuid[])`);
   await db.execute(sql`DELETE FROM flow_memberships WHERE tenant_id = ${tenantId}::uuid AND contact_id = ANY(string_to_array(${list}, ',')::uuid[])`);
   const del = await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${tenantId}::uuid AND id = ANY(string_to_array(${list}, ',')::uuid[]) RETURNING id`);

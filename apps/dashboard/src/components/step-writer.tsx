@@ -662,7 +662,10 @@ export interface PlanBody {
   branches?: Array<{
     order: number;
     delay: string;
-    condition: ApiFlowCondition;
+    /** Absent on a random split. */
+    condition?: ApiFlowCondition;
+    /** A random split (A/B test): this share (1 to 99) goes to `then`, the rest to `else`. */
+    split?: { percent_a: number };
     then: number | "end";
     else: number | "end";
     /** Wait-until: `delay` is the longest to wait; goes to `then` as soon as the condition holds. */

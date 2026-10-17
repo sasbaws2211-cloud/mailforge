@@ -148,6 +148,8 @@ export {
   compiledStepSchema,
   compiledBranchSchema,
   BRANCH_MAX_WAIT_DAYS,
+  SPLIT_MIN_PERCENT,
+  SPLIT_MAX_PERCENT,
   compiledTriggerSchema,
   planExitConditionSchema,
   stepConditionSchema,
@@ -418,3 +420,17 @@ export {
 } from "./flow/goal.js";
 
 export { conditionEventNames, planExitEventNames } from "./flow/watch.js";
+
+export {
+  splitBucket,
+  splitVersion,
+  compareVersions,
+  splitPathSteps,
+  SPLIT_MIN_PER_VERSION,
+  SPLIT_MIN_TOTAL_CONVERSIONS,
+  SPLIT_SIGNIFICANCE,
+  type SplitVersion,
+  type VersionCounts,
+  type SplitVerdict,
+  type SplitComparison,
+} from "./flow/split.js";

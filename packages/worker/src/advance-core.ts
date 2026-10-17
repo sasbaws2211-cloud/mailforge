@@ -23,12 +23,13 @@
  */
 import { eq, and, gte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { contacts, events, flows, flowMemberships, flowConversions, lifecycleMessages } from "@loomail/db/schema";
+import { contacts, events, flows, flowMemberships, flowConversions, flowSplitChoices, lifecycleMessages } from "@loomail/db/schema";
 import {
   parseDelay,
   delayToMs,
   stepTarget,
   readFlowGoal,
+  splitVersion,
   type FlowGoal,
   type CompiledBranch,
   type CompiledStep,
@@ -578,6 +579,39 @@ async function advanceBranching(c: BranchingContext): Promise<AdvanceOutcome> {
         staleError = null;
       }
       return done(hops > 0 ? { kind: "branch_taken", completed: false, applied: true } : { kind: "waiting_delay" });
+    }
+
+    // A random split (A/B test or holdout): pick a version by a fixed hash and go that way. No email.
+    if (branchDef && branchDef.split) {
+      if (hops >= MAX_BRANCH_HOPS) {
+        await c.recordError("plan: too many branches in a row (does the plan loop?)");
+        return done({ kind: "stuck_condition_error" });
+      }
+      // Write the choice before moving, so results never miss anyone. If a row already exists (a retry, or the
+      // other of the scan and the targeted job got here first) its version wins, even if the percentage was
+      // edited in between: a person never changes version.
+      const wanted = splitVersion(c.membership.id, at, branchDef.split.percent_a);
+      const inserted = await db
+        .insert(flowSplitChoices)
+        .values({ tenantId, flowId: c.membership.flowId, membershipId: c.membership.id, nodeOrder: at, version: wanted, chosenAt: now })
+        .onConflictDoNothing()
+        .returning({ version: flowSplitChoices.version });
+      let version: string = wanted;
+      if (inserted.length === 0) {
+        const existing = await db
+          .select({ version: flowSplitChoices.version })
+          .from(flowSplitChoices)
+          .where(and(eq(flowSplitChoices.membershipId, c.membership.id), eq(flowSplitChoices.nodeOrder, at)))
+          .limit(1);
+        if (existing.length > 0) version = existing[0]!.version;
+      }
+      const target = version === "a" ? branchDef.then : branchDef.else;
+      if (!(await moveTo(target))) return done({ kind: "waiting_delay" }); // someone else moved it first
+      hops++;
+      if (target === "end") return done({ kind: "branch_taken", completed: true, applied: true });
+      at = target;
+      arrivedAt = now;
+      continue;
     }
 
     // A fork: check its condition and go one way or the other. No email.

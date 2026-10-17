@@ -13,7 +13,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, sql } from "drizzle-orm";
-import { tenants, contacts, events, flows, flowMemberships, flowConversions, lifecycleMessages } from "@loomail/db/schema";
+import { randomUUID } from "node:crypto";
+import { splitVersion } from "@loomail/core";
+import { tenants, contacts, events, flows, flowMemberships, flowConversions, flowSplitChoices, lifecycleMessages } from "@loomail/db/schema";
 import { phaseStepAdvancement } from "../src/scan-step-advancement.js";
 import { handleAdvanceMembership } from "../src/advance-membership.js";
 
@@ -32,7 +34,7 @@ let scanTenant: string;
 let targetedTenant: string;
 
 async function cleanup() {
-  for (const table of ["flow_conversions", "lifecycle_messages", "flow_memberships", "flows", "events", "lifecycle_transitions", "contacts", "scan_checkpoints"]) {
+  for (const table of ["flow_split_choices", "flow_conversions", "lifecycle_messages", "flow_memberships", "flows", "events", "lifecycle_transitions", "contacts", "scan_checkpoints"]) {
     await db.execute(
       sql.raw(`DELETE FROM ${table} WHERE tenant_id IN (SELECT id FROM tenants WHERE slug IN ('${SLUG_SCAN}', '${SLUG_TARGETED}'))`),
     );
@@ -60,7 +62,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   if (!dbAvailable) return;
   for (const t of [scanTenant, targetedTenant]) {
-    for (const table of ["flow_conversions", "lifecycle_messages", "flow_memberships", "flows", "events", "lifecycle_transitions", "contacts", "scan_checkpoints"]) {
+    for (const table of ["flow_split_choices", "flow_conversions", "lifecycle_messages", "flow_memberships", "flows", "events", "lifecycle_transitions", "contacts", "scan_checkpoints"]) {
       await db.execute(sql.raw(`DELETE FROM ${table} WHERE tenant_id = '${t}'`));
     }
   }
@@ -123,9 +125,14 @@ interface Scenario {
   branches?: unknown[];
   /** The flow's goal (flow-level, not part of the plan). */
   goal?: unknown;
+  /**
+   * Give the membership an id that the split at `order` (with `percent` going to version A) sends to `version`,
+   * so a scenario can say which way a random split goes. Each of the two workspaces gets its own such id.
+   */
+  forceVersion?: { order: number; percent: number; version: "a" | "b" };
   stepEnteredAgoMs?: number;
   /** What the membership must look like afterwards (checked on the scan's result; the targeted job must match it). */
-  expect?: { status: string; currentStep: number; messageOrders: number[]; stepEntered?: boolean; error?: RegExp; converted?: boolean; exitReason?: string };
+  expect?: { status: string; currentStep: number; messageOrders: number[]; stepEntered?: boolean; error?: RegExp; converted?: boolean; exitReason?: string; choices?: Array<[number, "a" | "b"]> };
 }
 
 async function build(tenantId: string, sc: Scenario, now: number): Promise<string> {
@@ -166,9 +173,16 @@ async function build(tenantId: string, sc: Scenario, now: number): Promise<strin
       ...(sc.goal !== undefined ? { goal: sc.goal } : {}),
     })
     .returning({ id: flows.id });
+  let forcedId: string | undefined;
+  if (sc.forceVersion) {
+    const f = sc.forceVersion;
+    do forcedId = randomUUID();
+    while (splitVersion(forcedId, f.order, f.percent) !== f.version);
+  }
   const [membership] = await db
     .insert(flowMemberships)
     .values({
+      ...(forcedId ? { id: forcedId } : {}),
       tenantId,
       contactId: contact!.id,
       flowId: flow!.id,
@@ -202,8 +216,10 @@ async function snapshot(membershipId: string) {
   const [m] = await db.select().from(flowMemberships).where(eq(flowMemberships.id, membershipId));
   const msgs = await db.select().from(lifecycleMessages).where(eq(lifecycleMessages.membershipId, membershipId));
   const conversions = await db.select().from(flowConversions).where(eq(flowConversions.membershipId, membershipId));
+  const choices = await db.select().from(flowSplitChoices).where(eq(flowSplitChoices.membershipId, membershipId));
   return {
     conversions: conversions.map((c) => c.goalName),
+    choices: choices.map((c) => [c.nodeOrder, c.version]).sort((a, b) => (a[0] as number) - (b[0] as number)),
     status: m!.status,
     currentStep: m!.currentStep,
     exitReason: m!.exitReason,
@@ -309,6 +325,15 @@ const scenarios: Scenario[] = [
   { name: "a corrupt plan that loops stops after a fixed number of branches instead of spinning", version: 2, branches: [fork(1, "0m", { lifecycle_state: "engaged" }, 2, 2), fork(2, "0m", { lifecycle_state: "engaged" }, 1, 1)], steps: [step(3, "0m")], expect: { status: "active", currentStep: 2, messageOrders: [], error: /too many branches/ } },
   { name: "a fork that points at a step the plan does not have completes the contact", version: 2, branches: [fork(1, "0m", { lifecycle_state: "engaged" }, 9, 9)], steps: [step(2, "0m")], expect: { status: "completed", currentStep: 9, messageOrders: [] } },
   { name: "a straight-line plan never records an arrival time", steps: [step(1, "0m"), step(2, "1d")], expect: { status: "active", currentStep: 2, messageOrders: [1], stepEntered: false } },
+  // Random splits (A/B tests and holdouts): a fixed hash decides, the choice is recorded, and the scan and the targeted job agree.
+  { name: "split: version A goes down the then path and the choice is recorded", version: 2, forceVersion: { order: 1, percent: 50, version: "a" }, branches: [{ order: 1, delay: "0m", split: { percent_a: 50 }, then: 2, else: 3 }], steps: [step(2, "0m", { next: "end" }), step(3, "0m", { next: "end" })], expect: { status: "completed", currentStep: 2, messageOrders: [2], choices: [[1, "a"]] } },
+  { name: "split: version B goes down the else path and the choice is recorded", version: 2, forceVersion: { order: 1, percent: 50, version: "b" }, branches: [{ order: 1, delay: "0m", split: { percent_a: 50 }, then: 2, else: 3 }], steps: [step(2, "0m", { next: "end" }), step(3, "0m", { next: "end" })], expect: { status: "completed", currentStep: 3, messageOrders: [3], choices: [[1, "b"]] } },
+  { name: "split: a holdout (one path is end) sends nothing and completes the contact", version: 2, forceVersion: { order: 1, percent: 90, version: "b" }, branches: [{ order: 1, delay: "0m", split: { percent_a: 90 }, then: 2, else: "end" }], steps: [step(2, "0m", { next: "end" })], expect: { status: "completed", currentStep: 1, messageOrders: [], choices: [[1, "b"]] } },
+  { name: "split: the other side of a holdout gets the flow", version: 2, forceVersion: { order: 1, percent: 90, version: "a" }, branches: [{ order: 1, delay: "0m", split: { percent_a: 90 }, then: 2, else: "end" }], steps: [step(2, "0m", { next: "end" })], expect: { status: "completed", currentStep: 2, messageOrders: [2], choices: [[1, "a"]] } },
+  { name: "split: after an email, the split waits for its delay like any fork", version: 2, forceVersion: { order: 2, percent: 50, version: "a" }, branches: [{ order: 2, delay: "1d", split: { percent_a: 50 }, then: 3, else: 4 }], steps: [step(1, "0m", { next: 2 }), step(3, "0m", { next: "end" }), step(4, "0m", { next: "end" })], currentStep: 2, enteredAgoMs: HOUR, stepEnteredAgoMs: HOUR, expect: { status: "active", currentStep: 2, messageOrders: [], stepEntered: true, choices: [] } },
+  { name: "split: once its delay has passed it decides", version: 2, forceVersion: { order: 2, percent: 50, version: "b" }, branches: [{ order: 2, delay: "1d", split: { percent_a: 50 }, then: 3, else: 4 }], steps: [step(1, "0m", { next: 2 }), step(3, "0m", { next: "end" }), step(4, "0m", { next: "end" })], currentStep: 2, enteredAgoMs: 3 * DAY, stepEnteredAgoMs: 2 * DAY, expect: { status: "completed", currentStep: 4, messageOrders: [4], choices: [[2, "b"]] } },
+  { name: "split: followed straight away by a condition fork, both are taken in one call", version: 2, forceVersion: { order: 1, percent: 50, version: "a" }, branches: [{ order: 1, delay: "0m", split: { percent_a: 50 }, then: 2, else: 2 }, fork(2, "0m", { field: "payment_status", op: "is", value: "paid" }, 3, 4)], steps: [step(3, "0m", { next: "end" }), step(4, "0m", { next: "end" })], paymentStatus: "paid", expect: { status: "completed", currentStep: 3, messageOrders: [3], choices: [[1, "a"]] } },
+  { name: "split: a plan-level exit still applies before the split", version: 2, forceVersion: { order: 1, percent: 50, version: "a" }, branches: [{ order: 1, delay: "0m", split: { percent_a: 50 }, then: 2, else: 3 }], steps: [step(2, "0m", { next: "end" }), step(3, "0m", { next: "end" })], exitConditions: [{ condition: { field: "payment_status", op: "is", value: "cancelled" } }], paymentStatus: "cancelled", expect: { status: "exited", currentStep: 1, messageOrders: [], choices: [] } },
   // Goals: a conversion is recorded once, and the contact leaves the flow if the goal says so.
   { name: "goal: reached while in the flow records a conversion and exits with reason goal_reached", steps: [step(1, "1d"), step(2, "2d")], enteredAgoMs: HOUR, events: [["project_created", 10 * 60_000]], goal: {"name": "Created a project", "condition": {"field": "event", "name": "project_created", "op": "performed", "since": "flow"}, "window_days": 30, "exit_on_conversion": true}, expect: { status: "exited", currentStep: 1, messageOrders: [], converted: true, exitReason: "goal_reached" } },
   { name: "goal: not reached, nothing recorded and the flow carries on", steps: [step(1, "0m"), step(2, "2d")], goal: {"name": "Created a project", "condition": {"field": "event", "name": "project_created", "op": "performed", "since": "flow"}, "window_days": 30, "exit_on_conversion": true}, expect: { status: "active", currentStep: 2, messageOrders: [1], converted: false } },
@@ -326,7 +351,7 @@ describe("the scan and the targeted job advance a membership identically", () =>
     const { viaScan, viaTargeted } = await runBoth(sc);
     expect(viaTargeted).toEqual(viaScan);
     if (sc.expect) {
-      const { stepEntered, error, converted, exitReason, ...shape } = sc.expect;
+      const { stepEntered, error, converted, exitReason, choices, ...shape } = sc.expect;
       expect({
         status: viaScan.status,
         currentStep: viaScan.currentStep,
@@ -336,6 +361,7 @@ describe("the scan and the targeted job advance a membership identically", () =>
       if (error) expect(viaScan.conditionError ?? "").toMatch(error);
       if (converted !== undefined) expect(viaScan.conversions.length).toBe(converted ? 1 : 0);
       if (exitReason !== undefined) expect(viaScan.exitReason).toBe(exitReason);
+      if (choices !== undefined) expect(viaScan.choices).toEqual(choices);
     }
   });
 });

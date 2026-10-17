@@ -1937,6 +1937,34 @@ export interface FlowStats {
   health_note: string | null;
 }
 
+/** One version of a random split: who was assigned it, who reached the goal, and its own path's emails. */
+export interface SplitVersionResult {
+  assigned: number;
+  converted: number;
+  sent: number;
+  opened: number;
+  clicked: number;
+  /** True when nobody is emailed on this path: a holdout. */
+  holdout: boolean;
+}
+
+export interface SplitTestResult {
+  node_order: number;
+  /** The share sent to version A, or null once the split is no longer in the flow. */
+  percent_a: number | null;
+  in_plan: boolean;
+  a: SplitVersionResult;
+  b: SplitVersionResult;
+  /** Null when the flow has no goal. */
+  comparison: {
+    rate_a: number | null;
+    rate_b: number | null;
+    difference: number | null;
+    p_value: number | null;
+    verdict: "too_early" | "a_better" | "b_better" | "no_difference";
+  } | null;
+}
+
 export interface FlowResults {
   goal: import("./goal.js").ApiGoal | null;
   range_days: number;
@@ -1946,6 +1974,8 @@ export interface FlowResults {
   median_hours_to_convert: number | null;
   /** For each email: how many people were sent it, and how many of them reached the goal. */
   by_step: Array<{ step: number; sent: number; converted: number }>;
+  /** One entry per random split (A/B test or holdout) people have been assigned to. */
+  split_tests: SplitTestResult[];
 }
 
 /** GET /v1/flows/:id/results - how the flow's goal is going for people who entered in the last `days` days. */

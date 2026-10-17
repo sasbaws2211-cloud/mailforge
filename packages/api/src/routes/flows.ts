@@ -56,6 +56,8 @@ import {
   audienceSchema,
   flowGoalSchema,
   readFlowGoal,
+  compareVersions,
+  splitPathSteps,
   savedSegmentTriggerSchema,
   conditionSchema,
   compiledBranchSchema,
@@ -554,6 +556,61 @@ ${note}`,
           AND lm.sent_at IS NOT NULL AND lm.flow_step_order IS NOT NULL AND m.entered_at >= ${since}
         GROUP BY lm.flow_step_order
         ORDER BY lm.flow_step_order`);
+      // A/B tests and holdouts: for each random split in the flow, how each version did.
+      const planRow = (await db.select({ plan: flows.compiledPlan }).from(flows).where(eq(flows.id, flow.id)).limit(1))[0];
+      const plan = (planRow?.plan ?? null) as { steps?: Array<{ order: number; next?: unknown }>; branches?: Array<{ order: number; then: unknown; else: unknown; split?: { percent_a: number } }> } | null;
+      const perVersion = await db.execute<{ node_order: number; version: string; assigned: number; converted: number }>(sql`
+        SELECT sc.node_order, sc.version,
+               count(*)::int AS assigned,
+               count(c.id)::int AS converted
+        FROM flow_split_choices sc
+        LEFT JOIN flow_conversions c ON c.membership_id = sc.membership_id
+        WHERE sc.tenant_id = ${tenantId}::uuid AND sc.flow_id = ${flow.id}::uuid AND sc.chosen_at >= ${since}
+        GROUP BY sc.node_order, sc.version`);
+      const perMessage = await db.execute<{ node_order: number; version: string; step: number; sent: number; opened: number; clicked: number }>(sql`
+        SELECT sc.node_order, sc.version, lm.flow_step_order AS step,
+               count(*) FILTER (WHERE lm.sent_at IS NOT NULL)::int AS sent,
+               count(*) FILTER (WHERE lm.feedback IN ('opened','clicked'))::int AS opened,
+               count(*) FILTER (WHERE lm.feedback = 'clicked')::int AS clicked
+        FROM flow_split_choices sc
+        JOIN lifecycle_messages lm ON lm.membership_id = sc.membership_id
+        WHERE sc.tenant_id = ${tenantId}::uuid AND sc.flow_id = ${flow.id}::uuid AND sc.chosen_at >= ${since}
+          AND lm.flow_step_order IS NOT NULL
+        GROUP BY sc.node_order, sc.version, lm.flow_step_order`);
+      const goalSet = readFlowGoal(flow.goal) !== null;
+      const nodeOrders = [...new Set(perVersion.rows.map((r) => r.node_order))].sort((x, y) => x - y);
+      const splitTests = nodeOrders.map((node) => {
+        const paths = splitPathSteps(plan, node);
+        const side = (v: "a" | "b") => {
+          const row = perVersion.rows.find((r) => r.node_order === node && r.version === v);
+          // Only emails on this side's own path count, so emails before the split (sent to everyone) do not blur it.
+          const own = new Set(v === "a" ? paths?.a ?? [] : paths?.b ?? []);
+          const msgs = perMessage.rows.filter((r) => r.node_order === node && r.version === v && (paths === null || own.has(r.step)));
+          return {
+            assigned: row?.assigned ?? 0,
+            converted: row?.converted ?? 0,
+            sent: msgs.reduce((n, r) => n + r.sent, 0),
+            opened: msgs.reduce((n, r) => n + r.opened, 0),
+            clicked: msgs.reduce((n, r) => n + r.clicked, 0),
+            // A path with no emails on it is a holdout: those people are deliberately sent nothing.
+            holdout: paths !== null && (v === "a" ? paths.a : paths.b).length === 0,
+          };
+        };
+        const a = side("a");
+        const b = side("b");
+        const cmp = compareVersions({ n: a.assigned, k: a.converted }, { n: b.assigned, k: b.converted });
+        const planBranch = plan?.branches?.find((br) => br.order === node);
+        return {
+          node_order: node,
+          percent_a: planBranch?.split?.percent_a ?? null,
+          in_plan: planBranch !== undefined,
+          a,
+          b,
+          comparison: goalSet
+            ? { rate_a: cmp.rateA, rate_b: cmp.rateB, difference: cmp.difference, p_value: cmp.pValue, verdict: cmp.verdict }
+            : null,
+        };
+      });
       const t = totals.rows[0] ?? { entered: 0, converted: 0, median_seconds: null };
       const median = t.median_seconds === null || t.median_seconds === undefined ? null : Number(t.median_seconds);
       return {
@@ -564,6 +621,7 @@ ${note}`,
         conversion_rate: t.entered > 0 ? t.converted / t.entered : null,
         median_hours_to_convert: median === null ? null : Math.round((median / 3600) * 10) / 10,
         by_step: steps.rows.map((r) => ({ step: r.step, sent: r.sent, converted: r.converted })),
+        split_tests: splitTests,
       };
     },
   );

@@ -25,3 +25,4 @@ export { adminAuditLog, deletedWorkspaces, adminLoginTokens, adminSessions, admi
 export { platformLlmConfigs, llmUsage, platformAlertState, platformSettings } from "./ai.js";
 export { managedSending, managedDomainCleanup } from "./managed-sending.js";
 export { flowConversions } from "./flow-conversions.js";
+export { flowSplitChoices } from "./flow-split-choices.js";

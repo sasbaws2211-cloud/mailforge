@@ -70,10 +70,21 @@ export const compiledStepSchema = z.object({
 // Branch schema (plan version 2)
 // ---------------------------------------------------------------------------
 
+/** The share of people sent to version A in a random split: 1 to 99 percent. */
+export const SPLIT_MIN_PERCENT = 1;
+export const SPLIT_MAX_PERCENT = 99;
+
 /**
- * A fork. It sends nothing: after `delay` (counted from when the contact arrived here) it checks `condition`
- * and sends the contact to `then` if it holds, otherwise to `else`. Each is another node's order, or "end".
- * Shares the `order` id space with email steps.
+ * A fork. It sends nothing. Two kinds:
+ *
+ *   by a condition:  after `delay` (counted from when the contact arrived here) it checks `condition` and sends
+ *                    the contact to `then` if it holds, otherwise to `else`.
+ *   random split:    `split: { percent_a }` instead of a condition. `percent_a` percent of people (1 to 99) go to
+ *                    `then` (version A) and the rest to `else` (version B), chosen by a fixed hash of the
+ *                    membership and this fork's order, so the same person always gets the same answer. One
+ *                    path may be "end": that is a holdout, people deliberately left out.
+ *
+ * `then` and `else` are each another node's order, or "end". Shares the `order` id space with email steps.
  */
 export const compiledBranchSchema = z
   .object({
@@ -81,7 +92,9 @@ export const compiledBranchSchema = z
     delay: z.string().regex(/^\d+(m|h|d)$/, {
       message: "delay must match format: <int><m|h|d> (e.g. '0m', '3d')",
     }),
-    condition: stepConditionSchema,
+    condition: stepConditionSchema.optional(),
+    /** A random split (A/B test) instead of a condition. */
+    split: z.object({ percent_a: z.number().int().min(SPLIT_MIN_PERCENT).max(SPLIT_MAX_PERCENT) }).strict().optional(),
     then: nodeTargetSchema,
     else: nodeTargetSchema,
     /**
@@ -93,6 +106,14 @@ export const compiledBranchSchema = z
   })
   .strict()
   .superRefine((b, ctx) => {
+    if (b.split !== undefined && b.condition !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["split"], message: "a random split has no condition: use one or the other" });
+    } else if (b.split === undefined && b.condition === undefined) {
+      ctx.addIssue({ code: "custom", path: ["condition"], message: "a fork needs a condition, or a random split" });
+    }
+    if (b.split !== undefined && b.early === true) {
+      ctx.addIssue({ code: "custom", path: ["early"], message: "a random split cannot be a wait-until fork" });
+    }
     if (b.early !== true) return;
     const m = /^(\d+)(m|h|d)$/.exec(b.delay);
     const ms = m ? Number(m[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "m" | "h" | "d"] : null;
@@ -105,6 +126,7 @@ export const compiledBranchSchema = z
 
 /** The longest a wait-until fork may wait. */
 export const BRANCH_MAX_WAIT_DAYS = 90;
+
 
 // ---------------------------------------------------------------------------
 // Exit condition schema (plan-level)

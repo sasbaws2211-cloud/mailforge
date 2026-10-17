@@ -38,6 +38,7 @@ export const EXPORT_TABLES: readonly ExportTable[] = [
   { key: "segments", table: "segments" },
   { key: "flow_memberships", table: "flow_memberships" },
   { key: "flow_conversions", table: "flow_conversions" },
+  { key: "flow_split_choices", table: "flow_split_choices" },
   { key: "messages", table: "lifecycle_messages" },
   { key: "message_events", table: "message_events" },
   { key: "email_templates", table: "templates" },

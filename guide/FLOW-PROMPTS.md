@@ -241,6 +241,7 @@ When the flow should do something different depending on the contact, say so in 
 - **Say how long to wait** before deciding, so the check has something to look at.
 - **Say what each path sends**, and what happens on a path that sends nothing ("otherwise, stop").
 - Keep it small: a path can pass through at most 3 splits.
+- **To test two versions, say so:** "send half of them X and half Y" or "test two subject lines" writes a random split (A/B test). "Hold back 10% as a control" writes a holdout. Set a goal on the flow afterwards to compare the results. See *A/B tests and holdouts* in CONCEPTS.md.
 - **To wait for something, say "wait up to ... for ..."** (for example "wait up to 3 days for them to create a project; if they do, send X, otherwise send Y"). The AI writes a wait-until split: the contact moves on within seconds of the event, or when the time is up. A plain "wait 3 days, then check" is an ordinary split.
 
 ### Onboarding that adapts to what they did

@@ -73,6 +73,33 @@ describe("the wait-until part of the prompt", () => {
   });
 });
 
+describe("the random split part of the prompt", () => {
+  it("explains when to use a split, its limits and the holdout", () => {
+    for (const phrase of ['"split": { "percent_a": N }', "a whole number from 1 to 99", 'never use "early" with a split', "A holdout is a split where the held-back path is", "Use a condition fork, not a split"]) {
+      expect(systemPrompt.toLowerCase()).toContain(phrase.toLowerCase());
+    }
+  });
+
+  const email = (order: number, next: number | "end") => ({ order, action_type: "nurture_value", delay: "0m", window_policy: "respect_window", next });
+  const forkLine = (startsWith: string) => {
+    const line = systemPrompt.split("\n").find((l) => l.trim().startsWith(startsWith));
+    expect(line, startsWith).toBeDefined();
+    return JSON.parse(line!.trim().replace(/^Holdout:\s*/, ""));
+  };
+
+  it("the A/B fork shown in the prompt is valid inside a plan", () => {
+    const fork = forkLine('{ "order": 2, "delay": "0m", "split"');
+    const plan = { version: 2, trigger: { type: "event", condition: { event: "signed_up" } }, steps: [{ ...email(1, 2) }, email(3, "end"), email(4, "end")], branches: [fork] };
+    expect(compiledPlanSchema.safeParse(plan).success).toBe(true);
+  });
+
+  it("the holdout fork shown in the prompt is valid inside a plan", () => {
+    const fork = forkLine("Holdout:");
+    const plan = { version: 2, trigger: { type: "event", condition: { event: "signed_up" } }, steps: [email(1, 2), email(3, "end")], branches: [fork] };
+    expect(compiledPlanSchema.safeParse(plan).success).toBe(true);
+  });
+});
+
 describe("compile() with branching plans", () => {
   const provider = (plan: unknown): LlmProvider => ({
     async complete() {
@@ -135,5 +162,23 @@ describe("compile() with branching plans", () => {
   it("refuses a wait-until fork with no deadline", async () => {
     const waiting = { ...base, branches: [{ ...base.branches[0], early: true, delay: "0m" }] };
     expect((await compile(provider(waiting), ctx)).ok).toBe(false);
+  });
+
+  it("accepts a split plan and a holdout plan, and keeps the split", async () => {
+    const splitPlan = { ...base, branches: [{ order: 2, delay: "0m", split: { percent_a: 60 }, then: 3, else: 4 }] };
+    const result = await compile(provider(splitPlan), ctx);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.plan.branches?.[0]?.split).toEqual({ percent_a: 60 });
+    const holdout = { ...base, steps: [email(1, 2), email(3, "end")], branches: [{ order: 2, delay: "0m", split: { percent_a: 90 }, then: 3, else: "end" }] };
+    expect((await compile(provider(holdout), ctx)).ok).toBe(true);
+  });
+
+  it("refuses a fork with both a condition and a split, or a split of 0 or 100", async () => {
+    const both = { ...base, branches: [{ ...base.branches[0], split: { percent_a: 50 } }] };
+    expect((await compile(provider(both), ctx)).ok).toBe(false);
+    for (const percent_a of [0, 100]) {
+      const bad = { ...base, branches: [{ order: 2, delay: "0m", split: { percent_a }, then: 3, else: 4 }] };
+      expect((await compile(provider(bad), ctx)).ok, String(percent_a)).toBe(false);
+    }
   });
 });

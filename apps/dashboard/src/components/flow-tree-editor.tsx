@@ -12,6 +12,7 @@ import type { ReactNode } from "react";
 import { GitFork, X } from "lucide-react";
 
 import { Button } from "./ui/button.js";
+import { Input } from "./ui/input.js";
 import { Select } from "./ui/select.js";
 import { ConditionEditor } from "./condition-editor.js";
 import { StepWriter, DELAY_PRESETS } from "./step-writer.js";
@@ -21,6 +22,7 @@ import {
   MAX_FORK_DEPTH,
   WAIT_LIMIT_PRESETS,
   canAddFork,
+  switchForkKind,
   newFork,
   type ForkData,
   type SequenceData,
@@ -60,6 +62,10 @@ export function ForkEditor({
   depth: number;
 }) {
   const error = ctx.conditionErrors[fork.id];
+  const percentError = ctx.conditionErrors[`${fork.id}-percent`];
+  const pctA = Number.isFinite(fork.percent_a) ? fork.percent_a : 0;
+  const labelA = fork.kind === "split" ? `Version A (${pctA}%)` : "If it holds";
+  const labelB = fork.kind === "split" ? `Version B (${Number.isFinite(fork.percent_a) ? 100 - pctA : 0}%)` : "Otherwise";
   return (
     <section
       aria-label={`Split ${depth + 1}`}
@@ -68,13 +74,85 @@ export function ForkEditor({
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
           <GitFork size={18} strokeWidth={1.5} aria-hidden="true" className="text-accent-text" />
-          <h3 className="text-[15px] font-semibold text-foreground">{fork.early ? "Wait until something happens" : "Split into two paths"}</h3>
+          <h3 className="text-[15px] font-semibold text-foreground">{fork.kind === "split" ? "Random split (A/B test)" : fork.early ? "Wait until something happens" : "Split into two paths"}</h3>
         </div>
         <Button type="button" variant="secondary" size="sm" disabled={ctx.disabled} onClick={onRemove} aria-label="Remove this split">
           <X size={16} strokeWidth={1.5} /> Remove split
         </Button>
       </div>
 
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-[14px] text-foreground">
+        <span>Decide by</span>
+        <div className="w-80">
+          <Select
+            aria-label="How to split"
+            value={fork.kind}
+            disabled={ctx.disabled}
+            onChange={(e) => {
+              const kind = e.target.value === "split" ? "split" : "condition";
+              onChange(switchForkKind(fork, kind));
+            }}
+          >
+            <option value="condition">A condition about the contact</option>
+            <option value="split">A random split (A/B test or holdout)</option>
+          </Select>
+        </div>
+      </div>
+
+      {fork.kind === "split" ? (
+        <>
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-[14px] text-foreground">
+            <span>After the emails above, wait</span>
+            <div className="w-40">
+              <Select
+                aria-label="How long to wait before splitting"
+                value={fork.delay}
+                disabled={ctx.disabled}
+                onChange={(e) => onChange({ ...fork, delay: e.target.value })}
+              >
+                {DELAY_PRESETS.map((d) => (
+                  <option key={d.value} value={d.value}>
+                    {d.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <span>then split:</span>
+          </div>
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-[14px] text-foreground">
+            <label htmlFor={`${fork.id}-percent`}>Version A gets</label>
+            <div className="w-20">
+              <Input
+                id={`${fork.id}-percent`}
+                type="number"
+                min={1}
+                max={99}
+                step={1}
+                value={Number.isFinite(fork.percent_a) ? String(fork.percent_a) : ""}
+                disabled={ctx.disabled}
+                onChange={(e) => onChange({ ...fork, percent_a: e.target.value === "" ? Number.NaN : Number(e.target.value) })}
+              />
+            </div>
+            <span>% and version B gets {Number.isFinite(fork.percent_a) ? 100 - fork.percent_a : "?"}%.</span>
+            {([[50, "50/50"], [80, "80/20"], [90, "90/10 holdout"]] as const).map(([pct, label]) => (
+              <Button key={pct} type="button" variant="outline" size="sm" disabled={ctx.disabled} onClick={() => onChange({ ...fork, percent_a: pct })}>
+                {label}
+              </Button>
+            ))}
+          </div>
+          {percentError && (
+            <p className="mb-2 text-[13px] text-danger" role="alert">
+              {percentError}
+            </p>
+          )}
+          <p className="mb-3 text-[13px] text-muted-foreground">
+            Each person is assigned once and stays in their version. Put different emails on each path to test them against each other, or
+            leave a path empty to hold those people back (a holdout) and see whether the emails made a difference. Set a goal on the flow to
+            compare the results.
+          </p>
+        </>
+      ) : (
+      <>
       <div className="mb-3 flex flex-wrap items-center gap-2 text-[14px] text-foreground">
         <div className="w-72">
           <Select
@@ -136,14 +214,16 @@ export function ForkEditor({
           {error}
         </p>
       )}
+      </>
+      )}
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="rounded-md border border-border bg-background p-3" role="group" aria-label="If it holds">
-          <p className="mb-3 text-[13px] font-semibold uppercase tracking-[0.06em] text-success">If it holds</p>
+        <div className="rounded-md border border-border bg-background p-3" role="group" aria-label={labelA}>
+          <p className="mb-3 text-[13px] font-semibold uppercase tracking-[0.06em] text-success">{labelA}</p>
           {renderPath("yes")}
         </div>
-        <div className="rounded-md border border-border bg-background p-3" role="group" aria-label="Otherwise">
-          <p className="mb-3 text-[13px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Otherwise</p>
+        <div className="rounded-md border border-border bg-background p-3" role="group" aria-label={labelB}>
+          <p className="mb-3 text-[13px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">{labelB}</p>
           {renderPath("no")}
         </div>
       </div>
@@ -201,7 +281,11 @@ export function SequenceEditor({
               onChange={(seq) => onChange({ ...value, fork: { ...value.fork!, [which]: seq } })}
               ctx={ctx}
               depth={depth + 1}
-              emptyText="Nothing is sent on this path: the flow ends here for these contacts."
+              emptyText={
+                value.fork?.kind === "split"
+                  ? "Nothing is sent on this path. Left empty, these people are a holdout: held back and sent nothing."
+                  : "Nothing is sent on this path: the flow ends here for these contacts."
+              }
               addLabel="Add an email to this path"
             />
           )}

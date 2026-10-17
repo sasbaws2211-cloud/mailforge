@@ -152,6 +152,28 @@ A split can also **wait for an event instead of waiting a fixed time.** In the e
   "then": 3, "else": 4 }
 ```
 
+### A/B tests and holdouts
+
+A split can also send people down a path **at random** instead of by a condition. In the editor, on a split, choose *A random split (A/B test or holdout)* and pick the share. Each person is assigned once, by a fixed hash of their place in the flow, and stays in that version.
+
+> Welcome email. **Split 50/50:**
+> Version A: send "Welcome to Acme".
+> Version B: send "Here's your first win".
+> Goal: created a project. Result: A 22%, B 31%.
+
+- **A/B test:** put different emails on the two paths and compare. Set a **goal** on the flow to compare how many people from each version get there. Opens and clicks are shown too, for each version's own emails only (emails before the split went to everyone and are left out). Opens are approximate, because some mail apps load images automatically.
+- **Holdout:** leave one path empty and give the other most people, for example 90/10. The 10% are held back and sent nothing, so comparing them with everyone else is the one honest way to see whether the emails made a difference. The goal keeps checking held-back people until their window ends, so the comparison is fair.
+- **The verdict is careful.** The flow page says "too early to tell" until each version has at least 30 people and at least 10 people in total have reached the goal. After that it uses a standard two-sample test: "Version B is probably better" appears only when chance is unlikely to explain the gap (p under 0.05), otherwise "no clear difference yet". Small tests mislead, so check back as numbers grow.
+- **Rules:** one split is two versions, with the share for version A from 1 to 99 percent. A random split cannot also be a wait-until, and it follows the same limits as any split: no loops, at most 3 splits on a path, 30 emails and splits in total.
+- **A person never changes version.** Editing the percentage later affects only people who reach the split afterwards. Someone who enters the flow again is a new entry and may be assigned again.
+- **There is no one-click "send everyone the winner" yet.** Edit the flow yourself: remove the split and keep the winning path's emails.
+- **Plain-English flows:** say "send half of them X and half Y", "test two subject lines" or "hold back 10% as a control", and the AI writes a random split.
+- **Through the API:** a branch with `"split": { "percent_a": 50 }` instead of a `condition`. A holdout has `"else": "end"`. `GET /v1/flows/:id/results` returns a `split_tests` list with the numbers and verdict for each split.
+
+```json
+{ "order": 2, "delay": "0m", "split": { "percent_a": 90 }, "then": 3, "else": "end" }
+```
+
 The API accepts more shapes than the editor builds: paths may rejoin (two emails can both lead to a shared one), and a step can jump over others with `next`. The plan preview shows these as "Continues at step N". The editor itself only builds the tree shape above.
 
 ## Goals: did the flow work?
@@ -171,7 +193,7 @@ How it works, and what it does not tell you:
 
 - **Event goals are recorded within seconds; other goals on the 15-minute scan.** When the goal's event arrives, the contact is checked at once, whether they are still in the flow or already finished it (until their window ends, so "converted a week after the last email" counts). A goal on a contact fact such as payment status is checked on the scan. A conversion is recorded once per person per entry.
 - **Use "since entering the flow" for events.** Otherwise something that happened before they joined can count. A fact like "payment status is paid" also counts people who were already paid when they joined.
-- **It shows who got there after joining, not that the emails caused it.** Proving cause needs a holdout group (a share of people deliberately left out), which Loomail does not offer yet.
+- **It shows who got there after joining, not that the emails caused it.** Proving cause needs a holdout: a random split where a share of people are deliberately sent nothing (see *A/B tests and holdouts*). Compare them with everyone else.
 - **Changing a goal changes the future, not the past.** Conversions already recorded keep the goal name they had. Removing the goal stops new conversions but keeps the history.
 - **The older plan-level exit condition** still works unchanged. A goal with "leave the flow" does the same job and also counts the result, so for new flows prefer a goal.
 - **Plain-English flows:** the AI does not write goals. Set the goal on the flow page after it is created.
