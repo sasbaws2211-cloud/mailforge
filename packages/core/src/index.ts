@@ -54,6 +54,22 @@ export {
 } from "./enrollment.js";
 
 export {
+  AUDIENCE_MAX_CONDITIONS,
+  AUDIENCE_PAYMENT_STATUSES,
+  AUDIENCE_ENGAGEMENT_DEPTHS,
+  AUDIENCE_TRIGGER_TYPES,
+  audienceSchema,
+  audienceConditionSchema,
+  readAudience,
+  stripAudience,
+  evaluateAudience,
+  type Audience,
+  type AudienceCondition,
+  type AudienceContact,
+  type AudienceResult,
+} from "./audience.js";
+
+export {
   LIFECYCLE_STATES,
   VALID_TRANSITIONS,
   VALID_TRANSITION_MAP,

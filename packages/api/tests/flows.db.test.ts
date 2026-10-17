@@ -444,6 +444,86 @@ describe("flow CRUD", () => {
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toMatch(/[Dd]uplicate/);
     });
+
+    describe("trigger audience", () => {
+      const audience = { conditions: [{ field: "payment_status", op: "is", value: "paid" }] };
+
+      it("stores a valid audience on a lifecycle trigger and returns it", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const res = await app.inject({
+          method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+          payload: minimalFlow({ trigger_config: { from: "engaged", to: "at_risk", audience } }),
+        });
+        expect(res.statusCode).toBe(201);
+        expect(res.json().trigger_config.audience).toEqual(audience);
+      });
+
+      it("accepts an audience on an event trigger", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const res = await app.inject({
+          method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+          payload: minimalFlow({ trigger_type: "event", trigger_config: { event: "signed_up", audience } }),
+        });
+        expect(res.statusCode).toBe(201);
+      });
+
+      it("400 with the audience path when a condition is wrong", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const res = await app.inject({
+          method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+          payload: minimalFlow({
+            trigger_config: { from: "engaged", to: "at_risk", audience: { conditions: [{ field: "payment_status", op: "is", value: "vip" }] } },
+          }),
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().issues.some((i: any) => i.path.startsWith("trigger_config.audience"))).toBe(true);
+      });
+
+      it("400 on a segment trigger, rather than storing an audience that would be ignored", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const res = await app.inject({
+          method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+          payload: minimalFlow({ trigger_type: "segment", trigger_config: { tenure_bucket: "new", recency_bucket: "active", audience } }),
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().issues[0].message).toMatch(/lifecycle_transition or event/);
+      });
+
+      it("can be added, changed and removed on an existing flow with PATCH", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const created = await app.inject({ method: "POST", url: "/v1/flows", headers: { cookie: cookieA }, payload: minimalFlow() });
+        const id = created.json().id;
+        const patch = (trigger_config: unknown) =>
+          app.inject({ method: "PATCH", url: `/v1/flows/${id}`, headers: { cookie: cookieA }, payload: { trigger_config } });
+
+        const added = await patch({ from: "engaged", to: "at_risk", audience });
+        expect(added.statusCode).toBe(200);
+        expect(added.json().trigger_config.audience).toEqual(audience);
+
+        const removed = await patch({ from: "engaged", to: "at_risk" });
+        expect(removed.statusCode).toBe(200);
+        expect(removed.json().trigger_config.audience).toBeUndefined();
+      });
+
+      it("PATCH refuses to move a flow with an audience onto a segment trigger", async () => {
+        if (!dbAvailable) return;
+        const app = await buildApp({ db, logger: false });
+        const created = await app.inject({
+          method: "POST", url: "/v1/flows", headers: { cookie: cookieA },
+          payload: minimalFlow({ trigger_config: { from: "engaged", to: "at_risk", audience } }),
+        });
+        const res = await app.inject({
+          method: "PATCH", url: `/v1/flows/${created.json().id}`, headers: { cookie: cookieA },
+          payload: { trigger_type: "segment" },
+        });
+        expect(res.statusCode).toBe(400);
+      });
+    });
   });
 
   describe("GET /v1/flows", () => {

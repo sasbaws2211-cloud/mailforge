@@ -141,7 +141,11 @@ async function cleanup() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function insertContact(externalId: string, email?: string): Promise<string> {
+async function insertContact(
+  externalId: string,
+  email?: string,
+  extra: { paymentStatus?: string; properties?: Record<string, unknown> } = {},
+): Promise<string> {
   const [row] = await db
     .insert(contacts)
     .values({
@@ -151,6 +155,8 @@ async function insertContact(externalId: string, email?: string): Promise<string
       firstSeenAt: NOW,
       lastSeenAt: NOW,
       email: email ?? null,
+      ...(extra.paymentStatus !== undefined ? { paymentStatus: extra.paymentStatus } : {}),
+      ...(extra.properties !== undefined ? { properties: extra.properties } : {}),
     })
     .returning({ id: contacts.id });
   return row!.id;
@@ -949,5 +955,112 @@ describe("concurrency: re-entry cooldown at boundary by two callers", () => {
     expect(totalSucceeded).toBe(1);
 
     await gate.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Trigger audience ("only contacts where...")
+// ---------------------------------------------------------------------------
+
+describe("trigger audience", () => {
+  const paidPro = {
+    conditions: [
+      { field: "payment_status", op: "is", value: "paid" },
+      { field: "plan", op: "is", value: "Pro" },
+    ],
+  };
+  const atRisk = (contactId: string): AppliedTransition[] => [
+    { tenantId: testTenantId, contactId, fromState: "engaged", toState: "at_risk" },
+  ];
+
+  it("enrolls a lifecycle-transition contact who matches the audience, and not one who does not", async () => {
+    if (!dbAvailable) return;
+    const flowId = await insertFlow({
+      name: "Paid Pro win-back",
+      triggerType: "lifecycle_transition",
+      triggerConfig: { from: "engaged", to: "at_risk", audience: paidPro },
+    });
+    const match = await insertContact("aud_match", "m@example.com", { paymentStatus: "paid", properties: { plan: "pro" } });
+    const wrongPlan = await insertContact("aud_plan", "p@example.com", { paymentStatus: "paid", properties: { plan: "Growth" } });
+    const free = await insertContact("aud_free", "f@example.com", { paymentStatus: "free", properties: { plan: "Pro" } });
+
+    const result = await phaseEnrollment(
+      db,
+      [...atRisk(match), ...atRisk(wrongPlan), ...atRisk(free)],
+      NOW,
+    );
+
+    expect(result.enrollmentsSucceeded).toBe(1);
+    expect((await getActiveMemberships(match))[0]?.flowId).toBe(flowId);
+    expect(await getActiveMemberships(wrongPlan)).toHaveLength(0);
+    expect(await getActiveMemberships(free)).toHaveLength(0);
+  });
+
+  it("applies to event triggers too", async () => {
+    if (!dbAvailable) return;
+    await insertFlow({
+      name: "Big team upgraded",
+      triggerType: "event",
+      triggerConfig: {
+        event: "plan_upgraded",
+        audience: { conditions: [{ field: "trait", key: "seats", op: "gt", value: 10 }] },
+      },
+    });
+    const big = await insertContact("aud_big", "b@example.com", { properties: { seats: 25 } });
+    const small = await insertContact("aud_small", "s@example.com", { properties: { seats: 3 } });
+    const unknown = await insertContact("aud_unknown", "u@example.com");
+
+    for (const contactId of [big, small, unknown]) {
+      await handleTriggerCheck({ tenant_id: testTenantId, contact_id: contactId, event_name: "plan_upgraded" }, db);
+    }
+
+    expect(await getActiveMemberships(big)).toHaveLength(1);
+    expect(await getActiveMemberships(small)).toHaveLength(0);
+    expect(await getActiveMemberships(unknown)).toHaveLength(0);
+  });
+
+  it("a flow without an audience still enrolls everyone", async () => {
+    if (!dbAvailable) return;
+    await insertFlow({ name: "Everyone", triggerType: "lifecycle_transition", triggerConfig: { from: "engaged", to: "at_risk" } });
+    const contactId = await insertContact("aud_none", "n@example.com", { paymentStatus: "free" });
+    const result = await phaseEnrollment(db, atRisk(contactId), NOW);
+    expect(result.enrollmentsSucceeded).toBe(1);
+  });
+
+  it("an audience that cannot be read enrolls nobody", async () => {
+    if (!dbAvailable) return;
+    await insertFlow({
+      name: "Broken audience",
+      triggerType: "lifecycle_transition",
+      triggerConfig: { from: "engaged", to: "at_risk", audience: { conditions: [{ field: "hair", op: "is", value: "red" }] } },
+    });
+    const contactId = await insertContact("aud_broken", "x@example.com", { paymentStatus: "paid" });
+    const result = await phaseEnrollment(db, atRisk(contactId), NOW);
+    expect(result.enrollmentsSucceeded).toBe(0);
+    expect(await getActiveMemberships(contactId)).toHaveLength(0);
+  });
+
+  it("a mismatch never evicts the contact's current nurture flow", async () => {
+    if (!dbAvailable) return;
+    const lowFlow = await insertFlow({
+      name: "Low priority, running",
+      triggerType: "event",
+      triggerConfig: { event: "signed_up" },
+      priority: 1,
+    });
+    await insertFlow({
+      name: "High priority, paid only",
+      triggerType: "lifecycle_transition",
+      triggerConfig: { from: "engaged", to: "at_risk", audience: { conditions: [{ field: "payment_status", op: "is", value: "paid" }] } },
+      priority: 10,
+    });
+    const contactId = await insertContact("aud_evict", "e@example.com", { paymentStatus: "free" });
+    await handleTriggerCheck({ tenant_id: testTenantId, contact_id: contactId, event_name: "signed_up" }, db);
+
+    await phaseEnrollment(db, atRisk(contactId), NOW);
+
+    const active = await getActiveMemberships(contactId);
+    expect(active).toHaveLength(1);
+    expect(active[0]!.flowId).toBe(lowFlow); // the higher-priority flow did not apply, so it evicted nothing
   });
 });

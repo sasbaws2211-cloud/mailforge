@@ -97,6 +97,34 @@ You can mix approaches across flows, and reference your own templates (`@templat
 
 There is no general-purpose segment builder. "Segment" means exactly one cell of the retention grid: tenure (`new`, `growing`, `established`, `loyal`) crossed with recency (`active`, `cooling`, `idle`, `dormant`). The grid you see in Analytics is the same set a segment-triggered flow enrolls.
 
+**Audience (optional).** An `event` or `lifecycle_transition` trigger can carry an audience: "only enroll contacts where...". In the flow editor it is the *Only for certain contacts* section, and unlike the trigger it can be changed at any time, even on an active flow, without recompiling. Up to 5 conditions, all of which must hold:
+
+| Condition | Operators |
+|---|---|
+| Payment status (`free`, `trial`, `paid`, `past_due`, `cancelled`) | is, is not, is one of |
+| Engagement (`power`, `regular`, `casual`, `minimal`) | is, is not, is one of |
+| Plan (the `plan` trait, when it is a plan name) | is, is not |
+| Email address | has one / has none |
+| A custom trait (any key you send in `identify`) | is, is not, contains, greater than, less than, is set, is not set |
+
+The same shape through the API, in `trigger_config`:
+
+```json
+{ "from": "engaged", "to": "at_risk",
+  "audience": { "conditions": [
+    { "field": "payment_status", "op": "is", "value": "paid" },
+    { "field": "plan", "op": "is", "value": "Pro" } ] } }
+```
+
+Things to know:
+
+- **It is checked at the moment the trigger fires.** A contact who does not match then is not enrolled for that occurrence, and is not enrolled later if they start matching. Contacts already in the flow are not affected when you change the audience.
+- **Traits must be there when the event arrives.** For event triggers, send `identify` before `track` (the server SDKs do). A `track` that beats its `identify` is judged on the traits known so far.
+- **Text comparisons ignore case.** A missing trait never matches "is", "contains", "greater than" or "less than", and always matches "is not". Numbers stored as text (`"12"`) compare as numbers.
+- **A filter the engine cannot read enrolls nobody** (it fails closed) and logs a warning. The API refuses to save one, so this only happens to hand-edited data.
+- **Not for segment (retention grid) triggers.** The API rejects an audience there.
+- The audience is not shown to the AI that compiles or drafts the flow; the engine enforces it.
+
 **Classes.** Every flow is `nurture` or `critical`. A contact can be in at most one active nurture flow at a time; a higher-priority flow evicts the current one. Critical flows (dunning, limits) have no concurrency limit and bypass the frequency caps and send window. Nothing bypasses the suppression list.
 
 **Re-entry.** Per flow: `once`, `cooldown` (default 30 days), or `every_time`. Enforced by a uniqueness constraint on active memberships, so races cannot double-enroll.

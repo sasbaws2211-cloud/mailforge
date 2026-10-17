@@ -23,7 +23,7 @@ import {
   compile,
   type CompilePromptContext,
 } from "@loomail/brain-oss";
-import type { CompileJobData } from "@loomail/core";
+import { stripAudience, type CompileJobData } from "@loomail/core";
 import { resolveTenantProvider } from "./provider-resolver.js";
 
 // ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ export async function handleCompileJob(
   const ctx: CompilePromptContext = {
     promptSource: flow.promptSource,
     triggerType: flow.triggerType,
-    triggerConfig: flow.triggerConfig as Record<string, unknown>,
+    triggerConfig: stripAudience(flow.triggerConfig as Record<string, unknown>), // the audience is the engine's business, not the AI's
     availableTemplates: templateRows.map((r) => r.slug),
     availableKbEntries: kbRows.map((r) => r.title),
   };

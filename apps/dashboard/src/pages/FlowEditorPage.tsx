@@ -71,6 +71,14 @@ import { Skeleton } from "../components/ui/skeleton.js";
 import { TemplateEditorBySlug } from "../components/template-editor.js";
 import { StepWriter, buildPlanBody, type StepData } from "../components/step-writer.js";
 import { PromptGuidance } from "../components/prompt-guidance.js";
+import { AudienceEditor } from "../components/audience-editor.js";
+import {
+  audienceToRows,
+  describeAudience,
+  rowsToAudience,
+  type ApiAudience,
+  type AudienceRow,
+} from "../audience.js";
 import { useLlm } from "../settings.js";
 
 // ---------------------------------------------------------------------------
@@ -322,6 +330,112 @@ function TriggerSummary({ flow }: { flow: Flow }) {
   );
 }
 
+/**
+ * The audience of an existing flow. Unlike the trigger itself, it can be changed at any time (the engine reads
+ * it when the trigger fires), so it has its own save, separate from the main form.
+ */
+function AudienceCard({
+  flow,
+  saving,
+  onSave,
+}: {
+  flow: Flow;
+  saving: boolean;
+  /** Resolves to an error message, or null once saved. */
+  onSave: (audience: ApiAudience | null) => Promise<string | null>;
+}) {
+  const stored = (flow.trigger_config as Record<string, unknown> | null)?.audience;
+  const parsed = audienceToRows(stored);
+  const phrases = stored ? describeAudience(stored) : [];
+  const [editing, setEditing] = useState(false);
+  const [rows, setRows] = useState<AudienceRow[]>([]);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  function startEditing() {
+    setRows(parsed.rows);
+    setErrors({});
+    setMessage(null);
+    setSaved(false);
+    setEditing(true);
+  }
+
+  async function save() {
+    const result = rowsToAudience(rows);
+    if (Object.keys(result.errors).length > 0) {
+      setErrors(result.errors);
+      setMessage("Fix the highlighted conditions, or remove them.");
+      return;
+    }
+    const failure = await onSave(result.audience);
+    if (failure) {
+      setMessage(failure);
+      return;
+    }
+    setEditing(false);
+    setSaved(true);
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-border bg-card px-5 py-4">
+      <div className="flex items-start justify-between gap-4">
+        <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+          Only for contacts where
+        </p>
+        {!editing && (
+          <Button type="button" variant="secondary" size="sm" onClick={startEditing}>
+            {stored ? "Edit" : "Add conditions"}
+          </Button>
+        )}
+      </div>
+      {editing ? (
+        <div className="mt-3">
+          {parsed.unreadable && (
+            <p className="mb-3 text-[13px] text-muted-foreground">
+              The current filter cannot be shown here. Saving replaces it.
+            </p>
+          )}
+          <AudienceEditor
+            rows={rows}
+            onChange={(next) => {
+              setRows(next);
+              setErrors({});
+              setMessage(null);
+            }}
+            errors={errors}
+            disabled={saving}
+          />
+          {message && (
+            <p className="mt-3 text-[13px] text-danger" role="alert">
+              {message}
+            </p>
+          )}
+          <div className="mt-4 flex items-center gap-3">
+            <Button type="button" size="sm" disabled={saving} onClick={() => void save()}>
+              {saving ? "Saving..." : "Save audience"}
+            </Button>
+            <Button type="button" variant="secondary" size="sm" disabled={saving} onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className="mt-1.5 text-[15px] text-foreground">
+            {phrases.length > 0 ? phrases.join(", and ") : "Everyone who matches the trigger."}
+          </p>
+          <p className="mt-2 text-[13px] text-muted-foreground">
+            Checked when the trigger fires. Contacts who do not match then are not enrolled; contacts already in the
+            flow are not affected.
+            {saved && <span className="text-foreground"> Saved.</span>}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // trigger_config sub-form components
 // ---------------------------------------------------------------------------
@@ -501,6 +615,7 @@ interface FormState {
   ev_event: string;
   sg_tenure: string;
   sg_recency: string;
+  audience_rows: AudienceRow[];
   prompt_source: string;
   approval_mode: Flow["approval_mode"];
   content_mode: Flow["content_mode"];
@@ -516,6 +631,7 @@ function defaultFormState(): FormState {
     ev_event: "",
     sg_tenure: "",
     sg_recency: "",
+    audience_rows: [],
     prompt_source: "",
     approval_mode: "require",
     content_mode: "ai_drafted",
@@ -533,6 +649,7 @@ function formStateFromFlow(flow: Flow): FormState {
     ev_event: flow.trigger_type === "event" ? String(cfg.event ?? "") : "",
     sg_tenure: flow.trigger_type === "segment" ? String(cfg.tenure_bucket ?? "") : "",
     sg_recency: flow.trigger_type === "segment" ? String(cfg.recency_bucket ?? "") : "",
+    audience_rows: audienceToRows((flow.trigger_config as Record<string, unknown> | null)?.audience).rows,
     prompt_source: flow.prompt_source ?? "",
     approval_mode: flow.approval_mode,
     content_mode: (flow.content_mode as Flow["content_mode"]) ?? "ai_drafted",
@@ -543,12 +660,13 @@ function formStateFromFlow(flow: Flow): FormState {
 function buildTriggerConfig(
   type: Flow["trigger_type"],
   state: FormState,
+  audience: ApiAudience | null = null,
 ): Record<string, unknown> {
   if (type === "lifecycle_transition") {
-    return { from: state.lc_from, to: state.lc_to };
+    return { from: state.lc_from, to: state.lc_to, ...(audience ? { audience } : {}) };
   }
   if (type === "event") {
-    return { event: state.ev_event };
+    return { event: state.ev_event, ...(audience ? { audience } : {}) };
   }
   if (type === "segment") {
     return { tenure_bucket: state.sg_tenure, recency_bucket: state.sg_recency };
@@ -942,6 +1060,7 @@ export default function FlowEditorPage() {
   const [contentModeSelected, setContentModeSelected] = useState(false);
   const [promptDirty, setPromptDirty] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [audienceErrors, setAudienceErrors] = useState<Record<string, string>>({});
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [compileError, setCompileError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState(false);
@@ -1094,7 +1213,9 @@ export default function FlowEditorPage() {
       ev_event: "",
       sg_tenure: "",
       sg_recency: "",
+      audience_rows: [],
     }));
+    setAudienceErrors({});
     setFieldErrors((prev) => {
       const next = { ...prev };
       delete next["trigger_config.from"];
@@ -1116,6 +1237,7 @@ export default function FlowEditorPage() {
 
   function clearErrors() {
     setFieldErrors({});
+    setAudienceErrors({});
     setBannerError(null);
     setSavedNotice(false);
   }
@@ -1137,9 +1259,14 @@ export default function FlowEditorPage() {
     e.preventDefault();
     clearErrors();
 
-    const triggerConfig = buildTriggerConfig(form.trigger_type, form);
-
     if (isNew) {
+      const { audience, errors } = rowsToAudience(form.audience_rows);
+      if (Object.keys(errors).length > 0) {
+        setAudienceErrors(errors);
+        setBannerError("Fix the highlighted conditions, or remove them.");
+        return;
+      }
+      const triggerConfig = buildTriggerConfig(form.trigger_type, form, audience);
       try {
         const created = await createMutation.mutateAsync({
           name: form.name,
@@ -1169,6 +1296,17 @@ export default function FlowEditorPage() {
       } catch (err) {
         handleError(err);
       }
+    }
+  }
+
+  async function saveAudience(audience: ApiAudience | null): Promise<string | null> {
+    if (!existingFlow) return "The flow has not loaded yet.";
+    const { audience: _previous, ...rest } = (existingFlow.trigger_config ?? {}) as Record<string, unknown>;
+    try {
+      await updateMutation.mutateAsync({ trigger_config: audience ? { ...rest, audience } : rest });
+      return null;
+    } catch (err) {
+      return toMessage(err);
     }
   }
 
@@ -1762,6 +1900,31 @@ export default function FlowEditorPage() {
                 />
               )}
             </div>
+
+            {(form.trigger_type === "lifecycle_transition" || form.trigger_type === "event") && (
+              <div className="mt-4 rounded-lg border border-border bg-card p-5">
+                <p className="text-[14px] font-medium text-foreground">
+                  Only for certain contacts{" "}
+                  <span className="font-normal text-muted-foreground">(optional)</span>
+                </p>
+                <p className="mb-4 mt-1 text-[13px] text-muted-foreground">
+                  Narrow who enters, for example paid customers on one plan. It is checked when the trigger fires.
+                  Unlike the trigger, you can change this later.
+                </p>
+                <AudienceEditor
+                  rows={form.audience_rows}
+                  onChange={(rows) => {
+                    setField("audience_rows", rows);
+                    setAudienceErrors({});
+                  }}
+                  errors={audienceErrors}
+                  disabled={isPending}
+                />
+                <FieldError
+                  message={Object.entries(fieldErrors).find(([k]) => k.startsWith("trigger_config.audience"))?.[1]}
+                />
+              </div>
+            )}
           </section>
 
           {/* Step 2: writer */}
@@ -1913,6 +2076,11 @@ export default function FlowEditorPage() {
           {/* Main column */}
           <div className="min-w-0 flex-1">
             {existingFlow && <TriggerSummary flow={existingFlow} />}
+            {existingFlow &&
+              (existingFlow.trigger_type === "lifecycle_transition" || existingFlow.trigger_type === "event") &&
+              existingFlow.status !== "archived" && (
+                <AudienceCard flow={existingFlow} saving={updateMutation.isPending} onSave={saveAudience} />
+              )}
 
             <div className="mt-8">
               {isFixedContentEditor ? fixedContentSurface : aiSurface}

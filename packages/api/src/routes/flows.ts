@@ -53,6 +53,10 @@ import {
   renderTemplate,
   wrapInShell,
   wrapInTextShell,
+  audienceSchema,
+  readAudience,
+  stripAudience,
+  AUDIENCE_TRIGGER_TYPES,
 } from "@loomail/core";
 import { draft } from "@loomail/brain-oss";
 import type { Db } from "../plugins/db.js";
@@ -141,6 +145,26 @@ function validationError(reply: any, issues: z.ZodIssue[]) {
 }
 
 /**
+ * Check the optional `audience` inside a trigger_config. It is only meaningful on lifecycle_transition and
+ * event triggers, so anywhere else it is refused outright rather than stored and silently ignored.
+ * Returns issues in the same shape as a schema failure, or null when fine.
+ */
+export function audienceIssues(triggerType: string | undefined, triggerConfig: Record<string, unknown> | undefined): z.ZodIssue[] | null {
+  const audience = readAudience(triggerConfig);
+  if (audience === undefined) return null;
+  if (!triggerType || !(AUDIENCE_TRIGGER_TYPES as readonly string[]).includes(triggerType)) {
+    return [{
+      code: "custom",
+      path: ["trigger_config", "audience"],
+      message: `an audience can only be set on ${AUDIENCE_TRIGGER_TYPES.join(" or ")} triggers`,
+    }];
+  }
+  const parsed = audienceSchema.safeParse(audience);
+  if (parsed.success) return null;
+  return parsed.error.issues.map((i) => ({ ...i, path: ["trigger_config", "audience", ...i.path] }));
+}
+
+/**
  * Validate that step.order values are unique within the array.
  * Returns an error string if duplicate orders exist, null otherwise.
  */
@@ -174,6 +198,9 @@ const flowsRoutes: FastifyPluginAsync = async (app) => {
     const body = parsed.data;
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
+
+    const audienceProblems = audienceIssues(body.trigger_type, body.trigger_config);
+    if (audienceProblems) return validationError(reply, audienceProblems);
 
     // Validate step order uniqueness
     if (body.steps.length > 0) {
@@ -480,6 +507,14 @@ ${note}`,
       if (rows.length === 0) {
         reply.status(404);
         return { error: "Flow not found." };
+      }
+
+      // The audience must fit the trigger the flow will have after this update.
+      if (body.trigger_config !== undefined || body.trigger_type !== undefined) {
+        const nextType = body.trigger_type ?? rows[0]!.triggerType;
+        const nextConfig = (body.trigger_config ?? (rows[0]!.triggerConfig as Record<string, unknown>)) as Record<string, unknown>;
+        const audienceProblems = audienceIssues(nextType, nextConfig);
+        if (audienceProblems) return validationError(reply, audienceProblems);
       }
 
       const current = rows[0]!;
@@ -854,7 +889,7 @@ ${note}`,
       const compiledPlan = {
         trigger: {
           type: flow.triggerType,
-          condition: flow.triggerConfig as Record<string, unknown>,
+          condition: stripAudience(flow.triggerConfig as Record<string, unknown>),
         },
         steps: steps.map((s) => ({
           order: s.order,

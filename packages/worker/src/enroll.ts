@@ -6,6 +6,7 @@
  * sequence that runs inside a transaction with an advisory lock.
  *
  * The enrollment guard order:
+ *   0. Trigger audience (lifecycle/event triggers with an `audience`)
  *   1. Suppression check (contact's email in suppressions table)
  *   2. Class-based concurrency (nurture: one active at a time, with priority eviction)
  *   3. Re-entry policy check
@@ -28,6 +29,9 @@ import {
   sortByPriority,
   isReentryAllowed,
   contactEnrollmentLockKey,
+  evaluateAudience,
+  readAudience,
+  AUDIENCE_TRIGGER_TYPES,
   type EnrollableFlow,
   type PriorMembership,
 } from "@loomail/core";
@@ -74,16 +78,41 @@ export async function attemptEnrollment(
 ): Promise<EnrollmentResult> {
   const { flow, tenantId, contactId } = candidate;
 
+  const contactRows = await db
+    .select({
+      email: contacts.email,
+      paymentStatus: contacts.paymentStatus,
+      engagementDepth: contacts.engagementDepth,
+      properties: contacts.properties,
+    })
+    .from(contacts)
+    .where(and(eq(contacts.id, contactId), eq(contacts.tenantId, tenantId)))
+    .limit(1);
+
+  // Guard 0: Trigger audience ("only contacts where..."), for lifecycle and event triggers.
+  // Checked first and in memory, against the row loaded above. An audience that cannot be read
+  // fails closed: never enroll on a filter we cannot interpret. Segment triggers do not use it
+  // (their scan would burn its per-run cap on non-matching contacts).
+  if ((AUDIENCE_TRIGGER_TYPES as readonly string[]).includes(flow.triggerType)) {
+    const audience = readAudience(flow.triggerConfig);
+    if (audience !== undefined && audience !== null) {
+      const contactRow = contactRows[0];
+      if (!contactRow) return { enrolled: false, reason: "contact_not_found" };
+      const verdict = evaluateAudience(audience, contactRow);
+      if (verdict.outcome === "invalid") {
+        console.warn(`[enroll] flow ${flow.id} has an unreadable audience, not enrolling: ${verdict.message}`);
+        return { enrolled: false, reason: "audience_invalid" };
+      }
+      if (verdict.outcome === "no_match") {
+        return { enrolled: false, reason: "audience_mismatch" };
+      }
+    }
+  }
+
   // Guard 1: Suppression check
   // Only meaningful if the contact has an email. A contact without an email
   // cannot be suppressed (nothing to check against) but also cannot receive
   // email - step advancement (12c) will handle that. Enrollment proceeds.
-  const contactRows = await db
-    .select({ email: contacts.email })
-    .from(contacts)
-    .where(eq(contacts.id, contactId))
-    .limit(1);
-
   const contactEmail = contactRows[0]?.email;
   if (contactEmail) {
     const suppressed = await db
