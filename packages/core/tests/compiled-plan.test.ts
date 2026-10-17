@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { compiledPlanSchema, stepConditionSchema } from "../src/flow/compiled-plan.js";
+import { compiledPlanSchema, stepConditionSchema, isWebhookStep, webhookUrlProblem } from "../src/flow/compiled-plan.js";
 import { conditionSchema, conditionShape, MAX_CONDITION_LEAVES } from "../src/index.js";
 
 describe("compiledPlanSchema", () => {
@@ -321,5 +321,49 @@ describe("richer conditions", () => {
   it("conditionSchema and stepConditionSchema are the same thing", () => {
     expect(conditionSchema.safeParse({ lifecycle_state: "x" }).success).toBe(true);
     expect(stepConditionSchema).toBe(conditionSchema);
+  });
+});
+
+describe("webhook steps", () => {
+  const trigger = { type: "event", condition: {} };
+  const hook = (over: Record<string, unknown> = {}) => ({ order: 2, action_type: "webhook", delay: "1d", window_policy: "immediate", webhook: { url: "https://hooks.example.com/in" }, ...over });
+  const email = { order: 1, action_type: "nurture_value", delay: "0m", template_ref: "t1" };
+
+  it("accepts a webhook step next to an email step, with delay, conditions and next", () => {
+    const plan = { trigger, steps: [email, hook({ condition: { lifecycle_state: "engaged" }, exit_condition: { lifecycle_state: "churned" } })] };
+    expect(compiledPlanSchema.safeParse(plan).success).toBe(true);
+    expect(compiledPlanSchema.safeParse({ version: 2, trigger, steps: [{ ...email, next: 2 }, hook({ next: "end" })] }).success).toBe(true);
+  });
+
+  it("recognises one", () => {
+    expect(isWebhookStep(hook())).toBe(true);
+    expect(isWebhookStep(email)).toBe(false);
+  });
+
+  it("a webhook step cannot also carry email fields", () => {
+    for (const extra of [{ template_ref: "t" }, { kb_ref: "k" }, { brain_instruction: "write" }]) {
+      expect(compiledPlanSchema.safeParse({ trigger, steps: [email, hook(extra)] }).success, JSON.stringify(extra)).toBe(false);
+    }
+  });
+
+  it("rejects addresses that are not usable, naming the step", () => {
+    for (const url of ["", "not a url", "ftp://x.example.com/", "https://user:pw@x.example.com/", "mailto:a@b.c", "https://" + "a".repeat(2100) + ".com"]) {
+      const r = compiledPlanSchema.safeParse({ trigger, steps: [email, hook({ webhook: { url } })] });
+      expect(r.success, url.slice(0, 40)).toBe(false);
+    }
+    const bad = compiledPlanSchema.safeParse({ trigger, steps: [email, hook({ webhook: { url: "ftp://x.example.com/" } })] });
+    expect(!bad.success && bad.error.issues.some((i) => i.path.join(".") === "steps.1.webhook.url")).toBe(true);
+  });
+
+  it("the webhook object takes only a url", () => {
+    expect(compiledPlanSchema.safeParse({ trigger, steps: [email, hook({ webhook: { url: "https://x.example.com/", headers: {} } })] }).success).toBe(false);
+  });
+
+  it("webhookUrlProblem explains each failure and passes a good address", () => {
+    expect(webhookUrlProblem("https://hooks.example.com/in?x=1")).toBeNull();
+    expect(webhookUrlProblem("http://localhost:3000/in")).toBeNull();
+    expect(webhookUrlProblem("nope")).toMatch(/not a web address/);
+    expect(webhookUrlProblem("ftp://x.example.com")).toMatch(/https/);
+    expect(webhookUrlProblem("https://a:b@x.example.com")).toMatch(/username/);
   });
 });

@@ -105,6 +105,18 @@ All variables are read by the server process unless noted. The only hard require
 | `ENCRYPTION_KEY` | none | AES-256-GCM key for transport and LLM credentials at rest. Generate: `openssl rand -base64 32` | Server boots with a warning, but saving transport/LLM settings, flow compilation, and KB embeddings fail at first use. Losing it makes all stored credentials unreadable; back it up with the database |
 | `UNSUBSCRIBE_SIGNING_KEY` | none | HMAC key signing one-click unsubscribe tokens. Generate: `openssl rand -hex 32` | Sending fails closed: messages stay `approved` and the drain skips them. Once real email has been delivered, changing it breaks unsubscribe links already in inboxes. Treat as permanent |
 
+### Webhook destinations
+
+Where a flow's webhook step may call (see [Concepts](CONCEPTS.md#calling-your-own-system-webhook-steps)).
+
+| Variable | Default | What it does | Get it wrong |
+|---|---|---|---|
+| `LOOMAIL_RESTRICT_WEBHOOK_HOSTS` | on for a hosted service (`LOOMAIL_PUBLIC_SITE` or `LOOMAIL_ENFORCE_PLANS` true), off otherwise | `true` makes webhook calls https-only and refuses any address that resolves to a loopback, private, link-local or reserved range. `false` turns the checks off | Off on a service where customers you do not trust can write flows: they can make your server call your internal network |
+| `LOOMAIL_WEBHOOK_ALLOWED_HOSTS` | none | Comma-separated hosts or addresses that skip the checks even when they are on, for a receiver on your own network | An over-broad list undoes the protection |
+
+The signing secret each workspace's calls carry is stored encrypted with `ENCRYPTION_KEY` when one is set, and as plain
+text in the database otherwise. If `ENCRYPTION_KEY` is lost, stored secrets cannot be read; an owner can rotate to make a new one.
+
 ### URLs
 
 | Variable | Default | What it does | Get it wrong |

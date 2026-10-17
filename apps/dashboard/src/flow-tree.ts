@@ -363,12 +363,31 @@ export function treeFromPlan(plan: unknown, templates: ReadonlyMap<string, Templ
 
       const step = stepAt.get(cur);
       if (step) {
-        const copy = typeof step.template_ref === "string" ? templates.get(step.template_ref) : undefined;
-        if (!copy) return stop(`The email for step ${cur} could not be found.`);
         const condition = conditionToState(step.condition);
         const exit = conditionToState(step.exit_condition);
         if (condition.unreadable || exit.unreadable) return stop(`Step ${cur} has a condition the editor cannot show.`);
         if (typeof step.delay !== "string" || typeof step.action_type !== "string") return stop(`Step ${cur} is incomplete.`);
+        if (step.webhook !== undefined) {
+          const url = (step.webhook as { url?: unknown } | null)?.url;
+          if (typeof url !== "string" || step.template_ref !== undefined) return stop(`Step ${cur} is a webhook the editor cannot show.`);
+          seq.steps.push({
+            order: seq.steps.length + 1,
+            delay: step.delay,
+            action_type: "webhook",
+            window_policy: "immediate",
+            subject: "",
+            body_html: "",
+            body_text: "",
+            kind: "webhook",
+            webhook_url: url,
+            ...(step.condition !== undefined ? { condition: condition.state } : {}),
+            ...(step.exit_condition !== undefined ? { exit_condition: exit.state } : {}),
+          });
+          cur = step.next ?? nextAfter(cur);
+          continue;
+        }
+        const copy = typeof step.template_ref === "string" ? templates.get(step.template_ref) : undefined;
+        if (!copy) return stop(`The email for step ${cur} could not be found.`);
         seq.steps.push({
           order: seq.steps.length + 1,
           delay: step.delay,

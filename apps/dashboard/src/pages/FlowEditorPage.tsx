@@ -70,7 +70,8 @@ import { Select } from "../components/ui/select.js";
 import { Textarea } from "../components/ui/textarea.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { TemplateEditorBySlug, TEMPLATES_QUERY_KEY, fetchEmailTemplates } from "../components/template-editor.js";
-import { type StepData } from "../components/step-writer.js";
+import { type StepData, webhookUrlIssue } from "../components/step-writer.js";
+import { WebhookDeliveries, WebhookSecretCard } from "../components/webhook-panels.js";
 import { SequenceEditor, type TreeContext } from "../components/flow-tree-editor.js";
 import {
   allEmails,
@@ -1015,6 +1016,11 @@ function StepDetails({
           )}
         </p>
       )}
+      {step.webhook !== undefined && step.webhook !== null && typeof (step.webhook as { url?: unknown }).url === "string" && (
+        <p className="break-all text-[13px] text-muted-foreground">
+          calls <code className="font-mono text-[13px]">{(step.webhook as { url: string }).url}</code> (no email)
+        </p>
+      )}
       {typeof step.brain_instruction === "string" && (
         <p className="text-[13px] italic text-muted-foreground">
           {step.brain_instruction}
@@ -1597,16 +1603,26 @@ export default function FlowEditorPage() {
     // Validate every email, on every path, has content
     const tree: SequenceData = { steps: form.steps_data, fork: form.fork_data };
     const emails = allEmails(tree);
-    if (emails.some((s) => !s.subject.trim() || !s.body_html.trim())) {
+    const isEmpty = (s: StepData) => s.kind !== "webhook" && (!s.subject.trim() || !s.body_html.trim());
+    if (emails.some(isEmpty)) {
       setBannerError(
         form.fork_data
           ? "Every email, on every path, needs a subject and a body."
-          : `Step ${emails.find((s) => !s.subject.trim() || !s.body_html.trim())!.order} is missing a subject or body.`,
+          : `Step ${emails.find(isEmpty)!.order} is missing a subject or body.`,
+      );
+      return;
+    }
+    const badHook = emails.find((s) => s.kind === "webhook" && (!(s.webhook_url ?? "").trim() || webhookUrlIssue(s.webhook_url ?? "") !== null));
+    if (badHook) {
+      setBannerError(
+        form.fork_data
+          ? "Every webhook step needs a valid web address, such as https://example.com/hooks/loomail."
+          : `Step ${badHook.order} needs a valid web address to call, such as https://example.com/hooks/loomail.`,
       );
       return;
     }
     if (emails.length === 0) {
-      setBannerError("Add at least one email before saving the plan.");
+      setBannerError("Add at least one email or webhook before saving the plan.");
       return;
     }
 
@@ -1857,6 +1873,13 @@ export default function FlowEditorPage() {
   // For fixed_content flows (person-written), show the step writing surface
   const isFixedContentEditor = isNew ? form.content_mode === "fixed_content" : isFixedContentFlow;
 
+  // Does this flow call a webhook? Then the calls and the signing secret are worth showing.
+  const storedSteps = (existingFlow?.compiled_plan as UnknownRecord | null | undefined)?.steps;
+  const hasWebhookSteps =
+    !isNew &&
+    ((Array.isArray(storedSteps) && storedSteps.some((s) => (s as UnknownRecord).webhook !== undefined)) ||
+      allEmails({ steps: form.steps_data, fork: form.fork_data }).some((s) => s.kind === "webhook"));
+
   // The writing surface for person-written flows. Shared by both modes; the
   // save-plan row only makes sense once the flow exists.
   const fixedContentSurface = (
@@ -1976,6 +1999,13 @@ export default function FlowEditorPage() {
         </div>
       )}
       </>
+      )}
+
+      {existingFlow && hasWebhookSteps && (
+        <>
+          <WebhookDeliveries flowId={existingFlow.id} />
+          <WebhookSecretCard />
+        </>
       )}
     </div>
   );

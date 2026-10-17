@@ -262,6 +262,10 @@ export const TEMPLATE_APPROVAL_MODES: readonly TemplateApprovalMode[] = [
 export {
   compiledPlanSchema,
   compiledStepSchema,
+  isWebhookStep,
+  webhookUrlProblem,
+  WEBHOOK_ACTION_TYPE,
+  WEBHOOK_URL_MAX_LENGTH,
   compiledBranchSchema,
   BRANCH_MAX_WAIT_DAYS,
   SPLIT_MIN_PERCENT,

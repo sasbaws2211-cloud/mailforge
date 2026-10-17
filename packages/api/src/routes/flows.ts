@@ -76,6 +76,8 @@ import { createLimiter } from "../marketing/signup-logic.js";
 import { resolveAuthTransport } from "./auth.js";
 import { getPlatformTransport } from "../platform-mailer.js";
 import { AI_UNAVAILABLE_MESSAGE, aiAllowanceMessage, NO_AI_PROVIDER_MESSAGE } from "@loomail/core";
+import { WEBHOOK_ACTION_TYPE, WEBHOOK_URL_MAX_LENGTH } from "@loomail/core";
+import { resolveWebhookTarget, webhookHostPolicyFromEnv } from "@loomail/adapters";
 
 // ---------------------------------------------------------------------------
 // Zod schemas
@@ -510,6 +512,47 @@ ${note}`,
     }
     return { stats };
   });
+
+  /**
+   * GET /v1/flows/:id/webhook-deliveries
+   * The calls this flow's webhook steps have made: how many are waiting, delivered and failed, and the most recent
+   * 50 with their answer, so a person can see whether their endpoint is receiving them. Counts cover the retention
+   * period (30 days). The contact's email is included because it is what people recognise.
+   */
+  app.get<{ Params: { id: string } }>(
+    "/:id/webhook-deliveries",
+    { config: { minRole: "member" } },
+    async (request, reply) => {
+      const db: Db = request.server.db;
+      const tenantId = request.tenant!.id;
+      const idOk = z.string().uuid().safeParse(request.params.id);
+      if (!idOk.success) {
+        reply.status(404);
+        return { error: "Flow not found." };
+      }
+      const flow = (await db.select({ id: flows.id }).from(flows).where(and(eq(flows.id, idOk.data), eq(flows.tenantId, tenantId))).limit(1))[0];
+      if (!flow) {
+        reply.status(404);
+        return { error: "Flow not found." };
+      }
+      const counts = await db.execute<{ status: string; n: number }>(sql`
+        SELECT status, count(*)::int AS n FROM flow_webhook_deliveries
+        WHERE tenant_id = ${tenantId}::uuid AND flow_id = ${flow.id}::uuid GROUP BY status`);
+      const recent = await db.execute(sql`
+        SELECT d.id, d.step_order, d.url, d.status, d.attempts, d.last_status_code, d.last_error,
+               d.next_attempt_at, d.created_at, d.delivered_at, c.id AS contact_id, c.email AS contact_email
+        FROM flow_webhook_deliveries d
+        JOIN contacts c ON c.id = d.contact_id
+        WHERE d.tenant_id = ${tenantId}::uuid AND d.flow_id = ${flow.id}::uuid
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT 50`);
+      const by = Object.fromEntries(counts.rows.map((r) => [r.status, r.n]));
+      return {
+        counts: { pending: by.pending ?? 0, succeeded: by.succeeded ?? 0, failed: by.failed ?? 0 },
+        deliveries: recent.rows,
+      };
+    },
+  );
 
   /**
    * GET /v1/flows/:id/results?days=30
@@ -972,11 +1015,14 @@ ${note}`,
       const stepContentSchema = z.object({
         order: z.number().int().min(1),
         delay: z.string().regex(/^\d+(m|h|d)$/),
-        action_type: z.string().min(1),
-        window_policy: z.enum(["immediate", "respect_window"]),
-        subject: z.string().min(1, "Subject is required"),
-        body_html: z.string().min(1, "Body HTML is required"),
+        // An email step names its action; a webhook step does not need to (it is always "webhook").
+        action_type: z.string().min(1).optional(),
+        window_policy: z.enum(["immediate", "respect_window"]).optional(),
+        // An email step has copy; a webhook step has a webhook and no copy (checked below).
+        subject: z.string().optional(),
+        body_html: z.string().optional(),
         body_text: z.string().optional(),
+        webhook: z.object({ url: z.string().min(1).max(WEBHOOK_URL_MAX_LENGTH) }).strict().optional(),
         // "Send only if..." and "stop the flow if...": see core's flow/condition.ts for what they can say.
         condition: conditionSchema.optional(),
         exit_condition: conditionSchema.optional(),
@@ -984,10 +1030,23 @@ ${note}`,
         next: nodeTargetSchema.optional(),
       });
 
+      const stepSchema = stepContentSchema.superRefine((s, ctx) => {
+        if (s.webhook) {
+          if (s.subject || s.body_html || s.body_text) {
+            ctx.addIssue({ code: "custom", path: ["webhook"], message: "A webhook step sends no email, so it cannot have a subject or body." });
+          }
+          return;
+        }
+        if (!s.action_type) ctx.addIssue({ code: "custom", path: ["action_type"], message: "Required" });
+        if (!s.window_policy) ctx.addIssue({ code: "custom", path: ["window_policy"], message: "Required" });
+        if (!s.subject) ctx.addIssue({ code: "custom", path: ["subject"], message: "Subject is required" });
+        if (!s.body_html) ctx.addIssue({ code: "custom", path: ["body_html"], message: "Body HTML is required" });
+      });
+
       const planBodySchema = z.object({
         // 2 for a plan with forks (branches) or next pointers; leave out for a straight-line plan.
         version: z.literal(2).optional(),
-        steps: z.array(stepContentSchema).min(1, "At least one step is required"),
+        steps: z.array(stepSchema).min(1, "At least one step is required"),
         branches: z.array(compiledBranchSchema).max(MAX_PLAN_NODES).optional(),
         exit_conditions: z.array(planExitConditionSchema).max(10).optional(),
       });
@@ -1041,12 +1100,28 @@ ${note}`,
 
       // Build the compiled plan and check it BEFORE writing anything: a plan can now be wrong in ways a
       // person can cause (a loop, a path to nowhere), and that is a 400 for them, not a half-saved flow.
+      // Where a webhook step may call, checked as far as it can be without a lookup (scheme, host name, literal
+      // addresses); the real check, with DNS, happens each time the call is made.
+      const hostPolicy = webhookHostPolicyFromEnv();
+      for (const [i, s] of steps.entries()) {
+        if (!s.webhook) continue;
+        const reachable = await resolveWebhookTarget(s.webhook.url, {
+          restrict: hostPolicy.restrict,
+          allowedHosts: hostPolicy.allowedHosts,
+          lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+        });
+        if (!reachable.ok) {
+          reply.status(400);
+          return { error: "Invalid plan data.", issues: [{ path: `steps.${i}.webhook.url`, message: reachable.error }] };
+        }
+      }
+
       const stepPlan = steps.map((s) => ({
         order: s.order,
-        action_type: s.action_type,
+        action_type: s.webhook ? WEBHOOK_ACTION_TYPE : s.action_type!,
         delay: s.delay,
-        window_policy: s.window_policy,
-        template_ref: `flow-${flowId}-step-${s.order}`,
+        window_policy: s.window_policy ?? "immediate",
+        ...(s.webhook ? { webhook: { url: s.webhook.url } } : { template_ref: `flow-${flowId}-step-${s.order}` }),
         ...(s.condition !== undefined ? { condition: s.condition } : {}),
         ...(s.exit_condition !== undefined ? { exit_condition: s.exit_condition } : {}),
         ...(s.next !== undefined ? { next: s.next } : {}),
@@ -1086,6 +1161,7 @@ ${note}`,
       ];
 
       for (const step of steps) {
+        if (step.webhook) continue; // no copy to store
         const slug = `flow-${flowId}-step-${step.order}`;
         const name = `${flow.name} - Step ${step.order}`;
 
@@ -1096,8 +1172,8 @@ ${note}`,
             tenantId,
             name,
             slug,
-            subject: step.subject,
-            bodyHtml: step.body_html,
+            subject: step.subject!,
+            bodyHtml: step.body_html!,
             bodyText: step.body_text ?? null,
             variables: templateVariables,
             category: "flow",
@@ -1107,8 +1183,8 @@ ${note}`,
             target: [templates.tenantId, templates.slug],
             set: {
               name,
-              subject: step.subject,
-              bodyHtml: step.body_html,
+              subject: step.subject!,
+              bodyHtml: step.body_html!,
               bodyText: step.body_text ?? null,
               variables: templateVariables,
               isActive: true,

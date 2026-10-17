@@ -105,8 +105,14 @@ describe("startScheduler - registration pattern", () => {
 
   it("registers exactly as many schedules as there are cron-triggered queues", async () => {
     await startScheduler(mockBoss as never);
-    // Seven cron schedules: SCAN + DRAIN + REAP + COUNTER_ROLLOVER + PARTITION_MAINTENANCE + CONTENT_GENERATION + GRID_SNAPSHOT.
-    expect(schedules).toHaveLength(7);
+    // Eight cron schedules: SCAN + DRAIN + REAP + COUNTER_ROLLOVER + PARTITION_MAINTENANCE + CONTENT_GENERATION + GRID_SNAPSHOT + WEBHOOK_DELIVERY.
+    expect(schedules).toHaveLength(8);
+  });
+
+  it("WEBHOOK_DELIVERY is scheduled every minute", async () => {
+    await startScheduler(mockBoss as never);
+    const entry = schedules.find((s) => s.queue === QUEUE.WEBHOOK_DELIVERY)!;
+    expect(entry.cron).toBe("* * * * *");
   });
 
   it("does NOT call boss.work()", async () => {

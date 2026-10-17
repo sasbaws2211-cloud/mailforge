@@ -61,4 +61,8 @@ export async function startScheduler(boss: PgBoss): Promise<void> {
   // day's retention-grid cell populations for the cell trend view.
   // Idempotent: a re-run on the same day overwrites that day's rows.
   await boss.schedule(QUEUE.GRID_SNAPSHOT, "17 0 * * *", {});
+
+  // webhook-delivery: every minute (the finest a cron can say). Makes the calls that flows' webhook steps
+  // queued and retries the ones that failed. Rows are claimed with SKIP LOCKED, so several workers are safe.
+  await boss.schedule(QUEUE.WEBHOOK_DELIVERY, "* * * * *", {});
 }

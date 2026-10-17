@@ -46,6 +46,23 @@ export {
 } from "./smtp-guard.js";
 
 export {
+  WEBHOOK_HOST_NOT_ALLOWED,
+  WEBHOOK_TIMEOUT_MS,
+  generateWebhookSecret,
+  openWebhookSecret,
+  resolveWebhookTarget,
+  sealWebhookSecret,
+  sendWebhook,
+  signWebhook,
+  verifyWebhookSignature,
+  webhookHostPolicyFromEnv,
+  type WebhookHostPolicy,
+  type WebhookSendInput,
+  type WebhookSendResult,
+  type WebhookTargetResult,
+} from "./webhook-sender.js";
+
+export {
   createResendDomainsClient,
   type DnsRecord,
   type DomainErrorKind,

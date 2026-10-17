@@ -176,6 +176,60 @@ A split can also send people down a path **at random** instead of by a condition
 
 The API accepts more shapes than the editor builds: paths may rejoin (two emails can both lead to a shared one), and a step can jump over others with `next`. The plan preview shows these as "Continues at step N". The editor itself only builds the tree shape above.
 
+## Calling your own system: webhook steps
+
+A flow does not have to send an email at every step. A **webhook step** calls a web address of yours instead: tell your
+CRM, post to Slack, open a ticket, start something in your product. Add one in a person-written flow with **Add
+webhook** next to **Add step**. It has a delay, a web address, and the same optional conditions as an email step
+("call only if", "stop the flow instead if"), and it can sit anywhere in a sequence or on either path of a split.
+It sends no email.
+
+**What your server receives.** A `POST` with a JSON body:
+
+```json
+{
+  "id": "f0df51c9-2a63-44c8-ac62-7cc3bf9b8b37",
+  "type": "flow.webhook",
+  "created_at": "2026-10-17T20:34:22.550Z",
+  "attempt": 1,
+  "flow": { "id": "...", "name": "Welcome and notify" },
+  "step": 2,
+  "contact": {
+    "id": "...", "user_id": "user_42", "email": "ada@example.com", "name": "Ada Lovelace",
+    "company": "Analytical Engines", "lifecycle_state": "engaged", "payment_status": "free",
+    "properties": { "seats": 4, "city": "London" }
+  }
+}
+```
+
+Headers: `X-Loomail-Delivery` (the same id as `id`, identical on every retry: use it to ignore repeats),
+`X-Loomail-Event: flow.webhook`, and `X-Loomail-Signature: t=<unix seconds>,v1=<hex>`.
+
+**Check the signature.** `v1` is `HMAC-SHA256(secret, t + "." + raw body)`, hex. Recompute it over the body exactly as
+received, compare in constant time, and reject a `t` more than a few minutes old. The secret is one per workspace;
+a workspace owner sees it (and can rotate it) under **Check that calls come from Loomail** on any flow with a webhook
+step. Rotating replaces it at once, so update your server at the same time. The editor shows a Node.js example.
+
+**Answering.** Reply `2xx` within 10 seconds. A timeout, a network error, `408`, `429` or any `5xx` is tried again
+after 1 minute, 5 minutes, 30 minutes, 2 hours and 12 hours (six attempts in all, about 15 hours). Any other answer
+(a `4xx`, a redirect) is final: Loomail records it and does not ask again. Redirects are never followed. Calls are made
+at least once, so build the receiver to cope with a repeat.
+
+**See what happened.** Below the editor, **Webhook calls** shows how many were delivered, are waiting or failed over the
+last 30 days, and the latest 50 with the answer or the reason. A paused flow holds its calls (they go out when you resume);
+archiving the flow fails them.
+
+**Where a call may go.** On a hosted Loomail the address must be `https` and must resolve to a public address:
+`localhost`, private ranges, link-local and cloud-metadata addresses are refused, both when you save and on every call
+(the connection goes to the address that was checked). On a self-hosted install this guard is off by default, so you can
+call a service on your own network; see `LOOMAIL_RESTRICT_WEBHOOK_HOSTS` and `LOOMAIL_WEBHOOK_ALLOWED_HOSTS` in the
+[installation guide](INSTALLATION.md). Put any token your endpoint needs in the address itself (a query string), since
+a step cannot set custom headers yet.
+
+Good to know: the call is made by the worker, so the worker (not just the API) must be able to reach your address and
+must be running; the address is copied when the person reaches the step, so editing the flow later does not redirect a
+call already queued; AI-drafted flows do not have webhook steps.
+
 ## Goals: did the flow work?
 
 A **goal** says what success looks like for a flow, so Loomail can tell you how many people who entered it got there. Set it on any flow, from the *Goal* card on the flow page. It can be changed at any time, even on an active flow, with no recompile.

@@ -50,7 +50,13 @@ export const stepConditionSchema = conditionSchema;
  *   - condition: proceed-if gate (step executes only when true; skipped otherwise)
  *   - exit_condition: per-step exit trigger (if true, contact exits the flow)
  *   - next: (plan version 2 only) the order of the node to go to afterwards, or "end"
+ *   - webhook: makes this a WEBHOOK step instead of an email: after the delay (and any conditions) the engine
+ *     POSTs the contact to the URL (see worker/webhook-delivery.ts). It sends no email, so it has no template_ref,
+ *     kb_ref or brain_instruction. Everything else about a step (delay, condition, exit_condition, next) applies.
  */
+/** The longest webhook URL a step may carry. */
+export const WEBHOOK_URL_MAX_LENGTH = 2048;
+
 export const compiledStepSchema = z.object({
   order: z.number().int().min(1),
   action_type: z.string().min(1),
@@ -64,7 +70,34 @@ export const compiledStepSchema = z.object({
   condition: stepConditionSchema.optional(),
   exit_condition: stepConditionSchema.optional(),
   next: nodeTargetSchema.optional(),
+  webhook: z.object({ url: z.string().min(1).max(WEBHOOK_URL_MAX_LENGTH) }).strict().optional(),
 });
+
+/** The action_type a webhook step carries (it is not an email action, so it never reaches the drafter). */
+export const WEBHOOK_ACTION_TYPE = "webhook";
+
+/** Is this step a webhook call rather than an email? */
+export function isWebhookStep(step: { webhook?: unknown }): boolean {
+  return step.webhook !== undefined && step.webhook !== null;
+}
+
+/**
+ * Why a webhook URL cannot be used, or null when it can: it must be an http(s) address with a host, no
+ * username or password inside it (those would be stored in the plan and shown in the dashboard).
+ * Which hosts may actually be reached is decided when the call is made, not here.
+ */
+export function webhookUrlProblem(raw: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return "not a web address";
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return "must start with https://";
+  if (u.hostname === "") return "has no host";
+  if (u.username !== "" || u.password !== "") return "must not contain a username or password";
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Branch schema (plan version 2)
@@ -189,6 +222,14 @@ export const compiledPlanSchema = z
     for (const message of analyzePlanGraph(plan)) {
       ctx.addIssue({ code: "custom", message });
     }
+    plan.steps.forEach((step, i) => {
+      if (!isWebhookStep(step)) return;
+      const problem = webhookUrlProblem(step.webhook!.url);
+      if (problem) ctx.addIssue({ code: "custom", path: ["steps", i, "webhook", "url"], message: `webhook url ${problem}` });
+      if (step.template_ref !== undefined || step.kb_ref !== undefined || step.brain_instruction !== undefined) {
+        ctx.addIssue({ code: "custom", path: ["steps", i, "webhook"], message: "a webhook step sends no email, so it cannot have a template, knowledge-base reference or instruction" });
+      }
+    });
   });
 
 // ---------------------------------------------------------------------------

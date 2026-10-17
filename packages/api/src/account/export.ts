@@ -41,6 +41,7 @@ export const EXPORT_TABLES: readonly ExportTable[] = [
   { key: "flow_memberships", table: "flow_memberships" },
   { key: "flow_conversions", table: "flow_conversions" },
   { key: "flow_split_choices", table: "flow_split_choices" },
+  { key: "flow_webhook_deliveries", table: "flow_webhook_deliveries" },
   { key: "messages", table: "lifecycle_messages" },
   { key: "message_events", table: "message_events" },
   { key: "email_templates", table: "templates" },
@@ -63,6 +64,7 @@ export const EXPORT_EXCLUDED: Readonly<Record<string, string>> = {
   billing_events: "operator-side payment log, kept by the service for accounting",
   addon_auto_renewals: "holds an encrypted card authorization: a credential, not customer data",
   admin_audit_log: "operator-side record of admin actions, kept by the service",
+  webhook_secrets: "the secret webhook calls are signed with: a credential, not customer data",
   llm_usage: "operator-side AI usage metering (token counts only, no prompts or replies); erased with the workspace",
 };
 

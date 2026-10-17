@@ -2026,3 +2026,54 @@ export async function importContactRows(
   }
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// Flow webhooks
+// ---------------------------------------------------------------------------
+
+export interface WebhookDelivery {
+  id: string;
+  step_order: number;
+  url: string;
+  status: "pending" | "succeeded" | "failed";
+  attempts: number;
+  last_status_code: number | null;
+  last_error: string | null;
+  next_attempt_at: string;
+  created_at: string;
+  delivered_at: string | null;
+  contact_id: string;
+  contact_email: string | null;
+}
+
+export interface WebhookDeliveries {
+  counts: { pending: number; succeeded: number; failed: number };
+  deliveries: WebhookDelivery[];
+}
+
+/** GET /v1/flows/:id/webhook-deliveries - what the flow's webhook steps have sent, and how it went. */
+export async function fetchFlowWebhookDeliveries(flowId: string): Promise<WebhookDeliveries> {
+  const res = await apiFetch(`/v1/flows/${flowId}/webhook-deliveries`);
+  if (!res.ok) throw new Error(`Could not load webhook calls (${res.status})`);
+  return res.json() as Promise<WebhookDeliveries>;
+}
+
+export interface WebhookSecret {
+  secret: string;
+  created_at: string;
+  rotated_at: string | null;
+}
+
+/** GET /v1/webhook-secret - the signing secret (owners only; made on first read). */
+export async function fetchWebhookSecret(): Promise<WebhookSecret> {
+  const res = await apiFetch(`/v1/webhook-secret`);
+  if (!res.ok) throw new Error(res.status === 403 ? "Only a workspace owner can see the signing secret." : `Could not load the signing secret (${res.status})`);
+  return res.json() as Promise<WebhookSecret>;
+}
+
+/** POST /v1/webhook-secret/rotate - replace the signing secret. The old one stops working at once. */
+export async function rotateWebhookSecret(): Promise<WebhookSecret> {
+  const res = await apiFetch(`/v1/webhook-secret/rotate`, { method: "POST" });
+  if (!res.ok) throw new Error(res.status === 403 ? "Only a workspace owner can rotate the signing secret." : `Could not rotate the signing secret (${res.status})`);
+  return res.json() as Promise<WebhookSecret>;
+}

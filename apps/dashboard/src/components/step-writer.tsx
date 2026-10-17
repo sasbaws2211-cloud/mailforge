@@ -45,6 +45,12 @@ export interface StepData {
   body_html: string;
   body_text: string;
   window_policy: "immediate" | "respect_window";
+  /**
+   * What the step does. Absent or "email": sends the email written here. "webhook": calls `webhook_url` with the
+   * contact (no email, so subject and body stay empty and are never sent).
+   */
+  kind?: "email" | "webhook";
+  webhook_url?: string;
   /** "Send only if..." and "stop the flow instead if...": editor state, turned into API conditions on save. */
   condition?: ConditionState;
   exit_condition?: ConditionState;
@@ -167,6 +173,153 @@ function VariableChips({
         Inserts at the cursor of the field you last typed in. Use the pipe
         syntax for fallbacks: {"{{contact.first_name|there}}"}
       </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Webhook step editor
+// ---------------------------------------------------------------------------
+
+/** Why a webhook address cannot be used, or null. Mirrors the server's first check; the server has the last word. */
+export function webhookUrlIssue(raw: string): string | null {
+  const v = raw.trim();
+  if (v === "") return null; // not filled in yet: reported when saving
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return "That is not a web address. It should look like https://example.com/hooks/loomail";
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return "The address must start with https://";
+  if (u.username !== "" || u.password !== "") return "Leave the username and password out of the address.";
+  return null;
+}
+
+interface WebhookStepEditorProps {
+  step: StepData;
+  totalSteps: number;
+  onUpdate: (step: StepData) => void;
+  onRemove: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  disabled?: boolean;
+  conditionErrors: Record<string, string>;
+  eventSuggestions: string[];
+}
+
+/** A step that calls a web address instead of sending an email. */
+function WebhookStepEditor({
+  step,
+  totalSteps,
+  onUpdate,
+  onRemove,
+  onMoveUp,
+  onMoveDown,
+  disabled,
+  conditionErrors,
+  eventSuggestions,
+}: WebhookStepEditorProps) {
+  const url = step.webhook_url ?? "";
+  const issue = webhookUrlIssue(url);
+  const inUse = (step.condition?.rows.length ?? 0) > 0 || (step.exit_condition?.rows.length ?? 0) > 0;
+  return (
+    <div className="rounded-lg border border-border bg-card p-5" data-testid={`webhook-step-${step.order}`}>
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-sunken font-mono text-[12px] text-muted-foreground">
+            {step.order}
+          </span>
+          <span className="text-[14px] font-medium text-foreground">Step {step.order}</span>
+          <Badge variant="neutral">Webhook</Badge>
+        </div>
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={onMoveUp} disabled={disabled || step.order === 1} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move up">
+            <ArrowUp className="h-4 w-4" />
+          </button>
+          <button type="button" onClick={onMoveDown} disabled={disabled || step.order === totalSteps} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move down">
+            <ArrowDown className="h-4 w-4" />
+          </button>
+          <button type="button" onClick={onRemove} disabled={disabled || totalSteps <= 1} className="ml-2 rounded p-1 text-muted-foreground hover:text-danger disabled:opacity-30" title="Remove step">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-4 grid gap-4 sm:grid-cols-[12rem_1fr]">
+        <div>
+          <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor={`webhook-delay-${step.order}`}>
+            Call after
+          </label>
+          <Select id={`webhook-delay-${step.order}`} value={step.delay} onChange={(e) => onUpdate({ ...step, delay: e.target.value })} disabled={disabled}>
+            {DELAY_PRESETS.map((d) => (
+              <option key={d.value} value={d.value}>{d.label}</option>
+            ))}
+          </Select>
+        </div>
+        <div>
+          <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor={`webhook-url-${step.order}`}>
+            Web address to call
+          </label>
+          <Input
+            id={`webhook-url-${step.order}`}
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="https://example.com/hooks/loomail"
+            value={url}
+            onChange={(e) => onUpdate({ ...step, webhook_url: e.target.value })}
+            disabled={disabled}
+            aria-invalid={issue !== null}
+          />
+          {issue && <p className="mt-1 text-[13px] text-danger" role="alert">{issue}</p>}
+        </div>
+      </div>
+
+      <p className="mb-4 text-[13px] leading-relaxed text-muted-foreground">
+        Loomail sends a signed POST with the person&apos;s details (id, email, name, company, lifecycle state, payment
+        status and traits) and which flow and step it came from. Your server should answer with a 2xx. If it does not
+        answer in 10 seconds or returns an error, Loomail tries again up to 5 times over about 15 hours. Each call carries
+        a delivery id so you can ignore repeats. No email is sent for this step.
+      </p>
+
+      <details className="rounded-md border border-border bg-sunken px-3 py-2" open={inUse}>
+        <summary className="cursor-pointer text-[13px] font-medium text-foreground">
+          Conditions (optional)
+          {inUse && <span className="ml-2 font-normal text-muted-foreground">in use</span>}
+        </summary>
+        <div className="mt-3 space-y-5">
+          <div>
+            <p className="mb-2 text-[13px] font-medium text-foreground">Call the webhook only if&hellip;</p>
+            <p className="mb-2 text-[12px] text-muted-foreground">Otherwise this step is skipped and the flow moves on.</p>
+            <ConditionEditor
+              state={step.condition ?? emptyConditionState()}
+              onChange={(condition) => onUpdate({ ...step, condition })}
+              errors={conditionErrors}
+              disabled={disabled}
+              firstLabel="Only if"
+              emptyText="Always called."
+              eventSuggestions={eventSuggestions}
+              idPrefix={`step-${step.order}-send`}
+            />
+          </div>
+          <div>
+            <p className="mb-2 text-[13px] font-medium text-foreground">Stop the whole flow instead if&hellip;</p>
+            <ConditionEditor
+              state={step.exit_condition ?? emptyConditionState()}
+              onChange={(exit_condition) => onUpdate({ ...step, exit_condition })}
+              errors={conditionErrors}
+              disabled={disabled}
+              firstLabel="Stop if"
+              addLabel="Add a stop condition"
+              emptyText="The flow never stops here."
+              eventSuggestions={eventSuggestions}
+              idPrefix={`step-${step.order}-stop`}
+            />
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
@@ -576,6 +729,24 @@ export function StepWriter({
     ]);
   }
 
+  function addWebhookStep() {
+    const newOrder = steps.length + 1;
+    onStepsChange([
+      ...steps,
+      {
+        order: newOrder,
+        delay: "0m",
+        action_type: "webhook",
+        subject: "",
+        body_html: "",
+        body_text: "",
+        window_policy: "immediate",
+        kind: "webhook",
+        webhook_url: "",
+      },
+    ]);
+  }
+
   function removeStep(order: number) {
     const filtered = steps.filter((s) => s.order !== order);
     // Re-number
@@ -607,7 +778,21 @@ export function StepWriter({
         </div>
       )}
 
-      {steps.map((step) => (
+      {steps.map((step) =>
+        step.kind === "webhook" ? (
+          <WebhookStepEditor
+            key={step.order}
+            step={step}
+            totalSteps={steps.length}
+            onUpdate={(updated) => updateStep(step.order, updated)}
+            onRemove={() => removeStep(step.order)}
+            onMoveUp={() => moveStep(step.order, "up")}
+            onMoveDown={() => moveStep(step.order, "down")}
+            disabled={disabled}
+            conditionErrors={conditionErrors}
+            eventSuggestions={eventSuggestions}
+          />
+        ) : (
         <StepEditor
           key={step.order}
           step={step}
@@ -622,17 +807,17 @@ export function StepWriter({
           conditionErrors={conditionErrors}
           eventSuggestions={eventSuggestions}
         />
-      ))}
+        ),
+      )}
 
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={addStep}
-        disabled={disabled || !canAdd}
-      >
-        {addLabel}
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={addStep} disabled={disabled || !canAdd}>
+          {addLabel}
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={addWebhookStep} disabled={disabled || !canAdd}>
+          Add webhook
+        </Button>
+      </div>
       {!canAdd && (
         <p className="text-[13px] text-muted-foreground">A flow can have at most 30 emails and splits in total.</p>
       )}
@@ -650,9 +835,11 @@ export interface PlanBody {
     delay: string;
     action_type: string;
     window_policy: string;
-    subject: string;
-    body_html: string;
+    /** Email steps. A webhook step has `webhook` instead. */
+    subject?: string;
+    body_html?: string;
     body_text?: string;
+    webhook?: { url: string };
     condition?: ApiFlowCondition;
     exit_condition?: ApiFlowCondition;
     /** Branching plans only: the order of the node that comes after this email, or "end". */
@@ -695,6 +882,18 @@ export function planStepFor(
 ): PlanBody["steps"][number] {
   const condition = convert(s.condition);
   const exit_condition = convert(s.exit_condition);
+  if (s.kind === "webhook") {
+    return {
+      order,
+      delay: s.delay,
+      action_type: "webhook",
+      window_policy: "immediate",
+      webhook: { url: (s.webhook_url ?? "").trim() },
+      ...(condition ? { condition } : {}),
+      ...(exit_condition ? { exit_condition } : {}),
+      ...(next !== undefined ? { next } : {}),
+    };
+  }
   return {
     order,
     delay: s.delay,

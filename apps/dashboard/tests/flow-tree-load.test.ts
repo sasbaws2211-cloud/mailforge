@@ -37,19 +37,31 @@ const fork = (yes: SequenceData, no: SequenceData, over: Partial<ForkData> = {})
   ...over,
 });
 const tree = (steps: StepData[], f: ForkData | null = null): SequenceData => ({ steps, fork: f });
+const hook = (over: Partial<StepData> = {}): StepData => ({
+  order: ++seq,
+  delay: "0m",
+  action_type: "webhook",
+  subject: "",
+  body_html: "",
+  body_text: "",
+  window_policy: "immediate",
+  kind: "webhook",
+  webhook_url: "https://hooks.example.com/loomail?token=abc",
+  ...over,
+});
 
 /** What the API stores for a body, plus the templates it writes. */
 function store(body: ReturnType<typeof buildPlanFromTree>["body"], flowId = "f1") {
   const templates = new Map<string, TemplateCopy>();
   const steps = body.steps.map((s) => {
     const slug = `flow-${flowId}-step-${s.order}`;
-    templates.set(slug, { subject: s.subject, body_html: s.body_html, body_text: s.body_text ?? null });
+    if (!s.webhook) templates.set(slug, { subject: s.subject!, body_html: s.body_html!, body_text: s.body_text ?? null });
     return {
       order: s.order,
       action_type: s.action_type,
       delay: s.delay,
       window_policy: s.window_policy,
-      template_ref: slug,
+      ...(s.webhook ? { webhook: s.webhook } : { template_ref: slug }),
       ...(s.condition ? { condition: s.condition } : {}),
       ...(s.exit_condition ? { exit_condition: s.exit_condition } : {}),
       ...(s.next !== undefined ? { next: s.next } : {}),
@@ -121,6 +133,35 @@ describe("treeFromPlan round trips", () => {
     roundTrip(tree([email()], fork(tree([email()], ab), tree([email()]))), paid());
   });
 
+  it("a webhook step: straight line, with its delay and conditions", () => {
+    const loaded = roundTrip(tree([email(), hook({ delay: "1d", condition: paid(), exit_condition: paid() }), email()]));
+    expect(loaded.tree.steps[1]).toMatchObject({ kind: "webhook", webhook_url: "https://hooks.example.com/loomail?token=abc", delay: "1d" });
+    expect(loaded.tree.steps[1]!.condition?.rows).toHaveLength(1);
+  });
+
+  it("a plan that is only a webhook", () => {
+    roundTrip(tree([hook()]));
+  });
+
+  it("webhooks inside splits, on either path", () => {
+    roundTrip(tree([email()], fork(tree([hook(), email()]), tree([hook({ webhook_url: "https://b.example.com/x" })]))));
+    const ab = tree([], fork(tree([hook()]), emptySequence(), { kind: "split", percent_a: 20, delay: "0m" }));
+    const loaded = roundTrip(ab);
+    expect(loaded.tree.fork?.yes.steps[0]!.kind).toBe("webhook");
+  });
+
+  it("the plan for a webhook step has the url and no copy, and passes the server schema", () => {
+    const { body } = buildPlanFromTree(tree([email(), hook()]));
+    expect(body.steps[1]).toEqual({ order: 2, delay: "0m", action_type: "webhook", window_policy: "immediate", webhook: { url: "https://hooks.example.com/loomail?token=abc" } });
+    const split = buildPlanFromTree(tree([email()], fork(tree([hook()]), tree([email()]))));
+    store(split.body); // asserts compiledPlanSchema accepts it
+  });
+
+  it("trims the address it sends", () => {
+    const { body } = buildPlanFromTree(tree([hook({ webhook_url: "  https://hooks.example.com/x  " })]));
+    expect(body.steps[0]!.webhook).toEqual({ url: "https://hooks.example.com/x" });
+  });
+
   it("restores subject and body from the templates, not the plan", () => {
     const original = tree([email({ subject: "Hello {{contact.first_name|there}}", body_html: "<p>Hi</p>", body_text: "Hi" })]);
     const loaded = roundTrip(original);
@@ -153,6 +194,14 @@ describe("treeFromPlan refuses what the editor cannot draw", () => {
     const { plan, templates } = store(buildPlanFromTree(tree([email(), email()])).body);
     const looping = { ...plan, version: 2 as const, steps: plan.steps.map((s) => (s.order === 2 ? { ...s, next: 1 } : s)) };
     expect(treeFromPlan(looping, templates).ok).toBe(false);
+  });
+
+  it("a webhook step with copy mixed in (not something the editor can draw)", () => {
+    const { plan, templates } = store(buildPlanFromTree(tree([email(), hook()])).body);
+    const odd = { ...plan, steps: plan.steps.map((s) => (s.order === 2 ? { ...s, template_ref: "x" } : s)) };
+    expect(treeFromPlan(odd, templates).ok).toBe(false);
+    const noUrl = { ...plan, steps: plan.steps.map((s) => (s.order === 2 ? { ...s, webhook: {} } : s)) };
+    expect(treeFromPlan(noUrl, templates).ok).toBe(false);
   });
 
   it("a missing template", () => {

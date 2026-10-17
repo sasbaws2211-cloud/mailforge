@@ -27,3 +27,4 @@ export { managedSending, managedDomainCleanup } from "./managed-sending.js";
 export { flowConversions } from "./flow-conversions.js";
 export { flowSplitChoices } from "./flow-split-choices.js";
 export { anonymousEvents, anonymousAliases } from "./anonymous.js";
+export { flowWebhookDeliveries, webhookSecrets } from "./webhooks.js";

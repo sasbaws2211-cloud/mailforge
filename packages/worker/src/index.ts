@@ -23,7 +23,7 @@
 import { PgBoss, fromDrizzle } from "pg-boss";
 import type { Job } from "pg-boss";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { QUEUE, resolveThrottleConfig, type ScanJobData, type CompileJobData, type TriggerCheckJobData, type DrainJobData, type ReapJobData, type CounterRolloverJobData, type PartitionMaintenanceJobData, type ContentGenerationJobData, type KbEmbedJobData, type AdvanceMembershipJobData, type ProcessMessageJobData, type DrainMessageJobData, type GridSnapshotJobData } from "@loomail/core";
+import { QUEUE, resolveThrottleConfig, type WebhookDeliveryJobData, type ScanJobData, type CompileJobData, type TriggerCheckJobData, type DrainJobData, type ReapJobData, type CounterRolloverJobData, type PartitionMaintenanceJobData, type ContentGenerationJobData, type KbEmbedJobData, type AdvanceMembershipJobData, type ProcessMessageJobData, type DrainMessageJobData, type GridSnapshotJobData } from "@loomail/core";
 import { handleCompileJob } from "./compile.js";
 import { handleKbEmbedJob } from "./embed-kb.js";
 import { phaseTimeTransitions } from "./scan-time-transitions.js";
@@ -36,6 +36,7 @@ import { handleTriggerCheck } from "./trigger-check.js";
 import { processDrainTick, fetchDrainBatchSimple, type FetchDrainBatch } from "./drain.js";
 import { processReapTick } from "./reap.js";
 import { sweepAnonymous } from "./anonymous-retention.js";
+import { processWebhookDeliveries, sweepWebhookDeliveries } from "./webhook-delivery.js";
 import { processCounterRollover } from "./counter-rollover.js";
 import { processPartitionMaintenance } from "./partition-maintenance.js";
 import { processContentTick } from "./content.js";
@@ -180,6 +181,7 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
   await boss.createQueue(QUEUE.PROCESS_MESSAGE);
   await boss.createQueue(QUEUE.DRAIN_MESSAGE);
   await boss.createQueue(QUEUE.GRID_SNAPSHOT);
+  await boss.createQueue(QUEUE.WEBHOOK_DELIVERY);
 
   await boss.work<ScanJobData>(
     QUEUE.SCAN,
@@ -369,6 +371,14 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
         console.error("[purge] tick failed:", err);
       }
 
+      // Finished webhook deliveries past their retention.
+      try {
+        const swept = await sweepWebhookDeliveries(db, now);
+        if (swept > 0) console.log(`[webhook] swept ${swept} old deliveries`);
+      } catch (err) {
+        console.error("[webhook] sweep failed:", err);
+      }
+
       // And the anonymous-visitor sweep: events nobody ever claimed, and old anonymous-id links.
       try {
         const swept = await sweepAnonymous(db as never, now);
@@ -549,6 +559,22 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
   );
 
   const resolveTransport = buildTenantTransportResolver(db);
+
+  await boss.work<WebhookDeliveryJobData>(
+    QUEUE.WEBHOOK_DELIVERY,
+    { pollingIntervalSeconds: 5 },
+    async (jobs: Job<WebhookDeliveryJobData>[]) => {
+      // Every minute: make the calls that flows' webhook steps queued, and retry the failed ones.
+      const result = await processWebhookDeliveries(db, new Date());
+      if (result.claimed > 0) {
+        console.log(
+          `[webhook] tick: ${result.claimed} due, ${result.succeeded} delivered, ${result.retrying} to retry, ` +
+            `${result.failed} failed, ${result.held} held for paused flows`,
+        );
+      }
+      void jobs;
+    },
+  );
 
   await boss.work<GridSnapshotJobData>(
     QUEUE.GRID_SNAPSHOT,

@@ -175,6 +175,16 @@ export const QUEUE = {
    * Idempotent: re-running on the same day overwrites that day's rows.
    */
   GRID_SNAPSHOT: "loomail.grid-snapshot",
+
+  /**
+   * Make the calls that flows' webhook steps queued.
+   * Payload: empty - the handler claims due rows from flow_webhook_deliveries.
+   * Handler: packages/worker (webhook-delivery.ts).
+   * Schedule: packages/scheduler, cron every minute.
+   *
+   * Safe to run on several workers at once: rows are claimed with FOR UPDATE SKIP LOCKED.
+   */
+  WEBHOOK_DELIVERY: "loomail.webhook-delivery",
 } as const;
 
 export type QueueName = (typeof QUEUE)[keyof typeof QUEUE];
@@ -289,3 +299,6 @@ export interface DrainMessageJobData {
  * retention-grid cell populations for the current UTC day.
  */
 export type GridSnapshotJobData = Record<string, never>;
+
+/** WEBHOOK_DELIVERY job: no payload. The worker takes whatever deliveries are due. */
+export type WebhookDeliveryJobData = Record<string, never>;

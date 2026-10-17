@@ -23,13 +23,14 @@
  */
 import { eq, and, gte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { contacts, events, flows, flowMemberships, flowConversions, flowSplitChoices, lifecycleMessages } from "@loomail/db/schema";
+import { contacts, events, flows, flowMemberships, flowConversions, flowSplitChoices, flowWebhookDeliveries, lifecycleMessages } from "@loomail/db/schema";
 import {
   parseDelay,
   delayToMs,
   stepTarget,
   readFlowGoal,
   splitVersion,
+  isWebhookStep,
   type FlowGoal,
   type CompiledBranch,
   type CompiledStep,
@@ -100,12 +101,41 @@ type AdvanceOutcomeKind =
    * an earlier crashed attempt). `completed` is true on the last step. `applied` is false when another
    * worker advanced the membership first.
    */
-  | { kind: "step_done"; messageId: string | null; completed: boolean; applied: boolean }
+  | { kind: "step_done"; messageId: string | null; completed: boolean; applied: boolean; deliveryId?: string | null }
   /**
    * Version 2 only: one or more branches were taken and nothing was sent in this call (the next node is not
    * due yet, or the flow ended). `completed` is true when a branch sent the contact to the end.
    */
   | { kind: "branch_taken"; completed: boolean; applied: boolean };
+
+/**
+ * A webhook step: queue the call (one row per membership per step; a retry after a crash finds the row and does
+ * nothing) and let the delivery job make it. Returns the new delivery's id, or null when it already existed.
+ * The URL is copied now, so editing the flow later never redirects a call already queued.
+ */
+async function queueWebhook(
+  db: Db,
+  tenantId: string,
+  membership: { id: string; contactId: string; flowId: string },
+  stepOrder: number,
+  step: CompiledStep,
+  now: Date,
+): Promise<string | null> {
+  const inserted = await db
+    .insert(flowWebhookDeliveries)
+    .values({
+      tenantId,
+      flowId: membership.flowId,
+      membershipId: membership.id,
+      contactId: membership.contactId,
+      stepOrder,
+      url: step.webhook!.url,
+      nextAttemptAt: now,
+    })
+    .onConflictDoNothing()
+    .returning({ id: flowWebhookDeliveries.id });
+  return inserted.length > 0 ? inserted[0]!.id : null;
+}
 
 /** Steps of a compiled plan, read leniently (conditions are checked later, so a bad one can be reported). */
 export function extractSteps(compiledPlan: unknown): CompiledStep[] | null {
@@ -454,6 +484,27 @@ export async function advanceMembership(
     }
   }
 
+  // A webhook step queues its call instead of a message, then moves on like any other step.
+  if (isWebhookStep(currentStepDef)) {
+    const deliveryId = await queueWebhook(db, tenantId, membership, membership.currentStep, currentStepDef, now);
+    const movedOn = await db
+      .update(flowMemberships)
+      .set(
+        isLastStep
+          ? { status: "completed", completedAt: now, exitReason: "completed", currentStep: membership.currentStep, ...clearError }
+          : { currentStep: membership.currentStep + 1, ...clearError },
+      )
+      .where(
+        and(
+          eq(flowMemberships.id, membership.id),
+          eq(flowMemberships.status, "active"),
+          eq(flowMemberships.currentStep, membership.currentStep),
+        ),
+      )
+      .returning({ id: flowMemberships.id });
+    return { kind: "step_done", messageId: null, completed: isLastStep, applied: movedOn.length > 0, deliveryId };
+  }
+
   // Everything passed: create the message. ON CONFLICT DO NOTHING makes a retry after a crash safe.
   const inserted = await db
     .insert(lifecycleMessages)
@@ -669,6 +720,12 @@ async function advanceBranching(c: BranchingContext): Promise<AdvanceOutcome> {
         await moveTo(target);
         return done({ kind: "step_skipped_by_condition", completed: target === "end" });
       }
+    }
+
+    if (isWebhookStep(step)) {
+      const deliveryId = await queueWebhook(db, tenantId, c.membership, at, step, now);
+      const applied = await moveTo(target);
+      return done({ kind: "step_done", messageId: null, completed: target === "end", applied, deliveryId });
     }
 
     const inserted = await db

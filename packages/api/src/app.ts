@@ -56,6 +56,7 @@ import type { PlatformTransport } from "./platform-mailer.js";
 import billingPublicRoutes from "./routes/billing-public.js";
 import { resolveBillingRuntime, type BillingRuntime } from "./billing/config.js";
 import ingestionRoutes from "./routes/ingestion.js";
+import webhookSecretRoutes from "./routes/webhook-secret.js";
 import resendWebhookRoute from "./routes/webhooks/resend.js";
 import resendPlatformWebhookRoute from "./routes/webhooks/resend-platform.js";
 import sendingRoutes from "./routes/sending.js";
@@ -428,6 +429,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       // Integrate screen (dashboard operators only)
       if (opts.db) {
         await v1.register(ingestionRoutes, { prefix: "/ingestion" });
+      }
+
+      // webhook-secret: the secret flow webhooks are signed with (owners only)
+      if (opts.db) {
+        await v1.register(webhookSecretRoutes, { prefix: "/webhook-secret" });
       }
 
       // library: install pre-built flows and templates (no LLM required)
