@@ -1,0 +1,88 @@
+name: Release PHP SDK
+
+# Push a tag like php-v0.1.1 and this tests the SDK, then publishes it to the mirror repo that Packagist reads.
+# One-time setup and the release steps are in packages/sdk-php/RELEASING.md.
+on:
+  push:
+    tags: ["php-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-php
+  cancel-in-progress: false
+
+env:
+  # The read-only mirror. Packagist tracks this repository.
+  MIRROR_URL: git@github.com:sasbaws2211-cloud/loomail-php.git
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ["8.1", "8.3"]
+    defaults:
+      run:
+        working-directory: packages/sdk-php
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json
+      - run: composer validate --no-check-lock
+      - run: composer install --no-interaction --no-progress
+      - run: vendor/bin/phpunit
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the split needs the whole history
+
+      - name: The tag must be on main
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "Tag ${GITHUB_REF_NAME} is not on main. Release from a commit that has been merged." >&2
+            exit 1
+          fi
+
+      - name: Let git push to the mirror
+        env:
+          DEPLOY_KEY: ${{ secrets.LOOMAIL_PHP_DEPLOY_KEY }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "The LOOMAIL_PHP_DEPLOY_KEY secret is not set. See packages/sdk-php/RELEASING.md." >&2
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/loomail_php_deploy
+          chmod 600 ~/.ssh/loomail_php_deploy
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          echo "GIT_SSH_COMMAND=ssh -i $HOME/.ssh/loomail_php_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes" >> "$GITHUB_ENV"
+          git config --global user.name "loomail release bot"
+          git config --global user.email "admin@loomail.site"
+
+      - name: Publish to the mirror
+        env:
+          TAG: ${{ github.ref_name }}
+        run: bash .github/scripts/release-php.sh
+
+      - name: Tell Packagist (only if its secrets are set)
+        env:
+          PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
+          PACKAGIST_API_TOKEN: ${{ secrets.PACKAGIST_API_TOKEN }}
+        run: |
+          # Packagist normally updates itself from the mirror's GitHub webhook. This is a backup for when it does not.
+          if [ -z "$PACKAGIST_USERNAME" ] || [ -z "$PACKAGIST_API_TOKEN" ]; then
+            echo "No Packagist API secrets: relying on the mirror's webhook."
+            exit 0
+          fi
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+            "https://packagist.org/api/update-package?username=${PACKAGIST_USERNAME}&apiToken=${PACKAGIST_API_TOKEN}" \
+            -d '{"repository":{"url":"https://github.com/sasbaws2211-cloud/loomail-php"}}'
