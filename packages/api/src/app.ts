@@ -129,6 +129,8 @@ export interface BuildAppOptions {
   enqueue?: (queue: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<string | null>;
   /** Tests only: replaces the real Postgres / Snowflake / BigQuery clients behind warehouse sources. */
   warehouseClientFor?: WarehouseClientFactory;
+  /** Tests only: raise the rate limits on the warehouse "test query" and "sync now" routes. */
+  warehouseLimitsPerMinute?: { test?: number; sync?: number };
   /**
    * When true, register @fastify/static to serve the dashboard SPA from dist/
    * and add a SPA catch-all fallback for unknown paths.
@@ -444,7 +446,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (opts.db) {
         await v1.register(inboundSourcesRoutes, { prefix: "/inbound-sources" });
         // warehouse-sources: Loomail reads rows from the customer's Postgres, Snowflake or BigQuery on a schedule
-        await v1.register(warehouseSourcesRoutes, { prefix: "/warehouse-sources", ...(opts.warehouseClientFor ? { clientFor: opts.warehouseClientFor } : {}) });
+        await v1.register(warehouseSourcesRoutes, { prefix: "/warehouse-sources", ...(opts.warehouseClientFor ? { clientFor: opts.warehouseClientFor } : {}), ...(opts.warehouseLimitsPerMinute ? { limitsPerMinute: opts.warehouseLimitsPerMinute } : {}) });
       }
 
       // webhook-secret: the secret flow webhooks are signed with (owners only)

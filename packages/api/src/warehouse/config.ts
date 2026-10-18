@@ -51,6 +51,22 @@ const postgres = z.object({
   database: z.string().trim().min(1).max(63),
   user: z.string().trim().min(1).max(63),
   ssl_mode: z.enum(["verify", "no-verify", "disable"]).default("verify"),
+  /**
+   * Reach the database through an SSH server (a bastion). `host` and `port` are then the database's address as the SSH
+   * server sees it. The SSH key goes in the credential (ssh_private_key). The server's host key must be pinned.
+   */
+  ssh_tunnel: z
+    .object({
+      host: z.string().trim().min(1).max(253),
+      port: z.number().int().min(1).max(65535).default(22),
+      user: z.string().trim().min(1).max(64),
+      host_fingerprint: z
+        .string()
+        .trim()
+        .regex(/^SHA256:[A-Za-z0-9+/]{43}=?$/, "The SSH server's host key fingerprint, as ssh-keygen -lf prints it: SHA256: followed by 43 characters."),
+    })
+    .strict()
+    .optional(),
   /** The CA that signed the server's certificate, when it is not a public one (Amazon RDS, Supabase, a private CA). */
   ssl_ca: z
     .string()
@@ -96,7 +112,14 @@ export type WarehouseConfig = z.infer<typeof warehouseConfigSchema>;
 
 /** The credential each warehouse needs, as the dashboard sends it. */
 export const warehouseSecretSchema = {
-  postgres: z.object({ password: z.string().min(1).max(500) }).strict(),
+  postgres: z
+    .object({
+      password: z.string().min(1).max(500),
+      /** The private key for the SSH tunnel, when the settings use one. */
+      ssh_private_key: z.string().trim().min(100).max(10_000).refine((k) => /PRIVATE KEY/.test(k), "Paste the whole SSH private key, including the BEGIN and END lines.").optional(),
+      ssh_passphrase: z.string().max(500).optional(),
+    })
+    .strict(),
   snowflake: z
     .object({
       private_key: z.string().trim().min(100).max(10_000).refine((k) => /PRIVATE KEY/.test(k), "Paste the whole private key, including the BEGIN and END lines."),
@@ -118,13 +141,16 @@ export const warehouseSecretSchema = {
     }),
 } as const;
 
-export type WarehouseSecret = { password: string } | { private_key: string; passphrase?: string } | { client_email: string; private_key: string };
+/** What may be changed without repeating the rest of the credential: Postgres fields are merged over the saved ones. */
+export const postgresSecretPatchSchema = warehouseSecretSchema.postgres.partial();
+
+export type WarehouseSecret = { password: string; ssh_private_key?: string; ssh_passphrase?: string } | { private_key: string; passphrase?: string } | { client_email: string; private_key: string };
 
 /** Turn stored settings and credential into what the adapters take. */
 export function toConnection(config: WarehouseConfig, secret: WarehouseSecret): WarehouseConnection {
   switch (config.warehouse) {
     case "postgres":
-      return { kind: "postgres", config: { host: config.host, port: config.port, database: config.database, user: config.user, ssl_mode: config.ssl_mode, ...(config.ssl_ca ? { ssl_ca: config.ssl_ca } : {}) }, secret: secret as { password: string } };
+      return { kind: "postgres", config: { host: config.host, port: config.port, database: config.database, user: config.user, ssl_mode: config.ssl_mode, ...(config.ssl_ca ? { ssl_ca: config.ssl_ca } : {}), ...(config.ssh_tunnel ? { ssh: config.ssh_tunnel } : {}) }, secret: secret as { password: string; ssh_private_key?: string; ssh_passphrase?: string } };
     case "snowflake":
       return {
         kind: "snowflake",

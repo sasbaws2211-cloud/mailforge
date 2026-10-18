@@ -129,7 +129,7 @@ beforeAll(async () => {
   const a = await make(SLUGS[0]!);
   const b = await make(SLUGS[1]!);
   [tenantA, cookieA, tenantB, cookieB] = [a.id, a.cookie, b.id, b.cookie];
-  app = await buildApp({ db, logger: false, warehouseClientFor: (c) => fakeFactory(c) });
+  app = await buildApp({ db, logger: false, warehouseClientFor: (c) => fakeFactory(c), warehouseLimitsPerMinute: { test: 1000, sync: 1000 } });
   await app.ready();
   realApp = await buildApp({ db, logger: false });
   await realApp.ready();
@@ -265,7 +265,8 @@ describe("managing warehouse sources", () => {
     const before = (await sourceRow(id)).secret_sealed;
     expect((await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { secret: { password: "new-pw-1" } })).status).toBe(200);
     expect((await sourceRow(id)).secret_sealed).not.toBe(before);
-    expect((await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { secret: {} })).status).toBe(400);
+    expect((await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { secret: { password: "" } })).status).toBe(400);
+    expect((await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { secret: {} })).status).toBe(200); // nothing to change
 
     await db.execute(sql`UPDATE inbound_sources SET sync_cursor = 'y' WHERE id = ${id}`);
     await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { reset_cursor: true });
@@ -308,6 +309,137 @@ describe("managing warehouse sources", () => {
     // a webhook source does not count against the warehouse limit and vice versa
     expect((await api("GET", "/v1/warehouse-sources", cookieA)).body.sources).toHaveLength(1);
     await db.execute(sql`DELETE FROM inbound_sources WHERE id = ${hook.body.source.id}`);
+  });
+});
+
+const SSH_FP = "SHA256:" + "B".repeat(43);
+const SSH_KEY = ["-----BEGIN OPENSSH PRIVATE KEY-----", "Q".repeat(160), "-----END OPENSSH PRIVATE KEY-----"].join("\n");
+const TUNNEL_CONFIG = { ...CONFIG, host: "db.corp.internal", ssh_tunnel: { host: "bastion.example.com", user: "tunnel", host_fingerprint: SSH_FP } };
+const TUNNEL_SECRET = { password: "s3cret-pw", ssh_private_key: SSH_KEY, ssh_passphrase: "key phrase" };
+
+async function newTunnelSource(config: Record<string, unknown> = TUNNEL_CONFIG, secret: Record<string, unknown> = TUNNEL_SECRET) {
+  const res = await api("POST", "/v1/warehouse-sources", cookieA, { name: "Private DB", config, secret });
+  expect(res.status, JSON.stringify(res.body)).toBe(201);
+  return res.body.source.id as string;
+}
+
+describe("a database reached through an SSH tunnel", () => {
+  run("needs its private key, and its pinned host key", async () => {
+    const noKey = await api("POST", "/v1/warehouse-sources", cookieA, { name: "x", config: TUNNEL_CONFIG, secret: SECRET });
+    expect(noKey.status).toBe(400);
+    expect(noKey.body.issues[0]).toMatchObject({ path: "secret.ssh_private_key" });
+    const badFp = await api("POST", "/v1/warehouse-sources", cookieA, { name: "x", config: { ...TUNNEL_CONFIG, ssh_tunnel: { ...TUNNEL_CONFIG.ssh_tunnel, host_fingerprint: "SHA256:nope" } }, secret: TUNNEL_SECRET });
+    expect(badFp.status).toBe(400);
+    expect(badFp.body.issues.map((i: any) => i.path)).toContain("config.ssh_tunnel.host_fingerprint");
+    const noFp = await api("POST", "/v1/warehouse-sources", cookieA, { name: "x", config: { ...TUNNEL_CONFIG, ssh_tunnel: { host: "b.example.com", user: "u" } }, secret: TUNNEL_SECRET });
+    expect(noFp.status).toBe(400);
+    expect((await api("GET", "/v1/warehouse-sources", cookieA)).body.sources).toHaveLength(0);
+  });
+
+  run("stores the key sealed and never returns it, the passphrase or the password", async () => {
+    const id = await newTunnelSource();
+    const list = await api("GET", "/v1/warehouse-sources", cookieA);
+    const text = JSON.stringify(list.body);
+    for (const secret of ["s3cret-pw", "key phrase", "QQQQQQQQ", "PRIVATE KEY"]) expect(text, secret).not.toContain(secret);
+    expect(list.body.sources[0].config.ssh_tunnel).toEqual({ host: "bastion.example.com", port: 22, user: "tunnel", host_fingerprint: SSH_FP });
+    const raw = await sourceRow(id);
+    expect(raw.secret_sealed).not.toContain("QQQQQQQQ");
+    expect(raw.secret_sealed).not.toContain("key phrase");
+  });
+
+  run("a sync and a test hand the tunnel and the key to the connector", async () => {
+    const id = await newTunnelSource();
+    table = makeRows(2);
+    await syncSource(db, id, deps());
+    expect(connections[0]).toMatchObject({
+      kind: "postgres",
+      config: { host: "db.corp.internal", ssh: { host: "bastion.example.com", port: 22, user: "tunnel", host_fingerprint: SSH_FP } },
+      secret: { password: "s3cret-pw", ssh_private_key: SSH_KEY, ssh_passphrase: "key phrase" },
+    });
+    connections = [];
+    const test = await api("POST", "/v1/warehouse-sources/test", cookieA, { id });
+    expect(test.body.ok).toBe(true);
+    expect(connections[0]).toMatchObject({ config: { ssh: { user: "tunnel" } }, secret: { ssh_private_key: SSH_KEY } });
+  });
+
+  run("the private-address guard applies to the SSH server, and the database behind it may be private", async () => {
+    const prev = process.env.LOOMAIL_RESTRICT_WAREHOUSE_HOSTS;
+    process.env.LOOMAIL_RESTRICT_WAREHOUSE_HOSTS = "true";
+    try {
+      for (const host of ["127.0.0.1", "169.254.169.254", "10.0.0.5", "localhost"]) {
+        const r = await api("POST", "/v1/warehouse-sources", cookieA, { name: "x", config: { ...TUNNEL_CONFIG, ssh_tunnel: { ...TUNNEL_CONFIG.ssh_tunnel, host } }, secret: TUNNEL_SECRET });
+        expect(r.status, host).toBe(400);
+        expect(r.body.issues[0].path).toBe("config.ssh_tunnel.host");
+      }
+      // a private database address is fine when it is reached through the SSH server (which resolves it)...
+      const publicBastion = { ...TUNNEL_CONFIG.ssh_tunnel, host: "93.184.216.34" }; // an address literal, so no DNS is needed
+      const ok = await api("POST", "/v1/warehouse-sources", cookieA, { name: "x", config: { ...TUNNEL_CONFIG, host: "10.0.0.5", ssh_tunnel: publicBastion }, secret: TUNNEL_SECRET });
+      expect(ok.status, JSON.stringify(ok.body)).toBe(201);
+      // ...and still refused when there is no tunnel
+      const direct = await api("POST", "/v1/warehouse-sources", cookieA, { name: "y", config: { ...CONFIG, host: "10.0.0.5" }, secret: SECRET });
+      expect(direct.status).toBe(400);
+      expect(direct.body.issues[0].path).toBe("config.host");
+      // the test route applies the same rule
+      const test = await api("POST", "/v1/warehouse-sources/test", cookieA, { config: { ...TUNNEL_CONFIG, ssh_tunnel: { ...TUNNEL_CONFIG.ssh_tunnel, host: "169.254.169.254" } }, secret: TUNNEL_SECRET });
+      expect(test.status).toBe(400);
+    } finally {
+      if (prev === undefined) delete process.env.LOOMAIL_RESTRICT_WAREHOUSE_HOSTS;
+      else process.env.LOOMAIL_RESTRICT_WAREHOUSE_HOSTS = prev;
+    }
+  });
+
+  run("editing the password keeps the SSH key, and editing the key keeps the password", async () => {
+    const id = await newTunnelSource();
+    expect((await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { secret: { password: "new-pw" } })).status).toBe(200);
+    table = makeRows(1);
+    await syncSource(db, id, deps());
+    expect(connections.at(-1)!.secret).toMatchObject({ password: "new-pw", ssh_private_key: SSH_KEY, ssh_passphrase: "key phrase" });
+    const key2 = SSH_KEY.replace(/Q/g, "R");
+    expect((await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { secret: { ssh_private_key: key2, ssh_passphrase: "other" } })).status).toBe(200);
+    await syncSource(db, id, deps(), true);
+    expect(connections.at(-1)!.secret).toMatchObject({ password: "new-pw", ssh_private_key: key2, ssh_passphrase: "other" });
+    // a bad value is refused and nothing changes
+    expect((await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { secret: { ssh_private_key: "garbage" } })).status).toBe(400);
+  });
+
+  run("turning the tunnel off drops the key; turning it on needs one", async () => {
+    const id = await newTunnelSource();
+    const off = await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { config: { ...CONFIG, host: "warehouse.example.com" } });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    expect(off.body.source.config.ssh_tunnel).toBeUndefined();
+    table = makeRows(1);
+    await syncSource(db, id, deps(), true);
+    expect(connections.at(-1)!.secret).toEqual({ password: "s3cret-pw" }); // no key left behind
+    // on again with no key to hand: refused
+    const on = await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { config: TUNNEL_CONFIG });
+    expect(on.status).toBe(400);
+    expect(on.body.issues[0].path).toBe("secret.ssh_private_key");
+    // on again with a key: fine
+    expect((await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { config: TUNNEL_CONFIG, secret: { ssh_private_key: SSH_KEY } })).status).toBe(200);
+    await syncSource(db, id, deps(), true);
+    expect(connections.at(-1)!.secret).toMatchObject({ password: "s3cret-pw", ssh_private_key: SSH_KEY });
+  });
+
+  run("changing only the tunnel's address keeps the saved key", async () => {
+    const id = await newTunnelSource();
+    const moved = { ...TUNNEL_CONFIG, ssh_tunnel: { ...TUNNEL_CONFIG.ssh_tunnel, host: "bastion2.example.com", port: 2222 } };
+    expect((await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { config: moved })).status).toBe(200);
+    table = makeRows(1);
+    await syncSource(db, id, deps(), true);
+    expect(connections.at(-1)).toMatchObject({ config: { ssh: { host: "bastion2.example.com", port: 2222 } }, secret: { ssh_private_key: SSH_KEY } });
+  });
+
+  run("testing edited settings uses the saved key unless a new one is given", async () => {
+    const id = await newTunnelSource();
+    table = makeRows(1);
+    const moved = { ...TUNNEL_CONFIG, ssh_tunnel: { ...TUNNEL_CONFIG.ssh_tunnel, user: "other" } };
+    const r = await api("POST", "/v1/warehouse-sources/test", cookieA, { id, config: moved });
+    expect(r.body.ok).toBe(true);
+    expect(connections.at(-1)).toMatchObject({ config: { ssh: { user: "other" } }, secret: { ssh_private_key: SSH_KEY, password: "s3cret-pw" } });
+    // a brand-new test (nothing saved) with a tunnel and no key is refused
+    const bare = await api("POST", "/v1/warehouse-sources/test", cookieA, { config: TUNNEL_CONFIG, secret: SECRET });
+    expect(bare.status).toBe(400);
+    expect(bare.body.issues[0].path).toBe("secret.ssh_private_key");
   });
 });
 

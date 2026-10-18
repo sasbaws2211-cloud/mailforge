@@ -2,6 +2,7 @@
 import { describe, it, expect } from "vitest";
 import {
   EXAMPLE_QUERY,
+  SSH_FINGERPRINT,
   buildWarehouseConfig,
   buildWarehouseSecret,
   describeInterval,
@@ -108,6 +109,63 @@ describe("buildWarehouseSecret", () => {
     expect(buildWarehouseSecret({ ...bq, serviceAccountJson: JSON.stringify({ client_email: "a@b" }) }, false).ok).toBe(false);
     const file = JSON.stringify({ client_email: "a@b.iam.gserviceaccount.com", private_key: "-----BEGIN PRIVATE KEY-----" });
     expect(buildWarehouseSecret({ ...bq, serviceAccountJson: file }, false)).toEqual({ ok: true, value: { service_account_json: file } });
+  });
+});
+
+const FP = "SHA256:" + "A".repeat(43);
+const KEY = ["-----BEGIN OPENSSH PRIVATE KEY-----", "Q".repeat(120), "-----END OPENSSH PRIVATE KEY-----"].join("\n");
+const tunnelForm = (over: Partial<WarehouseForm> = {}): WarehouseForm => pg({ sshEnabled: true, sshHost: "bastion.example.com", sshUser: "loomail", sshFingerprint: FP, host: "db.internal", ...over });
+
+describe("an SSH tunnel", () => {
+  it("adds nothing to the settings when it is off", () => {
+    expect(built(pg())).not.toHaveProperty("ssh_tunnel");
+    expect(built(pg({ sshHost: "left-over.example.com", sshUser: "u" }))).not.toHaveProperty("ssh_tunnel"); // text left in hidden fields is ignored
+  });
+
+  it("builds the tunnel settings, with the port as a number", () => {
+    expect(built(tunnelForm())).toMatchObject({ host: "db.internal", ssh_tunnel: { host: "bastion.example.com", port: 22, user: "loomail", host_fingerprint: FP } });
+    expect(built(tunnelForm({ sshPort: "2222", sshHost: "  b.example.com " }))).toMatchObject({ ssh_tunnel: { host: "b.example.com", port: 2222 } });
+  });
+
+  it("says what is wrong, in plain words", () => {
+    expect(problems(tunnelForm({ sshHost: "" }))).toContain("Give the SSH server's address.");
+    expect(problems(tunnelForm({ sshUser: "" }))).toContain("Give the SSH user.");
+    expect(problems(tunnelForm({ sshPort: "0" }))[0]).toMatch(/SSH port must be a whole number/);
+    for (const bad of ["", "SHA256:short", "MD5:aa:bb", "A".repeat(43), "sha256:" + "A".repeat(43)]) {
+      expect(problems(tunnelForm({ sshFingerprint: bad })).join(" "), bad).toMatch(/host key fingerprint/);
+    }
+    expect(SSH_FINGERPRINT.test(FP + "=")).toBe(true);
+  });
+
+  it("needs the key for a new source, and sends only what was typed when editing", () => {
+    const need = buildWarehouseSecret(tunnelForm({ password: "pw" }), false);
+    expect(need).toEqual({ ok: false, problems: [expect.stringMatching(/SSH private key/)] });
+    expect(buildWarehouseSecret(tunnelForm({ password: "pw", sshPrivateKey: KEY, sshPassphrase: "pp" }), false)).toEqual({
+      ok: true,
+      value: { password: "pw", ssh_private_key: KEY, ssh_passphrase: "pp" },
+    });
+    // editing a source that already has its key: nothing typed sends nothing, a new password sends only the password
+    expect(buildWarehouseSecret(tunnelForm(), true, true)).toEqual({ ok: true, value: null });
+    expect(buildWarehouseSecret(tunnelForm({ password: "new" }), true, true)).toEqual({ ok: true, value: { password: "new" } });
+    expect(buildWarehouseSecret(tunnelForm({ sshPrivateKey: KEY }), true, true)).toEqual({ ok: true, value: { ssh_private_key: KEY } });
+    expect(buildWarehouseSecret(tunnelForm({ sshPassphrase: "only" }), true, true)).toEqual({ ok: true, value: { ssh_passphrase: "only" } });
+    // turning a tunnel on for a source that had none needs a key
+    expect(buildWarehouseSecret(tunnelForm(), true, false).ok).toBe(false);
+  });
+
+  it("refuses text that is not a private key, and sends no SSH fields when the tunnel is off", () => {
+    expect(buildWarehouseSecret(tunnelForm({ password: "pw", sshPrivateKey: "just words" }), false).ok).toBe(false);
+    expect(buildWarehouseSecret(pg({ password: "pw", sshPrivateKey: KEY, sshPassphrase: "x" }), false)).toEqual({ ok: true, value: { password: "pw" } });
+    expect(buildWarehouseSecret(pg(), false)).toEqual({ ok: false, problems: ["Enter the database password."] });
+  });
+
+  it("is read back from a saved source, without any key", () => {
+    const config = built(tunnelForm({ sshPort: "2222" })) as Record<string, unknown>;
+    const back = warehouseFormFromConfig(config);
+    expect(back).toMatchObject({ sshEnabled: true, sshHost: "bastion.example.com", sshPort: "2222", sshUser: "loomail", sshFingerprint: FP, host: "db.internal" });
+    expect(back.sshPrivateKey + back.sshPassphrase + back.password).toBe("");
+    expect(built(back)).toEqual(config);
+    expect(warehouseFormFromConfig(built(pg()) as Record<string, unknown>)).toMatchObject({ sshEnabled: false, sshPort: "22" });
   });
 });
 

@@ -118,7 +118,7 @@ function SourceForm({ initial, onCancel, onSaved }: { initial?: WarehouseSource;
     if (!name.trim()) issues.push("Give the source a name.");
     const config = buildWarehouseConfig(f);
     if (!config.ok) issues.push(...config.problems);
-    const secret = buildWarehouseSecret(f, editing && initial.has_credential);
+    const secret = buildWarehouseSecret(f, editing && initial.has_credential, editing && !!initial.config.ssh_tunnel);
     if (!secret.ok) issues.push(...secret.problems);
     setProblems(issues);
     return issues.length === 0 && config.ok && secret.ok ? { config: config.value, secret: secret.value } : null;
@@ -182,7 +182,9 @@ function SourceForm({ initial, onCancel, onSaved }: { initial?: WarehouseSource;
         <legend className="text-[13px] font-semibold text-foreground">Connection</legend>
         {w === "postgres" && (
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field id="wh-host" label="Host"><Input id="wh-host" value={f.host} onChange={(e) => set({ host: e.target.value })} placeholder="db.example.com" /></Field>
+            <Field id="wh-host" label={f.sshEnabled ? "Database host, as the SSH server sees it" : "Host"} hint={f.sshEnabled ? "Often a private name or address, such as db.internal or 10.0.3.7. The SSH server resolves it." : undefined}>
+              <Input id="wh-host" value={f.host} onChange={(e) => set({ host: e.target.value })} placeholder={f.sshEnabled ? "db.internal" : "db.example.com"} />
+            </Field>
             <Field id="wh-port" label="Port"><Input id="wh-port" inputMode="numeric" value={f.port} onChange={(e) => set({ port: e.target.value })} /></Field>
             <Field id="wh-db" label="Database"><Input id="wh-db" value={f.database} onChange={(e) => set({ database: e.target.value })} /></Field>
             <Field id="wh-user" label="User"><Input id="wh-user" value={f.user} onChange={(e) => set({ user: e.target.value })} autoComplete="off" /></Field>
@@ -193,6 +195,36 @@ function SourceForm({ initial, onCancel, onSaved }: { initial?: WarehouseSource;
                 <option value="disable">None (only for a trusted network)</option>
               </Select>
             </Field>
+            <div className="space-y-3 sm:col-span-2">
+              <label className="flex items-start gap-2 text-[13px] text-foreground">
+                <input type="checkbox" className="mt-0.5 h-4 w-4 accent-(--accent-deep)" checked={f.sshEnabled} onChange={(e) => set({ sshEnabled: e.target.checked })} />
+                <span>
+                  <strong>My database is not reachable from the internet.</strong> Connect through an SSH server (a bastion) that can reach it. Loomail
+                  signs in to that server with a key, and only that server needs to be reachable.
+                </span>
+              </label>
+              {f.sshEnabled && (
+                <div className="grid gap-3 rounded-md border border-border bg-card p-3 sm:grid-cols-2">
+                  <Field id="wh-ssh-host" label="SSH server"><Input id="wh-ssh-host" value={f.sshHost} onChange={(e) => set({ sshHost: e.target.value })} placeholder="bastion.example.com" /></Field>
+                  <Field id="wh-ssh-port" label="SSH port"><Input id="wh-ssh-port" inputMode="numeric" value={f.sshPort} onChange={(e) => set({ sshPort: e.target.value })} /></Field>
+                  <Field id="wh-ssh-user" label="SSH user"><Input id="wh-ssh-user" value={f.sshUser} onChange={(e) => set({ sshUser: e.target.value })} autoComplete="off" placeholder="loomail" /></Field>
+                  <div className="sm:col-span-2">
+                    <Field
+                      id="wh-ssh-fp"
+                      label="The SSH server's host key fingerprint"
+                      hint="Loomail only connects to a server with this exact key, so nobody can pose as it. Get it from a trusted machine: ssh-keyscan -t ed25519 bastion.example.com | ssh-keygen -lf -   (it prints SHA256:...)."
+                    >
+                      <Input id="wh-ssh-fp" value={f.sshFingerprint} onChange={(e) => set({ sshFingerprint: e.target.value })} spellCheck={false} placeholder="SHA256:..." className="font-mono text-[12px]" />
+                    </Field>
+                  </div>
+                  <p className="text-[12px] text-muted-foreground sm:col-span-2">
+                    Create a key pair for Loomail, put the public half in that user&apos;s <code className="font-mono">authorized_keys</code> (ideally with{" "}
+                    <code className="font-mono">restrict,port-forwarding,permitopen=&quot;db.internal:5432&quot;</code> in front of it, so the key can do nothing else), and paste
+                    the private half below. The SSH server must allow TCP forwarding.
+                  </p>
+                </div>
+              )}
+            </div>
             <div className="sm:col-span-2">
               <Field id="wh-ca" label="CA certificate (only for Amazon RDS, Supabase or a private CA)" hint="Amazon RDS and Supabase sign with their own certificate authority. Paste it here (RDS: the global bundle; Supabase: the CA from Database Settings) and Loomail still verifies the server. Neon, Redshift and most other services need nothing here.">
                 <Textarea id="wh-ca" rows={3} spellCheck={false} className="font-mono text-[12px]" value={f.sslCa} onChange={(e) => set({ sslCa: e.target.value })} placeholder="-----BEGIN CERTIFICATE-----" />
@@ -221,9 +253,21 @@ function SourceForm({ initial, onCancel, onSaved }: { initial?: WarehouseSource;
         <div>
           <p className="mb-1 text-[12px] text-muted-foreground">{CREDENTIAL_HELP[w]}</p>
           {w === "postgres" && (
-            <Field id="wh-pw" label={`Password${editing ? " (leave empty to keep the saved one)" : ""}`}>
-              <Input id="wh-pw" type="password" autoComplete="new-password" value={f.password} onChange={(e) => set({ password: e.target.value })} />
-            </Field>
+            <div className="space-y-3">
+              <Field id="wh-pw" label={`Database password${editing ? " (leave empty to keep the saved one)" : ""}`}>
+                <Input id="wh-pw" type="password" autoComplete="new-password" value={f.password} onChange={(e) => set({ password: e.target.value })} />
+              </Field>
+              {f.sshEnabled && (
+                <>
+                  <Field id="wh-ssh-key" label={`SSH private key${editing && initial?.config.ssh_tunnel ? " (leave empty to keep the saved one)" : ""}`}>
+                    <Textarea id="wh-ssh-key" rows={4} spellCheck={false} autoComplete="off" className="font-mono text-[12px]" value={f.sshPrivateKey} onChange={(e) => set({ sshPrivateKey: e.target.value })} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" />
+                  </Field>
+                  <Field id="wh-ssh-pass" label="SSH key passphrase (only if the key is encrypted)">
+                    <Input id="wh-ssh-pass" type="password" autoComplete="new-password" value={f.sshPassphrase} onChange={(e) => set({ sshPassphrase: e.target.value })} />
+                  </Field>
+                </>
+              )}
+            </div>
           )}
           {w === "snowflake" && (
             <div className="space-y-3">

@@ -30,6 +30,15 @@ export interface WarehouseForm {
   sslMode: "verify" | "no-verify" | "disable";
   /** PEM of a provider's CA (Amazon RDS, Supabase). Empty for services with a public certificate. */
   sslCa: string;
+  /** Reach a database that is not on the internet through an SSH server. */
+  sshEnabled: boolean;
+  sshHost: string;
+  sshPort: string;
+  sshUser: string;
+  /** SHA256:... as ssh-keygen -lf prints it. */
+  sshFingerprint: string;
+  sshPrivateKey: string;
+  sshPassphrase: string;
   account: string;
   sfWarehouse: string;
   role: string;
@@ -75,6 +84,13 @@ export function emptyWarehouseForm(warehouse: Warehouse = "postgres"): Warehouse
     user: "",
     sslMode: "verify",
     sslCa: "",
+    sshEnabled: false,
+    sshHost: "",
+    sshPort: "22",
+    sshUser: "",
+    sshFingerprint: "",
+    sshPrivateKey: "",
+    sshPassphrase: "",
     account: "",
     sfWarehouse: "",
     role: "",
@@ -105,6 +121,7 @@ export function emptyWarehouseForm(warehouse: Warehouse = "postgres"): Warehouse
 const COLUMN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const ACCOUNT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,98}[A-Za-z0-9]$/;
 const PROJECT = /^[a-z][a-z0-9.:-]{4,61}[a-z0-9]$/;
+export const SSH_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}=?$/;
 
 export type Built<T> = { ok: true; value: T } | { ok: false; problems: string[] };
 
@@ -132,6 +149,18 @@ export function buildWarehouseConfig(f: WarehouseForm): Built<Record<string, unk
     need(f.user, "Give the database user.");
     const port = whole(f.port, "The port", 1, 65535, problems);
     connection = { host: f.host.trim(), ...(port !== undefined ? { port } : {}), database: f.database.trim(), user: f.user.trim(), ssl_mode: f.sslMode, ...(f.sslCa.trim() ? { ssl_ca: f.sslCa.trim() } : {}) };
+    if (f.sshEnabled) {
+      need(f.sshHost, "Give the SSH server's address.");
+      need(f.sshUser, "Give the SSH user.");
+      const sshPort = whole(f.sshPort, "The SSH port", 1, 65535, problems);
+      if (!SSH_FINGERPRINT.test(f.sshFingerprint.trim())) {
+        problems.push("Give the SSH server's host key fingerprint, as ssh-keygen -lf prints it: SHA256: followed by 43 characters.");
+      }
+      connection = {
+        ...connection,
+        ssh_tunnel: { host: f.sshHost.trim(), ...(sshPort !== undefined ? { port: sshPort } : {}), user: f.sshUser.trim(), host_fingerprint: f.sshFingerprint.trim() },
+      };
+    }
   } else if (w === "snowflake") {
     if (!ACCOUNT.test(f.account.trim())) problems.push("Give the account identifier, such as myorg-myaccount or xy12345.eu-west-1.");
     need(f.user, "Give the Snowflake user.");
@@ -217,14 +246,30 @@ export function buildWarehouseConfig(f: WarehouseForm): Built<Record<string, unk
  * The credential the API takes. Null when the field was left empty and a saved one exists (editing keeps it).
  * A problem when it is needed and missing or not the right kind of text.
  */
-export function buildWarehouseSecret(f: WarehouseForm, hasSaved: boolean): Built<Record<string, unknown> | null> {
+export function buildWarehouseSecret(f: WarehouseForm, hasSaved: boolean, hadTunnelKey = false): Built<Record<string, unknown> | null> {
   const w = f.warehouse;
-  const given = w === "postgres" ? f.password !== "" : w === "snowflake" ? f.privateKey.trim() !== "" : f.serviceAccountJson.trim() !== "";
+  if (w === "postgres") {
+    // Only what was typed is sent; the server merges it over what is saved, so changing the password keeps the SSH key.
+    const out: Record<string, unknown> = {};
+    if (f.password !== "") out.password = f.password;
+    else if (!hasSaved) return { ok: false, problems: ["Enter the database password."] };
+    if (f.sshEnabled) {
+      const key = f.sshPrivateKey.trim();
+      if (key) {
+        if (!/PRIVATE KEY/.test(key)) return { ok: false, problems: ["That does not look like an SSH private key. Paste the whole text, including the BEGIN and END lines."] };
+        out.ssh_private_key = key;
+      } else if (!hadTunnelKey) {
+        return { ok: false, problems: ["Paste the SSH private key (the one whose public half is in the SSH server's authorized_keys)."] };
+      }
+      if (f.sshPassphrase) out.ssh_passphrase = f.sshPassphrase;
+    }
+    return { ok: true, value: Object.keys(out).length > 0 ? out : null };
+  }
+  const given = w === "snowflake" ? f.privateKey.trim() !== "" : f.serviceAccountJson.trim() !== "";
   if (!given) {
     if (hasSaved) return { ok: true, value: null };
-    return { ok: false, problems: [w === "postgres" ? "Enter the database password." : w === "snowflake" ? "Paste the private key." : "Paste the service-account key file."] };
+    return { ok: false, problems: [w === "snowflake" ? "Paste the private key." : "Paste the service-account key file."] };
   }
-  if (w === "postgres") return { ok: true, value: { password: f.password } };
   if (w === "snowflake") {
     if (!/PRIVATE KEY/.test(f.privateKey)) return { ok: false, problems: ["That does not look like a private key. Paste the whole text, including the BEGIN and END lines."] };
     return { ok: true, value: { private_key: f.privateKey.trim(), ...(f.passphrase ? { passphrase: f.passphrase } : {}) } };
@@ -252,6 +297,11 @@ export function warehouseFormFromConfig(config: Record<string, unknown>): Wareho
     user: str(config.user),
     sslMode: config.ssl_mode === "no-verify" || config.ssl_mode === "disable" ? config.ssl_mode : "verify",
     sslCa: str(config.ssl_ca),
+    sshEnabled: typeof config.ssh_tunnel === "object" && config.ssh_tunnel !== null,
+    sshHost: str((config.ssh_tunnel as Record<string, unknown> | undefined)?.host),
+    sshPort: typeof (config.ssh_tunnel as Record<string, unknown> | undefined)?.port === "number" ? String((config.ssh_tunnel as Record<string, number>).port) : "22",
+    sshUser: str((config.ssh_tunnel as Record<string, unknown> | undefined)?.user),
+    sshFingerprint: str((config.ssh_tunnel as Record<string, unknown> | undefined)?.host_fingerprint),
     account: str(config.account),
     sfWarehouse: str(config.snowflake_warehouse),
     role: str(config.role),

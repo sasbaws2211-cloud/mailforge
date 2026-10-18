@@ -50,6 +50,32 @@ describe("warehouseConfigSchema", () => {
     expect(parse({ ...rest, warehouse: "snowflake", account: "a-b", user: "U", ssl_ca: pem }).success).toBe(false);
   });
 
+  it("takes an SSH tunnel for Postgres only, with a pinned host key", () => {
+    const FP = "SHA256:" + "A".repeat(43);
+    const tunnel = { host: "bastion.example.com", user: "tunnel", host_fingerprint: FP };
+    const ok = parse({ ...base, ssh_tunnel: tunnel });
+    expect(ok.success).toBe(true);
+    if (ok.success) expect((ok.data as { ssh_tunnel?: { port: number } }).ssh_tunnel!.port).toBe(22); // default
+    expect(parse({ ...base, ssh_tunnel: { ...tunnel, port: 2222 } }).success).toBe(true);
+    expect(parse({ ...base, ssh_tunnel: { ...tunnel, host_fingerprint: FP + "=" } }).success).toBe(true); // padding is fine
+    for (const bad of ["", "SHA256:short", "MD5:aa:bb:cc", "A".repeat(43), "sha256:" + "A".repeat(43)]) {
+      expect(parse({ ...base, ssh_tunnel: { ...tunnel, host_fingerprint: bad } }).success, bad).toBe(false);
+    }
+    expect(parse({ ...base, ssh_tunnel: { host: "b", user: "u" } }).success).toBe(false); // the host key is not optional
+    expect(parse({ ...base, ssh_tunnel: { ...tunnel, password: "x" } }).success).toBe(false); // key only, and no secrets in settings
+    expect(parse({ ...base, ssh_tunnel: { ...tunnel, port: 0 } }).success).toBe(false);
+    const { host: _h, database: _d, ssl_mode: _s, ...rest } = { ...base, ssl_mode: undefined } as Record<string, unknown>;
+    expect(parse({ ...rest, warehouse: "snowflake", account: "a-b", user: "U", ssh_tunnel: tunnel }).success).toBe(false);
+  });
+
+  it("accepts the SSH key and passphrase in the Postgres credential only", () => {
+    const key = ["-----BEGIN OPENSSH PRIVATE KEY-----", "A".repeat(120), "-----END OPENSSH PRIVATE KEY-----"].join("\n");
+    expect(warehouseSecretSchema.postgres.safeParse({ password: "pw", ssh_private_key: key, ssh_passphrase: "pp" }).success).toBe(true);
+    expect(warehouseSecretSchema.postgres.safeParse({ password: "pw", ssh_private_key: "not a key" }).success).toBe(false);
+    expect(warehouseSecretSchema.postgres.safeParse({ password: "pw", ssh_private_key: "A".repeat(150) }).success).toBe(false);
+    expect(warehouseSecretSchema.postgres.safeParse({ password: "pw", extra: 1 }).success).toBe(false);
+  });
+
   it("checks each warehouse's own fields", () => {
     const { host: _h, database: _d, ssl_mode: _s, ...rest } = { ...base, ssl_mode: undefined } as Record<string, unknown>;
     const sf = { ...rest, warehouse: "snowflake", account: "myorg-myaccount", user: "READER" };

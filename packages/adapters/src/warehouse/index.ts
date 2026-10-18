@@ -14,6 +14,7 @@ export { WarehouseError } from "./types.js";
 export { checkQuery, compileQuery, IDENTIFIER, MAX_QUERY_LENGTH } from "./query.js";
 export { resolveWarehouseHost, warehouseHostPolicyFromEnv, WAREHOUSE_HOST_NOT_ALLOWED, type WarehouseHostPolicy } from "./guard.js";
 export { createPostgresClient, type PostgresConfig, type PostgresSecret } from "./postgres.js";
+export { fingerprintOf, normalizeFingerprint, openTunnel, type SshTunnelConfig, type SshTunnelSecret, type Tunnel } from "./ssh-tunnel.js";
 export { createSnowflakeClient, snowflakeCell, snowflakeToken, jwtAccount, snowflakeHost, SNOWFLAKE_ACCOUNT, type SnowflakeConfig, type SnowflakeSecret } from "./snowflake.js";
 export { createBigQueryClient, bigqueryCell, BIGQUERY_PROJECT, type BigQueryConfig, type BigQuerySecret } from "./bigquery.js";
 

@@ -71,6 +71,61 @@ How the connector behaves with them:
 - Poolers in transaction mode are fine: nothing is kept between transactions.
 - "Verify" with a CA you pasted still checks the host name and rejects a certificate that CA did not sign. "Encrypted, do not verify" encrypts but accepts any certificate; use it only to get unstuck.
 
+#### A database that is not on the internet (SSH tunnel)
+
+Most production databases sit on a private network. If you have an SSH server that can reach yours (a bastion or jump host), Loomail can connect to *that* and reach the database through it. Only the SSH server has to be reachable from the internet.
+
+```
+Loomail  ->  your SSH server (public)  ->  your database (private)
+```
+
+In the form, tick **My database is not reachable from the internet** and fill in:
+
+| Field | What to give |
+|---|---|
+| Database host and port | The database's address **as the SSH server sees it**, such as `db.internal:5432` or `10.0.3.7:5432`. Loomail never resolves or connects to this itself, so a private name is fine. |
+| SSH server, port, user | The bastion's address and the account Loomail signs in as. |
+| Host key fingerprint | `SHA256:...`, so Loomail only talks to your server and nobody can pose as it. Get it from a machine you trust: `ssh-keyscan -t ed25519 bastion.example.com \| ssh-keygen -lf -` |
+| SSH private key (and passphrase) | The private half of a key pair made for Loomail. Stored encrypted, never shown again. |
+
+Set up the SSH side:
+
+```bash
+ssh-keygen -t ed25519 -N "" -C "loomail" -f loomail_tunnel
+```
+
+Add the **public** half (`loomail_tunnel.pub`) to the SSH user's `~/.ssh/authorized_keys`, with restrictions in front so that the key can do nothing except open a connection to your database:
+
+```
+restrict,port-forwarding,permitopen="db.internal:5432" ssh-ed25519 AAAA... loomail
+```
+
+Then paste the contents of `loomail_tunnel` (the private half) into Loomail and delete the local copy.
+
+What the SSH server needs:
+
+- `AllowTcpForwarding yes` (or `local`) in `sshd_config`. Some distributions turn it off by default (Alpine does), and when it is off the key cannot override it: you will see *"it could not reach db.internal:5432"* even though the address is right. Remember that OpenSSH uses the **first** value it finds.
+- A firewall rule letting Loomail's outgoing address reach the SSH port. A hosted Loomail refuses an SSH server on a private or local address (it must be reachable from the internet); the database behind it may be private.
+- Key authentication. Loomail never offers a password over SSH.
+
+How it stays safe:
+
+- The SSH server's host key is **pinned**: a server with any other key is refused, and the message tells you the fingerprint it saw.
+- Each query opens its own tunnel, uses it for exactly one connection on `127.0.0.1`, and closes it afterwards, also when the query fails.
+- The database credential is checked and used exactly as without a tunnel: read-only transaction, time limit, row cap. The database's own TLS certificate is still verified against the host name you typed.
+- Editing a source keeps what you do not retype: changing the password keeps the SSH key, and changing the key keeps the password. Turning the tunnel off deletes the saved key.
+
+| Message | Cause |
+|---|---|
+| *The SSH server's host key is not the one you pinned. It is SHA256:...* | The server was rebuilt or replaced, or someone is intercepting the connection. If you expected the change, paste the new fingerprint. |
+| *The SSH server refused the key for user ...* | Wrong user, the public key is not in that user's `authorized_keys`, or the passphrase is wrong. |
+| *The SSH private key could not be read* | Not the whole key (include the BEGIN and END lines), or the passphrase is missing or wrong. |
+| *Connected to the SSH server, but it could not reach db.internal:5432* | The database host or port is wrong as the SSH server sees it, forwarding is disabled in `sshd_config`, or `permitopen` in `authorized_keys` does not list that exact host and port. |
+| *Could not connect to the SSH server* / *did not answer in time* | The SSH server's address or port, or a firewall. These are retried on the next run. |
+| *Could not connect to the database: password authentication failed* | The tunnel is fine; the database user or password is wrong. |
+
+SSH tunnels are for the Postgres connector (which also covers Redshift, RDS and Aurora in a private subnet). Snowflake and BigQuery are cloud services reached over HTTPS and need none.
+
 ### Snowflake
 
 Loomail uses Snowflake's SQL API with **key-pair sign-in** (no password is stored).
@@ -109,6 +164,7 @@ Set the **location** if your dataset is not in the default US/EU multi-region (f
 | Position column / type | The column that rises when a row is added or changed (`updated_at`), and whether it holds a date and time, a number or text. |
 | Start from | Optional first position. Empty reads everything the first time. |
 | Run every | 5 to 1440 minutes. After a failure the next try comes sooner (at most 15 minutes). |
+| SSH tunnel | Optional, Postgres only: reach a private database through an SSH server. See above. |
 | Rows per batch | 10 to 5000. A run reads up to 5 batches, then carries on next time. |
 | User id / email column | Who the row is about. One is enough; with only an email, people are matched by it. A row with neither is skipped, not an error. |
 | Event | A fixed name, a name read from a column, or none (traits only). |

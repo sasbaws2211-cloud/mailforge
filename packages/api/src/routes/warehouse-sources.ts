@@ -24,13 +24,15 @@ import { resolveWarehouseHost, sealWebhookSecret, warehouseHostPolicyFromEnv, WA
 import { inboundSources, inboundSourceLog } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import { createLimiter } from "../marketing/signup-logic.js";
-import { MAX_WAREHOUSE_SOURCES, warehouseConfigSchema, warehouseSecretSchema, type WarehouseConfig, type WarehouseSecret } from "../warehouse/config.js";
+import { MAX_WAREHOUSE_SOURCES, postgresSecretPatchSchema, warehouseConfigSchema, warehouseSecretSchema, type WarehouseConfig, type WarehouseSecret } from "../warehouse/config.js";
 import { previewQuery } from "../warehouse/preview.js";
 import { readSecret, syncSource, type ClientFactory } from "../warehouse/sync.js";
 
 export interface WarehouseRouteOptions {
   /** Tests only: replaces the real warehouse clients. */
   clientFor?: ClientFactory;
+  /** Tests only: raise the per-workspace limits on "test query" and "sync now" (10 and 6 a minute). */
+  limitsPerMinute?: { test?: number; sync?: number };
 }
 
 const issues = (error: z.ZodError, prefix = "") => error.issues.map((i) => ({ path: [prefix, i.path.join(".")].filter(Boolean).join("."), message: i.message }));
@@ -67,18 +69,56 @@ function parseSecret(warehouse: WarehouseConfig["warehouse"], raw: unknown): { o
   return r.success ? { ok: true, secret: r.data as WarehouseSecret } : { ok: false, issues: issues(r.error, "secret") };
 }
 
-async function hostProblem(config: WarehouseConfig): Promise<string | null> {
+type Issue = { path: string; message: string };
+
+/** Where our server connects, checked against the private-address guard: the SSH server when there is a tunnel, else the database. */
+async function hostProblem(config: WarehouseConfig): Promise<Issue | null> {
   if (config.warehouse !== "postgres") return null;
-  const t = await resolveWarehouseHost(config.host, warehouseHostPolicyFromEnv());
-  return t.ok ? null : t.error;
+  const policy = warehouseHostPolicyFromEnv();
+  if (config.ssh_tunnel) {
+    // The database address is resolved by the SSH server, on the customer's network: it is meant to be private.
+    const t = await resolveWarehouseHost(config.ssh_tunnel.host, policy);
+    return t.ok ? null : { path: "config.ssh_tunnel.host", message: t.error };
+  }
+  const t = await resolveWarehouseHost(config.host, policy);
+  return t.ok ? null : { path: "config.host", message: t.error };
+}
+
+/**
+ * The credential to store or use. A new source (or a test with nothing saved) needs all of it. When editing a Postgres
+ * source, what is given is merged over what is saved, so changing the password does not lose the SSH key and the other
+ * way round; other warehouses take the new credential whole. An SSH key is required exactly when the settings use a tunnel,
+ * and dropped when they do not.
+ */
+function resolveSecret(config: WarehouseConfig, given: unknown, saved: WarehouseSecret | null): { ok: true; secret: WarehouseSecret } | { ok: false; issues: Issue[] } {
+  if (config.warehouse !== "postgres") {
+    if (given === undefined) return saved ? { ok: true, secret: saved } : { ok: false, issues: [{ path: "secret", message: "Give the credential." }] };
+    return parseSecret(config.warehouse, given);
+  }
+  let merged: Record<string, unknown> = {};
+  if (given !== undefined) {
+    const r = (saved ? postgresSecretPatchSchema : warehouseSecretSchema.postgres).safeParse(given);
+    if (!r.success) return { ok: false, issues: issues(r.error, "secret") };
+    merged = { ...(saved ?? {}), ...r.data };
+  } else if (saved) {
+    merged = { ...saved };
+  }
+  if (!config.ssh_tunnel) {
+    delete merged.ssh_private_key;
+    delete merged.ssh_passphrase;
+  } else if (typeof merged.ssh_private_key !== "string") {
+    return { ok: false, issues: [{ path: "secret.ssh_private_key", message: "The SSH tunnel needs its private key." }] };
+  }
+  if (typeof merged.password !== "string" || merged.password === "") return { ok: false, issues: [{ path: "secret.password", message: "Enter the database password." }] };
+  return { ok: true, secret: merged as WarehouseSecret };
 }
 
 /** A warehouse credential is only ever stored encrypted. */
 const NEEDS_KEY = { error: "ENCRYPTION_KEY is not set on this install, so a warehouse credential cannot be stored safely. Set ENCRYPTION_KEY and try again." };
 
 const warehouseSourcesRoutes: FastifyPluginAsync<WarehouseRouteOptions> = async (app, opts) => {
-  const testLimit = createLimiter({ windowMs: 60_000, max: 10 });
-  const syncLimit = createLimiter({ windowMs: 60_000, max: 6 });
+  const testLimit = createLimiter({ windowMs: 60_000, max: opts.limitsPerMinute?.test ?? 10 });
+  const syncLimit = createLimiter({ windowMs: 60_000, max: opts.limitsPerMinute?.sync ?? 6 });
 
   const own = async (db: Db, tenantId: string, id: string) => {
     if (!z.string().uuid().safeParse(id).success) return undefined;
@@ -108,7 +148,7 @@ const warehouseSourcesRoutes: FastifyPluginAsync<WarehouseRouteOptions> = async 
       reply.status(400);
       return { error: "Validation failed", issues: issues(config.error, "config") };
     }
-    const secret = parseSecret(config.data.warehouse, body.data.secret);
+    const secret = resolveSecret(config.data, body.data.secret, null);
     if (!secret.ok) {
       reply.status(400);
       return { error: "Validation failed", issues: secret.issues };
@@ -116,7 +156,7 @@ const warehouseSourcesRoutes: FastifyPluginAsync<WarehouseRouteOptions> = async 
     const problem = await hostProblem(config.data);
     if (problem) {
       reply.status(400);
-      return { error: "Validation failed", issues: [{ path: "config.host", message: problem }] };
+      return { error: "Validation failed", issues: [problem] };
     }
     const count = (await db.select({ n: sql<number>`count(*)::int` }).from(inboundSources).where(and(eq(inboundSources.tenantId, tenantId), eq(inboundSources.kind, "warehouse"))))[0]!.n;
     if (count >= MAX_WAREHOUSE_SOURCES) {
@@ -165,7 +205,7 @@ const warehouseSourcesRoutes: FastifyPluginAsync<WarehouseRouteOptions> = async 
       const problem = await hostProblem(config.data);
       if (problem) {
         reply.status(400);
-        return { error: "Validation failed", issues: [{ path: "config.host", message: problem }] };
+        return { error: "Validation failed", issues: [problem] };
       }
       set.config = config.data;
       // A new position column or type makes the saved position meaningless; start again from the beginning.
@@ -175,17 +215,26 @@ const warehouseSourcesRoutes: FastifyPluginAsync<WarehouseRouteOptions> = async 
         set.nextSyncAt = null;
       }
     }
-    if (body.data.secret !== undefined) {
+    // A credential is rewritten when one is given, and for Postgres also when the settings change (turning a tunnel on needs
+    // its key; turning it off drops the key).
+    const finalConfig = (set.config as WarehouseConfig | undefined) ?? (old.success ? old.data : undefined);
+    const settingsChanged = set.config !== undefined && finalConfig?.warehouse === "postgres";
+    if (body.data.secret !== undefined || settingsChanged) {
       if (!process.env.ENCRYPTION_KEY) {
         reply.status(503);
         return NEEDS_KEY;
       }
-      const warehouse = body.data.config !== undefined ? (set.config as WarehouseConfig).warehouse : old.success ? old.data.warehouse : undefined;
-      if (!warehouse) {
+      if (!finalConfig) {
         reply.status(400);
         return { error: "Validation failed", issues: [{ path: "secret", message: "Save valid settings first." }] };
       }
-      const secret = parseSecret(warehouse, body.data.secret);
+      let saved: WarehouseSecret | null = null;
+      try {
+        saved = existing.secretSealed ? readSecret(existing) : null;
+      } catch {
+        saved = null;
+      }
+      const secret = resolveSecret(finalConfig, body.data.secret, saved);
       if (!secret.ok) {
         reply.status(400);
         return { error: "Validation failed", issues: secret.issues };
@@ -252,24 +301,28 @@ const warehouseSourcesRoutes: FastifyPluginAsync<WarehouseRouteOptions> = async 
       reply.status(400);
       return { error: "Validation failed", issues: issues(config.error, "config") };
     }
-    let secret: WarehouseSecret;
-    if (body.data.secret !== undefined) {
-      const s = parseSecret(config.data.warehouse, body.data.secret);
-      if (!s.ok) {
-        reply.status(400);
-        return { error: "Validation failed", issues: s.issues };
+    let savedSecret: WarehouseSecret | null = null;
+    if (saved) {
+      try {
+        savedSecret = readSecret(saved);
+      } catch {
+        savedSecret = null;
       }
-      secret = s.secret;
-    } else if (saved) {
-      secret = readSecret(saved);
-    } else {
+    }
+    if (body.data.secret === undefined && !savedSecret) {
       reply.status(400);
       return { error: "Validation failed", issues: [{ path: "secret", message: "Give the credential to test with." }] };
     }
+    const resolved = resolveSecret(config.data, body.data.secret, savedSecret);
+    if (!resolved.ok) {
+      reply.status(400);
+      return { error: "Validation failed", issues: resolved.issues };
+    }
+    const secret = resolved.secret;
     const problem = await hostProblem(config.data);
     if (problem) {
       reply.status(400);
-      return { error: "Validation failed", issues: [{ path: "config.host", message: problem }] };
+      return { error: "Validation failed", issues: [problem] };
     }
     return previewQuery(config.data, secret, opts.clientFor);
   });
