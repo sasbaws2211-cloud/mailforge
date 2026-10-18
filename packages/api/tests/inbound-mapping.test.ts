@@ -173,7 +173,7 @@ describe("mapStripeEvent", () => {
     expect(r).toEqual({
       ok: true,
       mapped: {
-        actor: { userId: undefined, clientRef: "user_7", customerId: "cus_9", email: "ada@example.com" },
+        actor: { userId: undefined, clientRef: "user_7", customerId: "cus_9", customerTrait: "stripe_customer_id", email: "ada@example.com" },
         traits: { stripe_customer_id: "cus_9" },
         track: { event: "checkout_completed", properties: { amount_total: 4900, currency: "usd", mode: "subscription", payment_status: "paid" }, timestamp: "2027-01-15T08:00:00.000Z", messageId: "stripe:evt_123" },
       },

@@ -19,8 +19,10 @@ export interface Actor {
   userId?: string;
   /** A second id the sender uses for "this is my user" (Stripe's client_reference_id). */
   clientRef?: string;
-  /** Stripe's customer id, remembered on the contact so later events that carry no email can find them. */
+  /** The payment provider's customer id, remembered on the contact so later events that carry no email can find them. */
   customerId?: string;
+  /** The trait that remembers it ("stripe_customer_id", "paystack_customer_code", ...). Stripe's when absent. */
+  customerTrait?: string;
   email?: string;
 }
 
@@ -50,7 +52,7 @@ export function cleanEmail(v: unknown): string | undefined {
   return e.length <= 320 && EMAIL_SHAPE.test(e) ? e : undefined;
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+export const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** Read a value by a dotted path ("data.user.id", "items.0.price"). Missing anywhere along the way gives undefined. */
 export function getPath(root: unknown, path: string): unknown {
@@ -205,8 +207,8 @@ export function paymentStatusFromSubscription(status: unknown): "trial" | "paid"
   }
 }
 
-const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
-const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+export const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
+export const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
 /** The plan's name: the price's nickname, else its lookup key, else its id. */
 function planOf(sub: Record<string, unknown>): string | undefined {
@@ -275,6 +277,7 @@ export function mapStripeEvent(evt: unknown, config: StripeConfig): MapResult {
     userId: str(meta[config.user_id_metadata_key]),
     clientRef: str(obj.client_reference_id),
     customerId,
+    customerTrait: "stripe_customer_id",
     email,
   };
 

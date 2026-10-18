@@ -2085,7 +2085,7 @@ export async function rotateWebhookSecret(): Promise<WebhookSecret> {
 export interface InboundSource {
   id: string;
   name: string;
-  kind: "generic" | "stripe";
+  kind: "generic" | "stripe" | "paystack" | "flutterwave";
   enabled: boolean;
   config: Record<string, unknown>;
   token_prefix: string | null;
@@ -2117,10 +2117,10 @@ const jsonInit = (method: string, body?: unknown): RequestInit => ({
 /** GET /v1/inbound-sources */
 export const fetchInboundSources = () => inboundFetch<{ sources: InboundSource[] }>("");
 /** POST /v1/inbound-sources - a generic source's token comes back once. */
-export const createInboundSource = (input: { kind: "generic" | "stripe"; name: string; config?: unknown; stripe_signing_secret?: string }) =>
+export const createInboundSource = (input: { kind: InboundSource["kind"]; name: string; config?: unknown; stripe_signing_secret?: string; paystack_secret_key?: string }) =>
   inboundFetch<{ source: InboundSource; token?: string }>("", jsonInit("POST", input));
 /** PATCH /v1/inbound-sources/:id */
-export const updateInboundSource = (id: string, input: { name?: string; enabled?: boolean; config?: unknown; stripe_signing_secret?: string }) =>
+export const updateInboundSource = (id: string, input: { name?: string; enabled?: boolean; config?: unknown; stripe_signing_secret?: string; paystack_secret_key?: string }) =>
   inboundFetch<{ source: InboundSource }>(`/${id}`, jsonInit("PATCH", input));
 /** POST /v1/inbound-sources/:id/rotate-token */
 export const rotateInboundToken = (id: string) => inboundFetch<{ source: InboundSource; token: string }>(`/${id}/rotate-token`, jsonInit("POST"));

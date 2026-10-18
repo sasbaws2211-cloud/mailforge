@@ -341,6 +341,68 @@ Calls are verified with Stripe's signature (`Stripe-Signature`, HMAC-SHA256 over
 anything is read. Each Stripe event is recorded once, whatever number of times Stripe sends it. The dashboard stores the signing
 secret encrypted with `ENCRYPTION_KEY` when the install has one, and never shows it again.
 
+### Paystack
+
+Choose **Paystack** on the Integrate page, save, and paste the address it shows into Paystack (Settings, API Keys &
+Webhooks, webhook URL). Paystack has a separate webhook URL for test mode and for live mode, so add one source for each.
+
+**How calls are checked.** Choose one when you add the source (it cannot be changed afterwards):
+
+- **A secret in the address** (the default). Loomail makes a token and puts it in the address you give Paystack
+  (`...?token=mf_in_...`). Loomail holds no Paystack key. Anyone who has the address can send events, so keep it private. You can
+  also turn on **only accept Paystack's published addresses** (52.31.139.75, 52.49.173.169, 52.214.14.220), but only if Loomail sees
+  the real sender address: behind a proxy that hides it, every call would be refused.
+- **Paystack's signature.** Paystack signs each call (`x-paystack-signature`, HMAC-SHA512 of the body) **with your secret key**,
+  so checking it means giving Loomail that key (`sk_test_...` or `sk_live_...`). It is stored encrypted and never shown again, but it
+  is the key that can move money, so choose this only if you are comfortable with that.
+
+| Paystack event | What Loomail records |
+|---|---|
+| `charge.success` | event `payment_succeeded`; payment status `paid` (not for a zero amount); the plan name if the charge is for a plan |
+| `subscription.create` | event `subscription_started`; `paid`, plan |
+| `subscription.not_renew` | event `subscription_not_renewing`; the status is left alone (still paid until the period ends) |
+| `subscription.disable` | event `subscription_cancelled`; status `cancelled` |
+| `invoice.payment_failed` | event `payment_failed`; status `past_due` |
+| `invoice.update` | when paid: event `invoice_paid`; status `paid` |
+
+Other events (refunds, transfers, disputes, `invoice.create`) are acknowledged and ignored. A renewal sends both a
+`charge.success` and an `invoice.update`, so it records both a `payment_succeeded` and an `invoice_paid` event: use whichever suits
+your flow. Amounts are in the smallest unit (kobo for NGN), as Paystack sends them.
+
+**Matching people.** Your own user id if you pass one in the payment's metadata (key configurable, default `user_id`), otherwise a
+person who already carries this Paystack customer code, otherwise the customer's email, otherwise a new person keyed by the email.
+Paystack puts the email and customer code on every event Loomail uses.
+
+**Order and repeats.** Paystack events carry no id and no dependable event time, and retries (every 3 minutes four times, then
+hourly for 72 hours) can arrive late. So: an identical redelivery is recorded once and never re-applies the status; a late event that
+carries its own time (a payment's paid time, an invoice's created time) cannot overwrite a newer payment status; and events with no
+time of their own (a subscription starting or being disabled) count from when they arrive. A subscription disabled, re-enabled and
+disabled again is recorded as two cancellations. A one-off purchase also sets `paid`: Paystack does not say whether a charge belongs
+to a subscription.
+
+### Flutterwave
+
+Choose **Flutterwave**, save, and Loomail shows an address and a **secret hash**. In Flutterwave (Settings, Webhooks) paste the address as
+the URL and the secret hash as the secret hash, and turn on webhook retries. Flutterwave sends the hash back unchanged in the
+`verif-hash` header of every call, and Loomail refuses any call whose header does not match. (Flutterwave offers no payload
+signature, so this shared secret is the whole check; Loomail makes it random and keeps only its hash.)
+
+| Flutterwave event | What Loomail records |
+|---|---|
+| `charge.completed`, `status: successful` | event `payment_succeeded`; payment status `paid` (not for a zero amount) |
+| `charge.completed`, `status: failed` | event `payment_failed`; the status is **not** changed |
+| `subscription.cancelled` | event `subscription_cancelled`; status `cancelled` |
+
+Flutterwave does not send an event when a subscription starts or renews, and a charge carries nothing that names its plan, so there is
+no plan name and no `past_due` status from Flutterwave. A failed charge is an event only because it could equally be a stranger's
+abandoned checkout or a declined renewal. Other events (transfers, bill payments, refunds) are acknowledged and ignored. Amounts are
+in whole units (100 means 100 NGN), unlike Stripe and Paystack.
+
+**Matching people.** Your own user id if you put one in the charge's `meta` (key configurable, default `user_id`), otherwise a person
+who already carries this Flutterwave customer id, otherwise the customer's email, otherwise a new person keyed by the email. A
+cancellation carries only the email. A charge is recorded once per Flutterwave transaction and status, however many times it is sent
+(Flutterwave may send the same event more than once), and, as with Stripe, a late event cannot overwrite a newer payment status.
+
 ## What the AI sees of the data you send
 
 AI-drafted emails use only a few of the things you send, so it pays to send them in the right fields:

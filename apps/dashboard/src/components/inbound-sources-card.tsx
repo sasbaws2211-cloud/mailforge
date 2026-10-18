@@ -19,10 +19,15 @@ import {
 } from "../api.js";
 import {
   LOG_STATUS_LABEL,
+  PAYSTACK_EVENTS,
+  PAYSTACK_IPS,
+  SOURCE_KIND_LABEL,
   STRIPE_EVENTS_TO_SEND,
+  addressWithToken,
   buildGenericConfig,
   emptyGenericForm,
   genericFormFromConfig,
+  looksLikePaystackKey,
   looksLikeStripeSecret,
   sampleCurl,
   sourceUrl,
@@ -70,11 +75,13 @@ interface FormProps {
 function SourceForm({ initial, onCancel, onSaved }: FormProps) {
   const qc = useQueryClient();
   const editing = initial !== undefined;
-  const [kind, setKind] = useState<"generic" | "stripe">(initial?.kind ?? "generic");
+  const [kind, setKind] = useState<InboundSource["kind"]>(initial?.kind ?? "generic");
   const [name, setName] = useState(initial?.name ?? "");
   const [generic, setGeneric] = useState<GenericForm>(initial?.kind === "generic" ? genericFormFromConfig(initial.config) : emptyGenericForm());
   const [metaKey, setMetaKey] = useState(typeof initial?.config.user_id_metadata_key === "string" ? (initial.config.user_id_metadata_key as string) : "user_id");
   const [secret, setSecret] = useState("");
+  const [verification, setVerification] = useState<"token" | "signature">(initial?.config.verification === "signature" ? "signature" : "token");
+  const [ipCheck, setIpCheck] = useState(initial?.config.require_paystack_ip === true);
   const [problems, setProblems] = useState<string[]>([]);
 
   const save = useMutation({
@@ -86,21 +93,29 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
         const built = buildGenericConfig(generic);
         if (!built.ok) issues.push(...built.problems);
         else config = built.config;
-      } else if (!editing && !looksLikeStripeSecret(secret)) {
-        issues.push("Paste the signing secret from Stripe. It starts with whsec_.");
-      } else if (editing && secret.trim() !== "" && !looksLikeStripeSecret(secret)) {
-        issues.push("That does not look like a Stripe signing secret. It starts with whsec_.");
+      } else if (kind === "stripe") {
+        if (!editing && !looksLikeStripeSecret(secret)) issues.push("Paste the signing secret from Stripe. It starts with whsec_.");
+        else if (editing && secret.trim() !== "" && !looksLikeStripeSecret(secret)) issues.push("That does not look like a Stripe signing secret. It starts with whsec_.");
+      } else if (kind === "paystack") {
+        config = { ...config, verification, require_paystack_ip: ipCheck };
+        const needsKey = verification === "signature";
+        if (needsKey && !editing && !looksLikePaystackKey(secret)) issues.push("Paste your Paystack secret key. It starts with sk_test_ or sk_live_.");
+        else if (needsKey && editing && secret.trim() !== "" && !looksLikePaystackKey(secret)) issues.push("That does not look like a Paystack secret key. It starts with sk_test_ or sk_live_.");
       }
       if (issues.length > 0) {
         setProblems(issues);
         throw new Error("invalid");
       }
       setProblems([]);
+      const secrets = {
+        ...(kind === "stripe" && secret.trim() ? { stripe_signing_secret: secret.trim() } : {}),
+        ...(kind === "paystack" && verification === "signature" && secret.trim() ? { paystack_secret_key: secret.trim() } : {}),
+      };
       if (editing) {
-        const r = await updateInboundSource(initial.id, { name: name.trim(), config, ...(kind === "stripe" && secret.trim() ? { stripe_signing_secret: secret.trim() } : {}) });
+        const r = await updateInboundSource(initial.id, { name: name.trim(), config, ...secrets });
         return { source: r.source, form: generic };
       }
-      const r = await createInboundSource({ kind, name: name.trim(), config, ...(kind === "stripe" ? { stripe_signing_secret: secret.trim() } : {}) });
+      const r = await createInboundSource({ kind, name: name.trim(), config, ...secrets });
       return { ...r, form: generic };
     },
     onSuccess: (r) => {
@@ -126,18 +141,83 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
       {!editing && (
         <div className="max-w-xs">
           <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="source-kind">Type</label>
-          <Select id="source-kind" value={kind} onChange={(e) => setKind(e.target.value === "stripe" ? "stripe" : "generic")}>
+          <Select id="source-kind" value={kind} onChange={(e) => setKind(e.target.value as InboundSource["kind"])}>
             <option value="generic">Any JSON webhook (Typeform, Zapier, your own app...)</option>
             <option value="stripe">Stripe</option>
+            <option value="paystack">Paystack</option>
+            <option value="flutterwave">Flutterwave</option>
           </Select>
         </div>
       )}
       <div className="max-w-md">
         <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="source-name">Name</label>
-        <Input id="source-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={kind === "stripe" ? "Stripe" : "Typeform signups"} maxLength={100} />
+        <Input id="source-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={kind === "generic" ? "Typeform signups" : SOURCE_KIND_LABEL[kind]} maxLength={100} />
       </div>
 
-      {kind === "stripe" ? (
+      {kind === "paystack" ? (
+        <>
+          <ol className="list-decimal space-y-1 pl-5 text-[13px] text-muted-foreground">
+            <li>Choose how Loomail checks that a call really comes from Paystack (below).</li>
+            <li>Save this source, then copy the address it shows.</li>
+            <li>In Paystack, open Settings, then API Keys &amp; Webhooks, and paste the address as the webhook URL (Paystack has one for test mode and one for live mode, so add a source for each).</li>
+            <li>Paystack sends: {PAYSTACK_EVENTS.map((e) => (<code key={e} className="mx-0.5 rounded bg-card px-1 font-mono text-[12px]">{e}</code>))} Loomail uses these and ignores the rest.</li>
+          </ol>
+          <div className="max-w-xl">
+            <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="ps-verification">How to check calls</label>
+            <Select id="ps-verification" value={verification} disabled={editing} onChange={(e) => setVerification(e.target.value === "signature" ? "signature" : "token")}>
+              <option value="token">A secret in the address (Loomail holds no Paystack key)</option>
+              <option value="signature">Paystack&apos;s signature (you give Loomail your secret key)</option>
+            </Select>
+            <p className="mt-1 text-[12px] text-muted-foreground">
+              {verification === "token"
+                ? "The address Loomail gives you contains a secret token. Anyone with the address could send events, so keep it private. Nothing sensitive is stored."
+                : "Paystack signs every call with your secret key, so Loomail needs that key to check it. It is stored encrypted and never shown again, but it is the key that can move money: use this only if you are comfortable with that."}
+              {editing && " This cannot be changed after the source is made."}
+            </p>
+          </div>
+          {verification === "signature" && (
+            <div className="max-w-md">
+              <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="ps-key">
+                Paystack secret key{editing && <span className="font-normal text-muted-foreground"> (leave empty to keep the saved one)</span>}
+              </label>
+              <Input id="ps-key" type="password" autoComplete="off" spellCheck={false} value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="sk_live_..." />
+            </div>
+          )}
+          <label className="flex items-start gap-2 text-[13px] text-foreground">
+            <input type="checkbox" className="mt-0.5 h-4 w-4 accent-(--accent-deep)" checked={ipCheck} onChange={(e) => setIpCheck(e.target.checked)} />
+            <span>
+              Also accept calls only from Paystack&apos;s published addresses ({PAYSTACK_IPS.join(", ")}). Only turn this on if
+              Loomail can see the real sender address (not behind a proxy that hides it), or every call will be refused.
+            </span>
+          </label>
+          <div className="max-w-md">
+            <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="ps-meta">Metadata key holding your user id</label>
+            <Input id="ps-meta" value={metaKey} onChange={(e) => setMetaKey(e.target.value)} placeholder="user_id" />
+            <p className="mt-1 text-[12px] text-muted-foreground">
+              If you pass your own user id in the metadata when you start a Paystack payment, Loomail uses it. Otherwise people are
+              matched by email, and by the Paystack customer code once it has been seen.
+            </p>
+          </div>
+        </>
+      ) : kind === "flutterwave" ? (
+        <>
+          <ol className="list-decimal space-y-1 pl-5 text-[13px] text-muted-foreground">
+            <li>Save this source. Loomail then shows an address and a secret hash.</li>
+            <li>In Flutterwave, open Settings, then Webhooks. Paste the address as the URL and the secret hash as the secret hash, and turn on webhook retries.</li>
+            <li>Loomail uses <code className="rounded bg-card px-1 font-mono text-[12px]">charge.completed</code> (successful and failed payments) and <code className="rounded bg-card px-1 font-mono text-[12px]">subscription.cancelled</code>, and ignores the rest.</li>
+          </ol>
+          <p className="max-w-2xl text-[12px] text-muted-foreground">
+            Flutterwave does not tell Loomail when a subscription starts or renews, and a charge does not say which plan it was for.
+            So a successful payment marks someone as paid and a cancellation marks them cancelled, but there is no plan name or
+            &quot;past due&quot; status from Flutterwave. A failed payment is recorded as an event only. Amounts are in whole units (100 means 100 NGN).
+          </p>
+          <div className="max-w-md">
+            <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="fw-meta">Key in a charge&apos;s meta holding your user id</label>
+            <Input id="fw-meta" value={metaKey} onChange={(e) => setMetaKey(e.target.value)} placeholder="user_id" />
+            <p className="mt-1 text-[12px] text-muted-foreground">If you send your own user id in the charge&apos;s meta, Loomail uses it. Otherwise people are matched by email.</p>
+          </div>
+        </>
+      ) : kind === "stripe" ? (
         <>
           <ol className="list-decimal space-y-1 pl-5 text-[13px] text-muted-foreground">
             <li>In Stripe, open Developers, then Webhooks, and create an event destination of type Webhook endpoint.</li>
@@ -261,15 +341,34 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
 
 function Fresh({ source, token, form, onDismiss }: { source: InboundSource; token?: string; form?: GenericForm; onDismiss: () => void }) {
   const url = sourceUrl(origin(), source.id);
+  // Paystack sets no headers, so its token rides in the address; Flutterwave sends the secret hash as a header.
+  const paystackUrl = source.kind === "paystack" && token ? addressWithToken(url, token) : null;
   return (
     <div className="mt-4 rounded-md border border-success bg-success-soft p-4" role="status" data-testid="fresh-source">
       <p className="text-[14px] font-medium text-foreground">{source.name} is ready.</p>
-      <p className="mt-2 text-[13px] text-foreground">Send to this address:</p>
+      <p className="mt-2 text-[13px] text-foreground">{paystackUrl ? "Give Paystack this address, token included (keep it private):" : "Send to this address:"}</p>
       <div className="mt-1 flex flex-wrap items-center gap-2">
-        <code className="break-all rounded bg-card px-2 py-1 font-mono text-[12px]" data-testid="source-url">{url}</code>
-        <CopyButton text={url} />
+        <code className="break-all rounded bg-card px-2 py-1 font-mono text-[12px]" data-testid="source-url">{paystackUrl ?? url}</code>
+        <CopyButton text={paystackUrl ?? url} />
       </div>
-      {token ? (
+      {source.kind === "flutterwave" && token ? (
+        <>
+          <p className="mt-3 text-[13px] text-foreground">
+            And this secret hash, shown only now. Paste it as the secret hash in Flutterwave&apos;s webhook settings; Flutterwave sends it back in
+            the <code className="font-mono">verif-hash</code> header of every call:
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <code className="break-all rounded bg-card px-2 py-1 font-mono text-[12px]" data-testid="source-token">{token}</code>
+            <CopyButton text={token} />
+          </div>
+        </>
+      ) : paystackUrl ? (
+        <p className="mt-3 text-[13px] text-foreground">
+          The token is part of that address and is shown only now. Paste it into Paystack under Settings, API Keys &amp; Webhooks. Paystack
+          has a separate webhook URL for test mode and live mode.
+          <span className="sr-only" data-testid="source-token">{token}</span>
+        </p>
+      ) : token ? (
         <>
           <p className="mt-3 text-[13px] text-foreground">
             With this token, shown only now. Put it in an <code className="font-mono">Authorization: Bearer</code> header, an{" "}
@@ -287,7 +386,11 @@ function Fresh({ source, token, form, onDismiss }: { source: InboundSource; toke
           )}
         </>
       ) : (
-        <p className="mt-3 text-[13px] text-foreground">Stripe will sign each call, so there is no token to keep. Finish by adding this address as an endpoint in Stripe.</p>
+        <p className="mt-3 text-[13px] text-foreground">
+          {source.kind === "paystack"
+            ? "Paystack will sign each call with your secret key, so there is no token to keep. Finish by pasting this address as the webhook URL in Paystack."
+            : "Stripe will sign each call, so there is no token to keep. Finish by adding this address as an endpoint in Stripe."}
+        </p>
       )}
       <Button type="button" variant="ghost" size="sm" className="mt-3" onClick={onDismiss}>
         Done
@@ -341,7 +444,7 @@ function SourceRow({ source, onEdit, onToken }: { source: InboundSource; onEdit:
     <li className="rounded-md border border-border bg-card p-4" data-testid={`source-${source.id}`}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[14px] font-medium text-foreground">{source.name}</span>
-        <Badge variant="neutral">{source.kind === "stripe" ? "Stripe" : "JSON webhook"}</Badge>
+        <Badge variant="neutral">{SOURCE_KIND_LABEL[source.kind]}</Badge>
         {!source.enabled && <Badge variant="warning">Off</Badge>}
         <span className="ml-auto text-[12px] text-muted-foreground">
           {source.last_received_at ? `Last received ${when(source.last_received_at)}` : "Nothing received yet"}
@@ -360,16 +463,16 @@ function SourceRow({ source, onEdit, onToken }: { source: InboundSource; onEdit:
         <Button type="button" variant="outline" size="sm" disabled={toggle.isPending} onClick={() => toggle.mutate()}>
           {source.enabled ? "Turn off" : "Turn on"}
         </Button>
-        {source.kind === "generic" && confirming !== "rotate" && (
-          <Button type="button" variant="ghost" size="sm" onClick={() => setConfirming("rotate")}>New token</Button>
+        {source.token_prefix && confirming !== "rotate" && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => setConfirming("rotate")}>{source.kind === "flutterwave" ? "New secret hash" : "New token"}</Button>
         )}
         {confirming === null && (
           <Button type="button" variant="ghost" size="sm" onClick={() => setConfirming("delete")}>Delete</Button>
         )}
         {confirming === "rotate" && (
           <span className="flex items-center gap-2 text-[13px] text-foreground">
-            The current token stops working at once.
-            <Button type="button" variant="destructive" size="sm" disabled={rotate.isPending} onClick={() => rotate.mutate()}>Make a new token</Button>
+            {source.kind === "flutterwave" ? "The current secret hash stops working at once, until you update it in Flutterwave." : source.kind === "paystack" ? "The current address stops working at once, until you update it in Paystack." : "The current token stops working at once."}
+            <Button type="button" variant="destructive" size="sm" disabled={rotate.isPending} onClick={() => rotate.mutate()}>{source.kind === "flutterwave" ? "Make a new secret hash" : "Make a new token"}</Button>
             <Button type="button" variant="ghost" size="sm" onClick={() => setConfirming(null)}>Cancel</Button>
           </span>
         )}

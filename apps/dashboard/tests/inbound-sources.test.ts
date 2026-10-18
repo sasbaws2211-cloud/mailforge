@@ -3,7 +3,12 @@ import { describe, it, expect } from "vitest";
 import {
   buildGenericConfig,
   emptyGenericForm,
+  PAYSTACK_EVENTS,
+  PAYSTACK_IPS,
+  SOURCE_KIND_LABEL,
+  addressWithToken,
   genericFormFromConfig,
+  looksLikePaystackKey,
   looksLikeStripeSecret,
   sampleCurl,
   sourceUrl,
@@ -86,5 +91,25 @@ describe("helpers", () => {
     expect(looksLikeStripeSecret("whsec_" + "a1b2c3d4e5f6a7b8")).toBe(true);
     expect(looksLikeStripeSecret("  whsec_" + "a1b2c3d4e5f6a7b8  ")).toBe(true);
     for (const bad of ["", "whsec_short", "sk_live_abcdefghijklmnop", "a1b2c3d4e5f6a7b8c9"]) expect(looksLikeStripeSecret(bad), bad).toBe(false);
+  });
+});
+
+describe("Paystack and Flutterwave helpers", () => {
+  it("puts a token in the address Paystack is given, whatever the address already has", () => {
+    expect(addressWithToken("https://x.test/webhooks/in/abc", "mf_in_t")).toBe("https://x.test/webhooks/in/abc?token=mf_in_t");
+    expect(addressWithToken("https://x.test/webhooks/in/abc?a=1", "mf_in_t")).toBe("https://x.test/webhooks/in/abc?a=1&token=mf_in_t");
+    expect(addressWithToken("https://x.test/h", "a b&c")).toBe("https://x.test/h?token=a%20b%26c");
+  });
+
+  it("recognises a Paystack secret key and refuses a public key", () => {
+    expect(looksLikePaystackKey("sk_test_a1b2c3d4e5f6a7b8c9d0")).toBe(true);
+    expect(looksLikePaystackKey("  sk_live_a1b2c3d4e5f6a7b8c9d0  ")).toBe(true);
+    for (const bad of ["", "pk_live_a1b2c3d4e5f6a7b8c9d0", "sk_test_short", "whsec_a1b2c3d4e5f6a7b8c9d0"]) expect(looksLikePaystackKey(bad), bad).toBe(false);
+  });
+
+  it("names every kind of source and lists what Paystack sends", () => {
+    expect(SOURCE_KIND_LABEL).toEqual({ generic: "JSON webhook", stripe: "Stripe", paystack: "Paystack", flutterwave: "Flutterwave" });
+    expect(PAYSTACK_EVENTS).toContain("charge.success");
+    expect(PAYSTACK_IPS).toHaveLength(3);
   });
 });

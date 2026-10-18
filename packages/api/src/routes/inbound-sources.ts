@@ -21,6 +21,7 @@ import { sealWebhookSecret } from "@loomail/adapters";
 import { inboundSources, inboundSourceLog } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import { genericConfigSchema, stripeConfigSchema } from "../inbound/mapping.js";
+import { flutterwaveConfigSchema, paystackConfigSchema } from "../inbound/african-gateways.js";
 import { sha256 } from "./webhooks/inbound.js";
 
 export const MAX_INBOUND_SOURCES = 20;
@@ -30,10 +31,25 @@ const stripeSecretSchema = z
   .trim()
   .regex(/^whsec_[A-Za-z0-9]{16,}$/, "That does not look like a Stripe signing secret. It starts with whsec_ and is on the endpoint's page in Stripe.");
 
+const paystackKeySchema = z
+  .string()
+  .trim()
+  .regex(/^sk_(test|live)_[A-Za-z0-9]{10,}$/, "That does not look like a Paystack secret key. It starts with sk_test_ or sk_live_.");
+
 const createSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("generic"), name: z.string().trim().min(1).max(100), config: z.unknown() }),
   z.object({ kind: z.literal("stripe"), name: z.string().trim().min(1).max(100), config: z.unknown().optional(), stripe_signing_secret: stripeSecretSchema }),
+  z.object({ kind: z.literal("paystack"), name: z.string().trim().min(1).max(100), config: z.unknown().optional(), paystack_secret_key: paystackKeySchema.optional() }),
+  z.object({ kind: z.literal("flutterwave"), name: z.string().trim().min(1).max(100), config: z.unknown().optional() }),
 ]);
+
+/** The settings schema for each kind of source. */
+const configSchemaFor = {
+  generic: genericConfigSchema,
+  stripe: stripeConfigSchema,
+  paystack: paystackConfigSchema,
+  flutterwave: flutterwaveConfigSchema,
+} as const;
 
 const patchSchema = z
   .object({
@@ -41,6 +57,7 @@ const patchSchema = z
     enabled: z.boolean().optional(),
     config: z.unknown().optional(),
     stripe_signing_secret: stripeSecretSchema.optional(),
+    paystack_secret_key: paystackKeySchema.optional(),
   })
   .strict();
 
@@ -59,6 +76,7 @@ function view(r: typeof inboundSources.$inferSelect) {
 }
 
 const newToken = () => `mf_in_${randomBytes(24).toString("base64url")}`;
+const newFlutterwaveHash = () => `mf_fw_${randomBytes(24).toString("base64url")}`;
 
 const issues = (error: z.ZodError) => error.issues.map((i) => ({ path: i.path.join("."), message: i.message }));
 
@@ -93,6 +111,49 @@ const inboundSourcesRoutes: FastifyPluginAsync = async (app) => {
       const [row] = await db
         .insert(inboundSources)
         .values({ tenantId, name: parsed.data.name, kind: "generic", config: config.data, tokenHash: sha256(token), tokenPrefix: token.slice(0, 10) })
+        .returning();
+      reply.status(201);
+      return { source: view(row!), token };
+    }
+
+    if (parsed.data.kind === "paystack") {
+      const config = paystackConfigSchema.safeParse(parsed.data.config ?? {});
+      if (!config.success) {
+        reply.status(400);
+        return { error: "Validation failed", issues: issues(config.error).map((i) => ({ ...i, path: `config.${i.path}` })) };
+      }
+      if (config.data.verification === "signature") {
+        if (!parsed.data.paystack_secret_key) {
+          reply.status(400);
+          return { error: "Validation failed", issues: [{ path: "paystack_secret_key", message: "Signature checking needs your Paystack secret key (sk_test_... or sk_live_...). Or choose the address token instead." }] };
+        }
+        const [row] = await db
+          .insert(inboundSources)
+          .values({ tenantId, name: parsed.data.name, kind: "paystack", config: config.data, secretSealed: sealWebhookSecret(parsed.data.paystack_secret_key) })
+          .returning();
+        reply.status(201);
+        return { source: view(row!) };
+      }
+      const token = newToken();
+      const [row] = await db
+        .insert(inboundSources)
+        .values({ tenantId, name: parsed.data.name, kind: "paystack", config: config.data, tokenHash: sha256(token), tokenPrefix: token.slice(0, 10) })
+        .returning();
+      reply.status(201);
+      return { source: view(row!), token };
+    }
+
+    if (parsed.data.kind === "flutterwave") {
+      const config = flutterwaveConfigSchema.safeParse(parsed.data.config ?? {});
+      if (!config.success) {
+        reply.status(400);
+        return { error: "Validation failed", issues: issues(config.error).map((i) => ({ ...i, path: `config.${i.path}` })) };
+      }
+      // The "secret hash" Flutterwave sends back in the verif-hash header. Loomail makes it, so it is random, and only its hash is kept.
+      const token = newFlutterwaveHash();
+      const [row] = await db
+        .insert(inboundSources)
+        .values({ tenantId, name: parsed.data.name, kind: "flutterwave", config: config.data, tokenHash: sha256(token), tokenPrefix: token.slice(0, 10) })
         .returning();
       reply.status(201);
       return { source: view(row!), token };
@@ -133,10 +194,17 @@ const inboundSourcesRoutes: FastifyPluginAsync = async (app) => {
     if (parsed.data.name !== undefined) set.name = parsed.data.name;
     if (parsed.data.enabled !== undefined) set.enabled = parsed.data.enabled;
     if (parsed.data.config !== undefined) {
-      const config = (existing.kind === "stripe" ? stripeConfigSchema : genericConfigSchema).safeParse(parsed.data.config);
+      const schema = configSchemaFor[existing.kind as keyof typeof configSchemaFor] ?? genericConfigSchema;
+      const config = schema.safeParse(parsed.data.config);
       if (!config.success) {
         reply.status(400);
         return { error: "Validation failed", issues: issues(config.error).map((i) => ({ ...i, path: `config.${i.path}` })) };
+      }
+      // How a Paystack source checks calls decides what it holds (a key, or a token), so it is fixed once made.
+      const was = (existing.config as { verification?: string }).verification;
+      if (existing.kind === "paystack" && (config.data as { verification?: string }).verification !== was) {
+        reply.status(400);
+        return { error: "Validation failed", issues: [{ path: "config.verification", message: "A Paystack source cannot change how it verifies calls. Add a new source instead." }] };
       }
       set.config = config.data;
     }
@@ -146,6 +214,13 @@ const inboundSourcesRoutes: FastifyPluginAsync = async (app) => {
         return { error: "Validation failed", issues: [{ path: "stripe_signing_secret", message: "Only a Stripe source has a signing secret." }] };
       }
       set.secretSealed = sealWebhookSecret(parsed.data.stripe_signing_secret);
+    }
+    if (parsed.data.paystack_secret_key !== undefined) {
+      if (existing.kind !== "paystack" || (existing.config as { verification?: string }).verification !== "signature") {
+        reply.status(400);
+        return { error: "Validation failed", issues: [{ path: "paystack_secret_key", message: "Only a Paystack source that checks signatures holds a secret key." }] };
+      }
+      set.secretSealed = sealWebhookSecret(parsed.data.paystack_secret_key);
     }
     if (Object.keys(set).length === 0) return { source: view(existing) };
     const [row] = await db.update(inboundSources).set(set).where(eq(inboundSources.id, existing.id)).returning();
@@ -159,11 +234,11 @@ const inboundSourcesRoutes: FastifyPluginAsync = async (app) => {
       reply.status(404);
       return { error: "Source not found." };
     }
-    if (existing.kind !== "generic") {
+    if (!existing.tokenHash) {
       reply.status(400);
-      return { error: "Only a generic source has a token. A Stripe source is checked by Stripe's signature." };
+      return { error: "This source has no token: it is checked by the provider's signature." };
     }
-    const token = newToken();
+    const token = existing.kind === "flutterwave" ? newFlutterwaveHash() : newToken();
     const [row] = await db.update(inboundSources).set({ tokenHash: sha256(token), tokenPrefix: token.slice(0, 10) }).where(eq(inboundSources.id, existing.id)).returning();
     return { source: view(row!), token };
   });

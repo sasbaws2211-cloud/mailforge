@@ -27,7 +27,7 @@ export async function resolveUserId(db: Db, tenantId: string, actor: Actor): Pro
     const r = (
       await db.execute<{ external_id: string }>(sql`
         SELECT external_id FROM contacts
-        WHERE tenant_id = ${tenantId}::uuid AND properties ->> 'stripe_customer_id' = ${actor.customerId}
+        WHERE tenant_id = ${tenantId}::uuid AND properties ->> ${actor.customerTrait ?? "stripe_customer_id"} = ${actor.customerId}
         ORDER BY created_at LIMIT 1`)
     ).rows;
     if (r[0]) return r[0].external_id;
@@ -75,10 +75,9 @@ export async function applyMapped(db: Db, enqueue: Enqueue, tenantId: string, so
   }
 
   const did: string[] = [];
-  if (Object.keys(traits).length > 0) {
-    await processIdentifyEvent(db, tenantId, { userId, traits, context }, enqueue);
-    did.push("traits");
-  }
+  // The event first: if it turns out to be one already recorded (the sender retried it), this is a redelivery, and a
+  // redelivery must not re-assert the payment status. It could undo a change that has happened since.
+  let repeat = false;
   if (mapped.track) {
     const { deduplicated } = await processTrackEvent(
       db,
@@ -93,7 +92,12 @@ export async function applyMapped(db: Db, enqueue: Enqueue, tenantId: string, so
         ...(mapped.track.messageId ? { messageId: mapped.track.messageId } : {}),
       },
     );
+    repeat = deduplicated;
     did.push(deduplicated ? `event ${mapped.track.event} (already recorded)` : `event ${mapped.track.event}`);
+  }
+  if (Object.keys(traits).length > 0 && !repeat) {
+    await processIdentifyEvent(db, tenantId, { userId, traits, context }, enqueue);
+    did.unshift("traits");
   }
   return { applied: true, summary: `${did.join(" and ")} for ${userId}${staleNote}` };
 }

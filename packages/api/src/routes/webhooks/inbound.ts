@@ -6,6 +6,9 @@
  *   generic source  a token Loomail made for it, sent as `Authorization: Bearer <token>`, an `X-Loomail-Token` header,
  *                   or `?token=` (for tools that cannot set headers). Only the token's SHA-256 is stored.
  *   stripe source   Stripe's `Stripe-Signature`, checked against the endpoint signing secret saved on the source.
+ *   paystack source either a token (in the address, or a header) with an optional check of Paystack's published sender
+ *                   addresses, or Paystack's `x-paystack-signature` (HMAC-SHA512 made with the account's secret key).
+ *   flutterwave     the secret hash Loomail made, which Flutterwave sends back unchanged in the `verif-hash` header.
  *
  * Every failure to authenticate (unknown source, disabled source, bad token or signature) answers the same 401 with the
  * same words, so the URL cannot be used to find out which sources exist. Past authentication the request is read
@@ -28,6 +31,14 @@ import { inboundSources, inboundSourceLog } from "@loomail/db/schema";
 import type { Db } from "../../plugins/db.js";
 import { createLimiter } from "../../marketing/signup-logic.js";
 import { genericConfigSchema, mapGeneric, mapStripeEvent, stripeConfigSchema, verifyStripeSignature, type MapResult } from "../../inbound/mapping.js";
+import {
+  PAYSTACK_IPS,
+  flutterwaveConfigSchema,
+  mapFlutterwaveEvent,
+  mapPaystackEvent,
+  paystackConfigSchema,
+  verifyPaystackSignature,
+} from "../../inbound/african-gateways.js";
 import { applyMapped } from "../../inbound/process.js";
 
 export const INBOUND_BODY_LIMIT = 512 * 1024;
@@ -89,7 +100,39 @@ const inboundWebhookRoute: FastifyPluginAsync = async (app) => {
 
       // --- Authenticate ---------------------------------------------------
       let authorised = false;
-      if (source.kind === "stripe") {
+      let failure = "Token missing or wrong.";
+      const tokenGiven = (): string | undefined => {
+        const auth = request.headers.authorization;
+        const bearer = typeof auth === "string" && /^Bearer\s+/i.test(auth) ? auth.replace(/^Bearer\s+/i, "").trim() : undefined;
+        const headerToken = request.headers["x-loomail-token"];
+        return bearer ?? (typeof headerToken === "string" ? headerToken : undefined) ?? request.query.token;
+      };
+      const tokenOk = (given: string | undefined) => typeof given === "string" && given !== "" && !!source.tokenHash && safeEqualHex(sha256(given), source.tokenHash);
+      if (source.kind === "paystack") {
+        const cfg = paystackConfigSchema.safeParse(source.config);
+        const c = cfg.success ? cfg.data : paystackConfigSchema.parse({});
+        const from = request.ip.replace(/^::ffff:/, "");
+        if (c.require_paystack_ip && !(PAYSTACK_IPS as readonly string[]).includes(from)) {
+          failure = "The call did not come from a Paystack address.";
+        } else if (c.verification === "signature") {
+          failure = "Signature check failed.";
+          const header = request.headers["x-paystack-signature"];
+          if (typeof header === "string" && source.secretSealed) {
+            try {
+              authorised = verifyPaystackSignature(openWebhookSecret(source.secretSealed), header, rawBody);
+            } catch {
+              authorised = false;
+            }
+          }
+        } else {
+          authorised = tokenOk(tokenGiven());
+        }
+      } else if (source.kind === "flutterwave") {
+        const header = request.headers["verif-hash"];
+        authorised = tokenOk(typeof header === "string" ? header : undefined);
+        failure = "The verif-hash header is missing or wrong.";
+      } else if (source.kind === "stripe") {
+        failure = "Signature check failed.";
         const header = request.headers["stripe-signature"];
         if (typeof header === "string" && source.secretSealed) {
           try {
@@ -98,15 +141,11 @@ const inboundWebhookRoute: FastifyPluginAsync = async (app) => {
             authorised = false;
           }
         }
-      } else if (source.tokenHash) {
-        const auth = request.headers.authorization;
-        const bearer = typeof auth === "string" && /^Bearer\s+/i.test(auth) ? auth.replace(/^Bearer\s+/i, "").trim() : undefined;
-        const headerToken = request.headers["x-loomail-token"];
-        const given = bearer ?? (typeof headerToken === "string" ? headerToken : undefined) ?? request.query.token;
-        authorised = typeof given === "string" && given !== "" && safeEqualHex(sha256(given), source.tokenHash);
+      } else {
+        authorised = tokenOk(tokenGiven());
       }
       if (!authorised) {
-        await log("rejected", source.kind === "stripe" ? "Signature check failed." : "Token missing or wrong.");
+        await log("rejected", failure);
         reply.status(401);
         return UNAUTHORIZED;
       }
@@ -123,9 +162,17 @@ const inboundWebhookRoute: FastifyPluginAsync = async (app) => {
 
       // --- Map ------------------------------------------------------------
       let result: MapResult;
+      const fingerprint = sha256(rawBody).slice(0, 16);
+      const nowSeconds = Math.floor(Date.now() / 1000);
       if (source.kind === "stripe") {
         const cfg = stripeConfigSchema.safeParse(source.config);
         result = mapStripeEvent(body, cfg.success ? cfg.data : { user_id_metadata_key: "user_id" });
+      } else if (source.kind === "paystack") {
+        const cfg = paystackConfigSchema.safeParse(source.config);
+        result = mapPaystackEvent(body, cfg.success ? cfg.data : paystackConfigSchema.parse({}), fingerprint, nowSeconds);
+      } else if (source.kind === "flutterwave") {
+        const cfg = flutterwaveConfigSchema.safeParse(source.config);
+        result = mapFlutterwaveEvent(body, cfg.success ? cfg.data : flutterwaveConfigSchema.parse({}), nowSeconds);
       } else {
         const cfg = genericConfigSchema.safeParse(source.config);
         if (!cfg.success) {

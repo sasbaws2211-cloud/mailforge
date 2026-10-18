@@ -127,5 +127,32 @@ export const STRIPE_EVENTS_TO_SEND = [
   "invoice.payment_failed",
 ] as const;
 
+/** The events Loomail uses from Paystack: what to expect in the log. */
+export const PAYSTACK_EVENTS = [
+  "charge.success",
+  "subscription.create",
+  "subscription.disable",
+  "subscription.not_renew",
+  "invoice.payment_failed",
+  "invoice.update",
+] as const;
+
+/** The addresses Paystack says it sends from (the same for test and live). */
+export const PAYSTACK_IPS = ["52.31.139.75", "52.49.173.169", "52.214.14.220"] as const;
+
+/** What a source is called in lists and menus. */
+export const SOURCE_KIND_LABEL: Record<"generic" | "stripe" | "paystack" | "flutterwave", string> = {
+  generic: "JSON webhook",
+  stripe: "Stripe",
+  paystack: "Paystack",
+  flutterwave: "Flutterwave",
+};
+
+/** The address to give Paystack when the source checks a token: it has to travel in the address, since Paystack sets no headers. */
+export const addressWithToken = (url: string, token: string) => `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
+
+/** Does this look like a Paystack secret key? (The API checks again.) */
+export const looksLikePaystackKey = (s: string) => /^sk_(test|live)_[A-Za-z0-9]{10,}$/.test(s.trim());
+
 /** Does this look like a Stripe endpoint signing secret? (The API checks again.) */
 export const looksLikeStripeSecret = (s: string) => /^whsec_[A-Za-z0-9]{16,}$/.test(s.trim());

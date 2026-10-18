@@ -492,3 +492,260 @@ describe("the log and its retention", () => {
     expect(after.some((s: string) => s.includes("log-user-0"))).toBe(false);
   });
 });
+
+// ===========================================================================
+describe("receiving from Paystack", () => {
+  // A workspace holds at most 20 sources and the tests above made many: start these from none.
+  beforeAll(async () => {
+    if (dbAvailable) await db.execute(sql`DELETE FROM inbound_sources WHERE tenant_id = ${tenantA}`);
+  });
+  const SK = "sk_test_" + "a1b2c3d4e5f6a7b8c9d0";
+  const nowIso = (offsetSec = 0) => new Date(Date.now() + offsetSec * 1000).toISOString();
+  const charge = (email: string, over: Record<string, unknown> = {}) => ({
+    event: "charge.success",
+    data: { id: 1, status: "success", reference: `ref_${Math.random().toString(36).slice(2)}`, amount: 5000, currency: "NGN", paid_at: nowIso(-30), channel: "card", metadata: 0, customer: { email, customer_code: `CUS_${email.split("@")[0]}`, metadata: null }, plan: {}, ...over },
+  });
+  const sub = (event: string, email: string, status: string) => ({
+    event,
+    data: { status, subscription_code: `SUB_${email.split("@")[0]}`, plan: { name: "Growth", plan_code: "PLN_1", interval: "monthly", currency: "NGN" }, customer: { email, customer_code: `CUS_${email.split("@")[0]}` } },
+  });
+  const pspost = (id: string, body: unknown, headers: Record<string, string> = {}, query = "", remoteAddress?: string) => {
+    const text = typeof body === "string" ? body : JSON.stringify(body);
+    return app
+      .inject({ method: "POST", url: `/webhooks/in/${id}${query}`, headers: { "content-type": "application/json", ...headers }, payload: text, ...(remoteAddress ? { remoteAddress } : {}) })
+      .then((r) => ({ status: r.statusCode, body: r.json() as any }));
+  };
+  const signed = (id: string, body: unknown, key = SK) => {
+    const raw = JSON.stringify(body);
+    return pspost(id, raw, { "x-paystack-signature": createHmac("sha512", key).update(raw).digest("hex") });
+  };
+
+  let tokenSource = { id: "", token: "" };
+
+  it("a token-mode source gives a token once; the address plus token works, a wrong one gets the one 401", async () => {
+    if (!dbAvailable) return;
+    const res = await api("POST", "/v1/inbound-sources", cookieA, { kind: "paystack", name: "Paystack" });
+    expect(res.status).toBe(201);
+    expect(res.body.token).toMatch(/^mf_in_/);
+    expect(res.body.source).toMatchObject({ kind: "paystack", has_signing_secret: false, config: { verification: "token", require_paystack_ip: false, user_id_metadata_key: "user_id" } });
+    tokenSource = { id: res.body.source.id, token: res.body.token };
+    const body = charge("ps.one@example.com");
+    expect((await pspost(tokenSource.id, body, {}, `?token=${tokenSource.token}`)).status).toBe(200);
+    expect((await pspost(tokenSource.id, body, {}, "?token=wrong")).body).toEqual({ error: "Unauthorized." });
+    expect((await pspost(tokenSource.id, body)).status).toBe(401);
+    expect((await pspost(tokenSource.id, body, { authorization: `Bearer ${tokenSource.token}` })).status).toBe(200);
+  });
+
+  it("a payment makes them paid and remembers the customer code; a later event with that code but no usable email finds them", async () => {
+    if (!dbAvailable) return;
+    const url = `?token=${tokenSource.token}`;
+    await pspost(tokenSource.id, charge("ps.two@example.com", { reference: "ref_two", metadata: { user_id: "app-ps-2" } }), {}, url);
+    expect(await contactBy(tenantA, "app-ps-2")).toMatchObject({ email: "ps.two@example.com", payment_status: "paid", properties: { paystack_customer_code: "CUS_ps.two" } });
+    // Same customer code, an unparsable email: matched through the remembered code, not email.
+    const r = await pspost(tokenSource.id, { event: "subscription.disable", data: { status: "complete", subscription_code: "SUB_ps_two", plan: { name: "Growth" }, customer: { email: "bad", customer_code: "CUS_ps.two" } } }, {}, url);
+    expect(r.status).toBe(200);
+    expect((await contactBy(tenantA, "app-ps-2"))!.payment_status).toBe("cancelled");
+    expect((await eventsOf(tenantA, "app-ps-2")).map((e) => e.event_name)).toEqual(["payment_succeeded", "subscription_cancelled"]);
+  });
+
+  it("subscription events: started and paid with the plan; not-renewing is an event only; failure is past due; a paid invoice is paid again", async () => {
+    if (!dbAvailable) return;
+    const url = `?token=${tokenSource.token}`;
+    const email = "ps.three@example.com";
+    const withCode = (event: string, status: string) => ({ ...sub(event, email, status), data: { ...sub(event, email, status).data, subscription_code: "SUB_three" } });
+    await pspost(tokenSource.id, withCode("subscription.create", "active"), {}, url);
+    expect(await contactBy(tenantA, email)).toMatchObject({ payment_status: "paid", properties: { plan: "Growth", paystack_subscription_code: "SUB_three" } });
+    await pspost(tokenSource.id, withCode("subscription.not_renew", "non-renewing"), {}, url);
+    expect((await contactBy(tenantA, email))!.payment_status).toBe("paid"); // still paid until the period ends
+    await pspost(tokenSource.id, { event: "invoice.payment_failed", data: { invoice_code: "INV_3", amount: 5000, paid: false, status: "pending", created_at: nowIso(20), customer: { email, customer_code: "CUS_three" }, subscription: { subscription_code: "SUB_three" } } }, {}, url);
+    expect((await contactBy(tenantA, email))!.payment_status).toBe("past_due");
+    await pspost(tokenSource.id, { event: "invoice.update", data: { invoice_code: "INV_3", amount: 5000, paid: true, status: "success", paid_at: nowIso(40), customer: { email, customer_code: "CUS_three" }, transaction: { reference: "ref_inv3", currency: "NGN" } } }, {}, url);
+    expect((await contactBy(tenantA, email))!.payment_status).toBe("paid");
+    expect((await eventsOf(tenantA, email)).map((e) => e.event_name)).toEqual(["subscription_started", "subscription_not_renewing", "payment_failed", "invoice_paid"]);
+  });
+
+  it("a redelivery of an old event cannot undo what happened since (it is recorded once and does not touch the status)", async () => {
+    if (!dbAvailable) return;
+    const url = `?token=${tokenSource.token}`;
+    const email = "ps.redeliver@example.com";
+    const failed = { event: "invoice.payment_failed", data: { invoice_code: "INV_R", amount: 5000, paid: false, status: "pending", created_at: nowIso(-120), customer: { email, customer_code: "CUS_r" } } };
+    await pspost(tokenSource.id, failed, {}, url);
+    expect((await contactBy(tenantA, email))!.payment_status).toBe("past_due");
+    await pspost(tokenSource.id, { event: "invoice.update", data: { invoice_code: "INV_R", amount: 5000, paid: true, paid_at: nowIso(-60), customer: { email, customer_code: "CUS_r" }, transaction: { reference: "ref_r" } } }, {}, url);
+    expect((await contactBy(tenantA, email))!.payment_status).toBe("paid");
+    // Paystack retries the old failure (we were down, say). It is byte-identical to the first.
+    expect((await pspost(tokenSource.id, failed, {}, url)).status).toBe(200);
+    expect((await contactBy(tenantA, email))!.payment_status).toBe("paid");
+    expect((await eventsOf(tenantA, email)).map((e) => e.event_name)).toEqual(["payment_failed", "invoice_paid"]);
+  });
+
+  it("a late payment from before a cancellation cannot bring the subscription back to life", async () => {
+    if (!dbAvailable) return;
+    const url = `?token=${tokenSource.token}`;
+    const email = "ps.late@example.com";
+    await pspost(tokenSource.id, { ...sub("subscription.disable", email, "complete") }, {}, url); // arrives now: cancelled
+    expect((await contactBy(tenantA, email))!.payment_status).toBe("cancelled");
+    await pspost(tokenSource.id, charge(email, { reference: "ref_old", paid_at: nowIso(-3600) }), {}, url); // paid an hour ago, delivered late
+    expect((await contactBy(tenantA, email))!.payment_status).toBe("cancelled");
+    expect((await eventsOf(tenantA, email)).map((e) => e.event_name)).toContain("payment_succeeded"); // still recorded
+    await pspost(tokenSource.id, charge(email, { reference: "ref_new", paid_at: nowIso(30) }), {}, url); // a genuinely newer payment: they came back
+    expect((await contactBy(tenantA, email))!.payment_status).toBe("paid");
+  });
+
+  it("the same charge twice is one event; unused event types and unfinished charges are acknowledged and ignored", async () => {
+    if (!dbAvailable) return;
+    const url = `?token=${tokenSource.token}`;
+    const body = charge("ps.dup@example.com", { reference: "ref_dup" });
+    await pspost(tokenSource.id, body, {}, url);
+    await pspost(tokenSource.id, body, {}, url);
+    expect((await eventsOf(tenantA, "ps.dup@example.com")).filter((e) => e.event_name === "payment_succeeded")).toHaveLength(1);
+    expect((await pspost(tokenSource.id, { event: "transfer.success", data: {} }, {}, url)).body).toEqual({ ok: true, ignored: true });
+    expect((await pspost(tokenSource.id, charge("ps.dup@example.com", { status: "failed" }), {}, url)).body).toEqual({ ok: true, ignored: true });
+  });
+
+  it("a signature-mode source needs the secret key, seals it, and checks x-paystack-signature", async () => {
+    if (!dbAvailable) return;
+    const create = async (payload: unknown) => api("POST", "/v1/inbound-sources", cookieA, payload);
+    expect((await create({ kind: "paystack", name: "P", config: { verification: "signature" } })).status).toBe(400);
+    expect((await create({ kind: "paystack", name: "P", config: { verification: "signature" }, paystack_secret_key: "pk_live_xxxxxxxxxxxxxxxx" })).status).toBe(400);
+    const res = await create({ kind: "paystack", name: "P sig", config: { verification: "signature" }, paystack_secret_key: SK });
+    expect(res.status).toBe(201);
+    expect(res.body.token).toBeUndefined();
+    expect(res.body.source.has_signing_secret).toBe(true);
+    expect(JSON.stringify(res.body)).not.toContain(SK);
+    const row = (await one(sql`SELECT secret_sealed, token_hash FROM inbound_sources WHERE id = ${res.body.source.id}`))[0]!;
+    expect(row.token_hash).toBeNull();
+    expect(row.secret_sealed).toBeTruthy();
+
+    const id = res.body.source.id;
+    const evt = charge("ps.sig@example.com", { reference: "ref_sig" });
+    expect((await signed(id, evt)).status).toBe(200);
+    expect(await contactBy(tenantA, "ps.sig@example.com")).toMatchObject({ payment_status: "paid" });
+    const unauthorized = { status: 401, body: { error: "Unauthorized." } };
+    expect(await signed(id, evt, "sk_test_the_wrong_key_entirely")).toEqual(unauthorized);
+    expect(await pspost(id, evt)).toEqual(unauthorized); // no header
+    expect(await pspost(id, JSON.stringify(evt), { "x-paystack-signature": createHmac("sha256", SK).update(JSON.stringify(evt)).digest("hex") })).toEqual(unauthorized); // wrong algorithm
+    expect(await pspost(id, JSON.stringify(evt) + " ", { "x-paystack-signature": createHmac("sha512", SK).update(JSON.stringify(evt)).digest("hex") })).toEqual(unauthorized); // body changed
+    // A token in the address does not stand in for the signature on a signature-mode source.
+    expect((await pspost(id, evt, {}, "?token=anything")).status).toBe(401);
+    expect((await api("POST", `/v1/inbound-sources/${id}/rotate-token`, cookieA)).status).toBe(400); // nothing to rotate
+    const newKey = "sk_live_" + "z".repeat(20);
+    expect((await api("PATCH", `/v1/inbound-sources/${id}`, cookieA, { paystack_secret_key: newKey })).status).toBe(200);
+    expect((await signed(id, evt, newKey)).status).toBe(200); // the new key now verifies
+    expect((await signed(id, evt)).status).toBe(401); // the old one no longer does
+  });
+
+  it("how a source verifies cannot be changed after it is made", async () => {
+    if (!dbAvailable) return;
+    const r = await api("PATCH", `/v1/inbound-sources/${tokenSource.id}`, cookieA, { config: { verification: "signature" } });
+    expect(r.status).toBe(400);
+    expect(r.body.issues[0].path).toBe("config.verification");
+    expect((await api("PATCH", `/v1/inbound-sources/${tokenSource.id}`, cookieA, { paystack_secret_key: SK })).status).toBe(400); // token source holds no key
+    expect((await api("PATCH", `/v1/inbound-sources/${tokenSource.id}`, cookieA, { config: { verification: "token", user_id_metadata_key: "uid" } })).status).toBe(200);
+  });
+
+  it("with the address check on, only the published Paystack addresses get through", async () => {
+    if (!dbAvailable) return;
+    const res = await api("POST", "/v1/inbound-sources", cookieA, { kind: "paystack", name: "P ip", config: { require_paystack_ip: true } });
+    const id = res.body.source.id;
+    const url = `?token=${res.body.token}`;
+    const evt = charge("ps.ip@example.com", { reference: "ref_ip" });
+    expect((await pspost(id, evt, {}, url, "52.31.139.75")).status).toBe(200);
+    expect((await pspost(id, evt, {}, url, "::ffff:52.49.173.169")).status).toBe(200);
+    expect((await pspost(id, evt, {}, url, "203.0.113.9")).status).toBe(401);
+    expect((await logOf(id)).some((l) => l.status === "rejected" && /Paystack address/.test(l.summary))).toBe(true);
+  });
+});
+
+// ===========================================================================
+describe("receiving from Flutterwave", () => {
+  beforeAll(async () => {
+    if (dbAvailable) await db.execute(sql`DELETE FROM inbound_sources WHERE tenant_id = ${tenantA}`);
+  });
+  const nowIso = (offsetSec = 0) => new Date(Date.now() + offsetSec * 1000).toISOString();
+  // Flutterwave customer ids are unique per customer, so each test person gets their own.
+  const customerIds = new Map<string, number>();
+  const customerIdOf = (email: string) => {
+    if (!customerIds.has(email)) customerIds.set(email, 5000 + customerIds.size);
+    return customerIds.get(email)!;
+  };
+  const chargeFw = (email: string, over: Record<string, unknown> = {}) => ({
+    event: "charge.completed",
+    data: { id: Math.floor(Math.random() * 1e9), tx_ref: "tx_1", amount: 100, currency: "NGN", status: "successful", payment_type: "card", created_at: nowIso(-30), customer: { id: customerIdOf(email), name: "A B", email }, ...over },
+  });
+  const fwpost = (id: string, body: unknown, headers: Record<string, string> = {}, query = "") =>
+    app
+      .inject({ method: "POST", url: `/webhooks/in/${id}${query}`, headers: { "content-type": "application/json", ...headers }, payload: JSON.stringify(body) })
+      .then((r) => ({ status: r.statusCode, body: r.json() as any }));
+  let src = { id: "", hash: "" };
+
+  it("creating one gives a secret hash to paste into Flutterwave, shown once; verif-hash must equal it", async () => {
+    if (!dbAvailable) return;
+    const res = await api("POST", "/v1/inbound-sources", cookieA, { kind: "flutterwave", name: "Flutterwave" });
+    expect(res.status).toBe(201);
+    expect(res.body.token).toMatch(/^mf_fw_[A-Za-z0-9_-]{32}$/);
+    expect(res.body.source).toMatchObject({ kind: "flutterwave", has_signing_secret: false, config: { user_id_metadata_key: "user_id" } });
+    src = { id: res.body.source.id, hash: res.body.token };
+    const row = (await one(sql`SELECT token_hash FROM inbound_sources WHERE id = ${src.id}`))[0]!;
+    expect(row.token_hash).toMatch(/^[0-9a-f]{64}$/);
+    const evt = chargeFw("fw.one@example.com");
+    expect((await fwpost(src.id, evt, { "verif-hash": src.hash })).status).toBe(200);
+    const unauthorized = { status: 401, body: { error: "Unauthorized." } };
+    expect(await fwpost(src.id, evt)).toEqual(unauthorized);
+    expect(await fwpost(src.id, evt, { "verif-hash": "wrong" })).toEqual(unauthorized);
+    expect(await fwpost(src.id, evt, {}, `?token=${src.hash}`)).toEqual(unauthorized); // Flutterwave sends a header, not a query
+    expect(await fwpost(src.id, evt, { authorization: `Bearer ${src.hash}` })).toEqual(unauthorized);
+  });
+
+  it("a successful charge makes them paid and remembers the customer id; the same delivery twice is one event", async () => {
+    if (!dbAvailable) return;
+    const evt = chargeFw("fw.two@example.com", { id: 424242 });
+    await fwpost(src.id, evt, { "verif-hash": src.hash });
+    await fwpost(src.id, evt, { "verif-hash": src.hash });
+    expect(await contactBy(tenantA, "fw.two@example.com")).toMatchObject({ payment_status: "paid", properties: { flutterwave_customer_id: String(customerIdOf("fw.two@example.com")) } });
+    expect((await eventsOf(tenantA, "fw.two@example.com")).map((e) => e.event_name)).toEqual(["payment_succeeded"]);
+  });
+
+  it("a failed charge is an event only and never changes the status", async () => {
+    if (!dbAvailable) return;
+    await fwpost(src.id, chargeFw("fw.two@example.com", { id: 1001, status: "failed", processor_response: "insufficient funds", created_at: nowIso(-10) }), { "verif-hash": src.hash });
+    expect((await contactBy(tenantA, "fw.two@example.com"))!.payment_status).toBe("paid");
+    const events = await eventsOf(tenantA, "fw.two@example.com");
+    expect(events.map((e) => e.event_name)).toEqual(["payment_succeeded", "payment_failed"]);
+    expect(events[1]!.properties).toMatchObject({ reason: "insufficient funds" });
+  });
+
+  it("a stranger's failed charge creates a contact with the event and leaves them on the free status", async () => {
+    if (!dbAvailable) return;
+    await fwpost(src.id, chargeFw("fw.abandoned@example.com", { id: 2002, status: "failed" }), { "verif-hash": src.hash });
+    expect(await contactBy(tenantA, "fw.abandoned@example.com")).toMatchObject({ payment_status: "free" });
+  });
+
+  it("subscription.cancelled finds the person by email alone and cancels them; a late older charge cannot undo it", async () => {
+    if (!dbAvailable) return;
+    const cancelled = { event: "subscription.cancelled", data: { status: "deactivated", currency: "NGN", amount: 200, customer: { email: "FW.Two@Example.com", full_name: "x" }, plan: { id: 10944, name: "month", interval: "monthly" } } };
+    expect((await fwpost(src.id, cancelled, { "verif-hash": src.hash })).status).toBe(200);
+    expect((await contactBy(tenantA, "fw.two@example.com"))!.payment_status).toBe("cancelled");
+    await fwpost(src.id, chargeFw("fw.two@example.com", { id: 3003, created_at: nowIso(-7200) }), { "verif-hash": src.hash }); // an old charge delivered late
+    expect((await contactBy(tenantA, "fw.two@example.com"))!.payment_status).toBe("cancelled");
+    await fwpost(src.id, chargeFw("fw.two@example.com", { id: 3004, created_at: nowIso(60) }), { "verif-hash": src.hash }); // a new charge: they came back
+    expect((await contactBy(tenantA, "fw.two@example.com"))!.payment_status).toBe("paid");
+  });
+
+  it("other events and unfinished charges are acknowledged and ignored; a body with no event name is a 400", async () => {
+    if (!dbAvailable) return;
+    const h = { "verif-hash": src.hash };
+    expect((await fwpost(src.id, { event: "transfer.completed", data: { id: 1, status: "SUCCESSFUL" } }, h)).body).toEqual({ ok: true, ignored: true });
+    expect((await fwpost(src.id, chargeFw("fw.pending@example.com", { status: "pending" }), h)).body).toEqual({ ok: true, ignored: true });
+    expect((await fwpost(src.id, { id: 1, AmountRefunded: 5, status: "completed" }, h)).status).toBe(400); // a refund notice has no event name
+  });
+
+  it("rotating gives a new hash and the old one stops working", async () => {
+    if (!dbAvailable) return;
+    const r = await api("POST", `/v1/inbound-sources/${src.id}/rotate-token`, cookieA);
+    expect(r.status).toBe(200);
+    expect(r.body.token).toMatch(/^mf_fw_/);
+    expect((await fwpost(src.id, chargeFw("fw.rot@example.com"), { "verif-hash": src.hash })).status).toBe(401);
+    expect((await fwpost(src.id, chargeFw("fw.rot@example.com"), { "verif-hash": r.body.token })).status).toBe(200);
+  });
+});
