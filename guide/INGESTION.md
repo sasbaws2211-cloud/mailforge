@@ -155,7 +155,7 @@ For an app built with a bundler, use the `@loomail/browser` package instead of t
 - **Consent:** `startOptedOut` and `optIn()` / `optOut()` for cookie banners.
 - **A guard:** a secret key (`mf_live_...`) is refused, with a console error.
 
-The **Integrate** page has a tab for each framework (HTML, React, Next.js, Vue, Nuxt, SvelteKit, Angular, plain JavaScript, Tag Manager) with your address and key already in the code. The package README ([packages/sdk-browser](../packages/sdk-browser/README.md)) has the full option and call reference.
+The **Integrate** page has a tab for each framework (HTML, React, Next.js, Vue, Nuxt, SvelteKit, Angular, plain JavaScript, Tag Manager) with your address and key already in the code, and a second row of tabs for sending from your server (Node.js, Python, PHP/Laravel, Ruby/Rails, Go, Java). Each guide was run in a real app against a real Loomail before it was published. For Angular, the CLI's `ng generate environments` step and filling in both environment files matter: `ng serve` uses the development one. The package README ([packages/sdk-browser](../packages/sdk-browser/README.md)) has the full option and call reference.
 
 ```tsx
 import { LoomailProvider } from "@loomail/browser/react";

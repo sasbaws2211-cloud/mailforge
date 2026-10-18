@@ -62,7 +62,7 @@ Create it once and import it where you need it (in Angular, in a service). Safe 
 | `endpoint` | | Your Loomail address, such as `https://loomail.example.com`. Required. |
 | `autoPage` | `false` | Record a page view on start and on every client-side route change. |
 | `trackRouteChanges` | `true` | With `autoPage`: follow route changes (History API: every client-side router). |
-| `routeSettleMs` | `100` | How long a route must stay put before its page view is recorded, so the page title is the new page's. A redirect chain is recorded once. |
+| `routeSettleMs` | `100` | How long the page title must stop changing before a page view is recorded (the first one and every route change), so it carries the new page's title: Angular, React and Next.js all set it a moment after the route renders. A redirect chain is recorded once; it never waits more than a second. |
 | `anonymousTracking` | `false` | Send events from visitors who have not identified to the server. See below. |
 | `startOptedOut` | `false` | Send and store nothing until `optIn()`. |
 | `storage` | `localStorage` | Where the visitor is remembered. `null` keeps it in memory only. |

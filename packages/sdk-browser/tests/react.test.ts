@@ -17,6 +17,7 @@ beforeEach(() => {
   sent = [];
   window.localStorage.clear();
   window.history.replaceState(null, "", "/");
+  document.title = "App"; // a page with no title makes the client wait for one
   vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
     sent.push({ url, body: JSON.parse(String(init.body)) });
     return Promise.resolve(new Response("{}"));
@@ -43,6 +44,7 @@ const tree = (user: U) => createElement(LoomailProvider, { ...props, user }, cre
 describe("LoomailProvider", () => {
   it("records the first page once, even in strict mode, and follows route changes", async () => {
     render(createElement(StrictMode, null, createElement(LoomailProvider, { ...props, autoPage: true, anonymousTracking: true, routeSettleMs: 1 }, createElement("p", null, "app"))));
+    await settle();
     expect(sent.filter((c) => c.body.event === "page_viewed")).toHaveLength(1);
     window.history.pushState(null, "", "/dashboard");
     await settle();

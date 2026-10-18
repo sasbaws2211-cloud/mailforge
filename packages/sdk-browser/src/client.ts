@@ -43,9 +43,10 @@ export interface LoomailOptions {
   /** With autoPage: follow client-side route changes (single-page apps). Default true. */
   trackRouteChanges?: boolean;
   /**
-   * How long (ms) a new route must stay put before its page view is recorded. Most apps set the page title after the
-   * route renders, so recording at once would carry the previous page's title. A redirect chain is recorded once, at
-   * its end. Default 100.
+   * How long (ms) the page title must stop changing before a page view is recorded. Most apps set the title after the
+   * route renders (Angular, React effects, Next.js clear and refill it), so recording at once would carry the previous
+   * page's title. This applies to the first page view and to every route change; a redirect chain is recorded once, at
+   * its end. Gives up waiting after one second. Default 100.
    */
   routeSettleMs?: number;
   /** Send events from visitors who have not identified to the server instead of holding them in the browser. Default false. */
@@ -293,28 +294,71 @@ export function createLoomail(options: LoomailOptions): LoomailClient {
     record(load(), PAGE_EVENT, props);
   }
 
+  // Wait for the title to settle, then run fn. A new call replaces a pending one, so a redirect chain is one page view.
+  const MAX_SETTLE_MS = 1000;
+  let settleTimer: ReturnType<typeof setInterval> | null = null;
+  const clearSettle = (): void => {
+    if (settleTimer !== null) {
+      clearInterval(settleTimer);
+      settleTimer = null;
+    }
+  };
+  const titleNow = (): string => {
+    try {
+      return String(document.title || "");
+    } catch {
+      return "";
+    }
+  };
+  function whenSettled(fn: () => void): void {
+    clearSettle();
+    const settle = Math.max(0, options.routeSettleMs ?? 100);
+    const step = Math.max(1, Math.min(25, settle));
+    let last = titleNow();
+    let stable = 0;
+    let waited = 0;
+    settleTimer = setInterval(() => {
+      const now = titleNow();
+      if (now !== last) {
+        last = now;
+        stable = 0;
+      } else {
+        stable += step;
+      }
+      waited += step;
+      // An empty title is not a settled one (Next.js leaves it empty while it renders the next page), so keep waiting for
+      // a real one, up to the limit. A page that really has no title costs one second.
+      if ((stable >= settle && now !== "") || waited >= MAX_SETTLE_MS) {
+        clearSettle();
+        fn();
+      }
+    }, step);
+  }
+
+  const currentKey = (): string => {
+    try {
+      return window.location.pathname + window.location.search;
+    } catch {
+      return "";
+    }
+  };
+
   function routeChanged(): void {
     if (!running || optedOut) return;
-    try {
-      const k = window.location.pathname + window.location.search;
-      if (k !== lastPageKey) pageView();
-    } catch {
-      /* ignore */
-    }
+    if (currentKey() !== lastPageKey) pageView();
   }
 
   function start(): void {
     if (running || !inBrowser() || options.autoPage !== true) return;
     running = true;
-    // A repeat start (React strict mode mounts twice) must not record the same page twice.
-    if (!optedOut && lastPageKey !== window.location.pathname + window.location.search) pageView();
+    // The first page view waits for the title to settle too (a repeat start, as in React strict mode, must not record the
+    // same page twice, which the address check below also guards).
+    whenSettled(() => {
+      if (running && !optedOut && lastPageKey !== currentKey()) pageView();
+    });
     if (options.trackRouteChanges === false) return;
 
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const later = () => {
-      if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(routeChanged, options.routeSettleMs ?? 100); // let the app render and set the new title first
-    };
+    const later = () => whenSettled(routeChanged);
     const push = history.pushState;
     const replace = history.replaceState;
     const wrap = (orig: History["pushState"]): History["pushState"] =>
@@ -330,7 +374,6 @@ export function createLoomail(options: LoomailOptions): LoomailClient {
     window.addEventListener("popstate", later);
     teardown = [
       () => {
-        if (timer !== null) clearTimeout(timer);
         // Only put the originals back if nobody patched on top of us; otherwise our wrappers simply go quiet.
         if (history.pushState === wrappedPush) history.pushState = push;
         if (history.replaceState === wrappedReplace) history.replaceState = replace;
@@ -341,6 +384,7 @@ export function createLoomail(options: LoomailOptions): LoomailClient {
 
   function stop(): void {
     running = false;
+    clearSettle();
     for (const t of teardown) t();
     teardown = [];
   }
@@ -402,6 +446,7 @@ export function createLoomail(options: LoomailOptions): LoomailClient {
     },
     optOut() {
       optedOut = true;
+      clearSettle();
       memory = null;
       lastPageKey = null;
       lastPageUrl = null;

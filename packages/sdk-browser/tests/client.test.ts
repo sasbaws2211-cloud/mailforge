@@ -136,7 +136,7 @@ describe("storage", () => {
 });
 
 describe("consent", () => {
-  it("sends and stores nothing until opted in", () => {
+  it("sends and stores nothing until opted in", async () => {
     const storage = memoryStorage();
     const l = createLoomail({ ...base, storage, startOptedOut: true, autoPage: true, anonymousTracking: true });
     l.identify("u1");
@@ -150,6 +150,8 @@ describe("consent", () => {
     expect(l.isOptedOut()).toBe(false);
     expect(paths()).toEqual(["/v1/track"]); // the page the visitor is on, now that they agreed
     expect(calls[0]!.body.event).toBe("page_viewed");
+    await tick(10);
+    expect(calls).toHaveLength(1); // the first view that was waiting does not record it a second time
     l.stop();
   });
 
@@ -170,12 +172,15 @@ describe("consent", () => {
 });
 
 describe("page views and route changes", () => {
-  it("records a page view on start with the page details, only when autoPage is on", () => {
+  it("records a page view on start with the page details, only when autoPage is on", async () => {
     document.title = "Pricing";
     window.history.replaceState(null, "", "/pricing?ref=nav");
     make();
+    await tick(10);
     expect(calls).toHaveLength(0);
     const l = make({ autoPage: true, anonymousTracking: true });
+    expect(calls).toHaveLength(0); // not yet: it waits for the title to settle
+    await tick(10);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.body).toMatchObject({ event: "page_viewed", properties: { path: "/pricing", search: "?ref=nav", title: "Pricing" } });
     expect(calls[0]!.body.properties.url).toContain("/pricing?ref=nav");
@@ -184,6 +189,7 @@ describe("page views and route changes", () => {
 
   it("records one page view per client-side route change, with the previous address as referrer", async () => {
     const l = make({ autoPage: true, anonymousTracking: true });
+    await tick(10);
     expect(calls).toHaveLength(1);
     window.history.pushState(null, "", "/features");
     document.title = "Features";
@@ -205,8 +211,9 @@ describe("page views and route changes", () => {
     l.stop();
   });
 
-  it("waits for the route to settle, so the page title is the new page's, and records a redirect chain once", async () => {
+  it("waits for the title to stop changing, so the page view carries the new page's title, and records a redirect chain once", async () => {
     const l = make({ autoPage: true, anonymousTracking: true, routeSettleMs: 30 });
+    await tick(80);
     calls = [];
     window.history.pushState(null, "", "/old");
     window.history.replaceState(null, "", "/redirected");
@@ -214,14 +221,78 @@ describe("page views and route changes", () => {
     await tick(5);
     expect(calls).toHaveLength(0); // still settling
     document.title = "Final page"; // the app sets it after rendering
-    await tick(60);
+    await tick(90);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.body.properties).toMatchObject({ path: "/final", title: "Final page" });
     l.stop();
   });
 
+  it("the first page view also waits for the title (Angular sets it just after start)", async () => {
+    document.title = "Demo"; // the HTML's default
+    const l = make({ autoPage: true, anonymousTracking: true, routeSettleMs: 40 });
+    setTimeout(() => (document.title = "Home"), 15); // the router sets the real one a moment later
+    await tick(120);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body.properties.title).toBe("Home");
+    l.stop();
+  });
+
+  it("copes with a title that is cleared and refilled during navigation (Next.js)", async () => {
+    document.title = "Pricing";
+    window.history.replaceState(null, "", "/pricing");
+    const l = make({ autoPage: true, anonymousTracking: true, routeSettleMs: 40 });
+    await tick(100);
+    calls = [];
+    window.history.pushState(null, "", "/");
+    document.title = ""; // the framework clears it...
+    setTimeout(() => (document.title = "Home"), 60); // ...and fills it in again later
+    await tick(180);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body.properties).toMatchObject({ path: "/", title: "Home" });
+    l.stop();
+  });
+
+  it("keeps waiting while the title is empty, and records a page that never gets one after the limit", async () => {
+    document.title = "Pricing";
+    window.history.replaceState(null, "", "/pricing");
+    const l = make({ autoPage: true, anonymousTracking: true, routeSettleMs: 30 });
+    await tick(100);
+    calls = [];
+    window.history.pushState(null, "", "/");
+    document.title = ""; // empty for much longer than the settle time
+    setTimeout(() => (document.title = "Home"), 200);
+    await tick(320);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body.properties).toMatchObject({ path: "/", title: "Home" });
+    l.stop();
+
+    vi.useFakeTimers();
+    document.title = "";
+    window.history.replaceState(null, "", "/untitled");
+    calls = [];
+    const m = make({ autoPage: true, anonymousTracking: true, routeSettleMs: 30 });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(calls).toHaveLength(0); // still waiting for a title
+    await vi.advanceTimersByTimeAsync(600);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body.properties).toMatchObject({ path: "/untitled", title: "" });
+    m.stop();
+  });
+
+  it("does not wait forever for a title that never stops changing", async () => {
+    vi.useFakeTimers();
+    const l = make({ autoPage: true, anonymousTracking: true, routeSettleMs: 100 });
+    for (let i = 0; i < 100; i++) {
+      document.title = "t" + i;
+      await vi.advanceTimersByTimeAsync(20);
+    }
+    expect(calls).toHaveLength(1); // gave up after a second
+    l.stop();
+  });
+
   it("does not follow route changes when trackRouteChanges is false, or after stop()", async () => {
     const a = make({ autoPage: true, anonymousTracking: true, trackRouteChanges: false });
+    await tick(10);
     window.history.pushState(null, "", "/a");
     await tick();
     expect(calls).toHaveLength(1);
@@ -244,11 +315,12 @@ describe("page views and route changes", () => {
     expect(window.history.replaceState).toBe(replace);
   });
 
-  it("a repeated start (React strict mode) does not record the same page twice", () => {
+  it("a repeated start (React strict mode) does not record the same page twice", async () => {
     const l = make({ autoPage: true, anonymousTracking: true, autoStart: false });
     l.start();
     l.stop();
     l.start();
+    await tick(10);
     expect(calls).toHaveLength(1);
     l.stop();
   });

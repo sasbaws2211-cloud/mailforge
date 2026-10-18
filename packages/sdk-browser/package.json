@@ -1,6 +1,6 @@
 {
   "name": "@loomail/browser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browser client for Loomail: identify people and track events from any web app, with React and Vue helpers. Uses a publishable key.",
   "license": "MIT",
   "homepage": "https://loomail.site",

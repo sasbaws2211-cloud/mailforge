@@ -10,6 +10,7 @@ beforeEach(() => {
   sent = [];
   window.localStorage.clear();
   window.history.replaceState(null, "", "/");
+  document.title = "App"; // a page with no title makes the client wait for one
   vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
     sent.push({ url, body: JSON.parse(String(init.body)) });
     return Promise.resolve(new Response("{}"));
@@ -35,6 +36,7 @@ describe("loomailPlugin", () => {
     const app = createApp(Comp).use(loomailPlugin, options);
     app.mount(el);
     expect(injected).toBe(global);
+    await new Promise((r) => setTimeout(r, 15));
     expect(sent.filter((c) => c.body.event === "page_viewed")).toHaveLength(1);
     el.querySelector("button")!.click();
     expect(sent.at(-1)!.body.event).toBe("clicked");
