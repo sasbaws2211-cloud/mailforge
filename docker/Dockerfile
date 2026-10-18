@@ -5,7 +5,7 @@ RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 WORKDIR /app
 
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .pnpmfile.cjs ./
 COPY packages/core/package.json packages/core/
 COPY packages/adapters/package.json packages/adapters/
 COPY packages/api/package.json packages/api/
@@ -94,7 +94,7 @@ ARG BUILT_AT=""
 ENV LOOMAIL_COMMIT_SHA=${COMMIT_SHA}
 ENV LOOMAIL_BUILT_AT=${BUILT_AT}
 
-COPY --from=builder /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
+COPY --from=builder /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml /app/.pnpmfile.cjs ./
 COPY --from=builder /app/tsconfig.base.json ./
 COPY --from=builder /app/packages/ packages/
 COPY --from=builder /app/apps/ apps/
