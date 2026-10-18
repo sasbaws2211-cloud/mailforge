@@ -52,3 +52,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
+
+# Signing material: never commit
+*revocation*.asc
+*private-key*.asc
+*.gpg
+settings-security.xml

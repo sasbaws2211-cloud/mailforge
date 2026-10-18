@@ -21,7 +21,9 @@
   </licenses>
   <developers>
     <developer>
+      <id>loomail</id>
       <name>Loomail</name>
+      <email>admin@loomail.site</email>
       <url>https://loomail.site</url>
     </developer>
   </developers>
@@ -65,7 +67,13 @@
   </build>
 
   <profiles>
-    <!-- mvn -Prelease package: adds the sources and javadoc jars Maven Central asks for (signing is up to you). -->
+    <!--
+      mvn -Prelease deploy: builds the sources and javadoc jars, signs everything with your GPG key and uploads the bundle
+      to the Central Portal, where you review it and press Publish (autoPublish is off on purpose).
+      Needs, on your machine only: a "central" server (your portal token) in ~/.m2/settings.xml, and your GPG passphrase in
+      the MAVEN_GPG_PASSPHRASE environment variable. Nothing secret lives in this file.
+      Without deploying: mvn -Prelease verify builds and signs but uploads nothing.
+    -->
     <profile>
       <id>release</id>
       <build>
@@ -91,6 +99,36 @@
                 <goals><goal>jar</goal></goals>
               </execution>
             </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.8</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals><goal>sign</goal></goals>
+                <configuration>
+                  <!-- gpg 2.x asks for the passphrase in a dialog unless it is given on the command line side. Loopback lets
+                       the plugin supply it from MAVEN_GPG_PASSPHRASE (or prompts in the terminal). -->
+                  <gpgArguments>
+                    <arg>--pinentry-mode</arg>
+                    <arg>loopback</arg>
+                  </gpgArguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.12.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>false</autoPublish>
+            </configuration>
           </plugin>
         </plugins>
       </build>
