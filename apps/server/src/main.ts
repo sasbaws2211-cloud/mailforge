@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
-import { buildApp, buildAdminApp, platformAdminEmails, startAiAlertMonitor, startSendingMonitor, startOnboardingNudgeMonitor, startTrialReminderMonitor, startAddonRenewalMonitor, billingRuntimeFromEnv } from "@loomail/api";
+import { buildApp, buildAdminApp, platformAdminEmails, startAiAlertMonitor, startSendingMonitor, startWarehouseSyncMonitor, startOnboardingNudgeMonitor, startTrialReminderMonitor, startAddonRenewalMonitor, billingRuntimeFromEnv } from "@loomail/api";
 import { parseAdminPort } from "./admin-port.js";
 import { tenants, users } from "@loomail/db/schema";
 import { eq } from "drizzle-orm";
@@ -452,6 +452,10 @@ async function start(): Promise<void> {
       // Managed sending upkeep: remove orphaned sending domains from Resend, and pause workspaces whose
       // bounces or spam complaints would hurt the shared account. Does nothing unless managed sending is offered.
       startSendingMonitor(db, { log: app.log });
+
+      // Warehouse sources (Postgres, Snowflake, BigQuery): read what is due and record it as traits and events.
+      // Does nothing when no workspace has one.
+      startWarehouseSyncMonitor(db, enqueue, { log: app.log });
 
       // Hosted only: remind owners who signed in but stalled before sending their first email (at most two
       // reminders each). Does nothing unless plans are enforced and a platform email sender is configured.

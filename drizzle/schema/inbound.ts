@@ -10,6 +10,10 @@ import { tenants } from "./tenants.js";
  *                 customer pastes in (kept sealed in `secret_sealed`). `config` names the metadata key that holds
  *                 the customer's own user id.
  *
+ * kind "warehouse": no address. Loomail reads rows from the customer's Postgres, Snowflake or BigQuery on a schedule
+ *                 (see packages/api/src/warehouse). `config` holds the connection details and the mapping; the
+ *                 credential (password, private key, service-account key) is sealed JSON in `secret_sealed`.
+ *
  * The URL is /webhooks/in/:id. Receipts are logged in inbound_source_log.
  */
 export const inboundSources = pgTable(
@@ -20,7 +24,7 @@ export const inboundSources = pgTable(
       .notNull()
       .references(() => tenants.id),
     name: text("name").notNull(),
-    kind: text("kind").notNull(), // generic|stripe
+    kind: text("kind").notNull(), // generic|stripe|paystack|flutterwave|warehouse
     config: jsonb("config").notNull().default({}),
     /** Stripe signing secret, sealed (see @loomail/adapters sealWebhookSecret). Null for generic sources. */
     secretSealed: text("secret_sealed"),
@@ -30,6 +34,19 @@ export const inboundSources = pgTable(
     enabled: boolean("enabled").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastReceivedAt: timestamp("last_received_at", { withTimezone: true }),
+    // Warehouse sources only (kind "warehouse"): Loomail pulls from the warehouse on a schedule.
+    /** Position reached so far, as text; the next run asks for rows at or after it. Null: nothing synced yet. */
+    syncCursor: text("sync_cursor"),
+    /** Fingerprint of the rows read at exactly the saved position, so the next run can tell they have not changed. */
+    syncBoundary: text("sync_boundary"),
+    /** When the next run is due. Null: never run. */
+    nextSyncAt: timestamp("next_sync_at", { withTimezone: true }),
+    /** A run in progress holds this until it ends; a crashed run's hold expires on its own. */
+    syncLeaseUntil: timestamp("sync_lease_until", { withTimezone: true }),
+    lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
+    /** ok | error | running, with a short note for the dashboard. */
+    lastSyncStatus: text("last_sync_status"),
+    lastSyncNote: text("last_sync_note"),
   },
   (table) => [index("idx_inbound_sources_tenant").on(table.tenantId, table.createdAt)],
 );

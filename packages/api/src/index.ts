@@ -10,6 +10,7 @@ export type { AdminAppOptions } from "./admin/standalone.js";
 export { ADMIN_SESSION_COOKIE } from "./admin/auth-routes.js";
 export { platformAdminEmails, isPlatformAdmin } from "./admin/platform-admins.js";
 export { startSendingMonitor } from "./sending/monitor.js";
+export { startWarehouseSyncMonitor } from "./warehouse/monitor.js";
 export { startOnboardingNudgeMonitor, sweepOnboardingNudges } from "./onboarding/nudge.js";
 export { startTrialReminderMonitor, sweepTrialReminders } from "./onboarding/trial-reminders.js";
 export { startAddonRenewalMonitor, runAddonRenewals } from "./billing/addon-renewals.js";

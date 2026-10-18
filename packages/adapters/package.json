@@ -16,11 +16,13 @@
   },
   "dependencies": {
     "@loomail/core": "workspace:*",
-    "nodemailer": "^9.0.4"
+    "nodemailer": "^9.0.4",
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@types/nodemailer": "^8.0.1",
     "typescript": "^5.5.0",
-    "vitest": "^1.6.0"
+    "vitest": "^1.6.0",
+    "@types/pg": "^8.20.0"
   }
 }

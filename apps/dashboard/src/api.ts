@@ -2128,3 +2128,59 @@ export const rotateInboundToken = (id: string) => inboundFetch<{ source: Inbound
 export const deleteInboundSource = (id: string) => inboundFetch<{ deleted: true }>(`/${id}`, jsonInit("DELETE"));
 /** GET /v1/inbound-sources/:id/log */
 export const fetchInboundLog = (id: string) => inboundFetch<{ log: InboundLogLine[] }>(`/${id}/log`);
+
+// ---------------------------------------------------------------------------
+// Warehouse sources
+// ---------------------------------------------------------------------------
+
+export interface WarehouseSource {
+  id: string;
+  name: string;
+  kind: "warehouse";
+  enabled: boolean;
+  config: Record<string, unknown>;
+  has_credential: boolean;
+  created_at: string;
+  last_received_at: string | null;
+  sync: { cursor: string | null; next_at: string | null; last_at: string | null; status: string | null; note: string | null; running: boolean };
+}
+
+export interface WarehousePreviewRow {
+  values: Record<string, string | number | boolean | null>;
+  result: { ok: true; person: string; event: string | null; traits: Record<string, string | number | boolean> } | { ok: false; reason: string };
+}
+
+export type WarehousePreview = { ok: true; columns: string[]; rows: WarehousePreviewRow[]; missing: string[] } | { ok: false; error: string };
+
+export interface WarehouseSyncOutcome {
+  ok: boolean;
+  note: string;
+  read: number;
+  applied: number;
+  skipped: number;
+}
+
+async function warehouseFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(`/v1/warehouse-sources${path}`, init);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string; issues?: Array<{ message: string }> };
+    throw new Error(body.issues?.[0]?.message ?? body.error ?? `Request failed (${res.status})`);
+  }
+  return res.json() as Promise<T>;
+}
+
+/** GET /v1/warehouse-sources */
+export const fetchWarehouseSources = () => warehouseFetch<{ sources: WarehouseSource[] }>("");
+/** POST /v1/warehouse-sources */
+export const createWarehouseSource = (input: { name: string; config: unknown; secret: unknown }) => warehouseFetch<{ source: WarehouseSource }>("", jsonInit("POST", input));
+/** PATCH /v1/warehouse-sources/:id */
+export const updateWarehouseSource = (id: string, input: { name?: string; enabled?: boolean; config?: unknown; secret?: unknown; reset_cursor?: boolean }) =>
+  warehouseFetch<{ source: WarehouseSource }>(`/${id}`, jsonInit("PATCH", input));
+/** DELETE /v1/warehouse-sources/:id */
+export const deleteWarehouseSource = (id: string) => warehouseFetch<{ deleted: true }>(`/${id}`, jsonInit("DELETE"));
+/** POST /v1/warehouse-sources/:id/sync - runs now and waits */
+export const syncWarehouseSource = (id: string) => warehouseFetch<{ outcome: WarehouseSyncOutcome; source: WarehouseSource }>(`/${id}/sync`, jsonInit("POST"));
+/** POST /v1/warehouse-sources/test - a few rows and what each would become; records nothing */
+export const testWarehouseQuery = (input: { id?: string; config?: unknown; secret?: unknown }) => warehouseFetch<WarehousePreview>("/test", jsonInit("POST", input));
+/** GET /v1/warehouse-sources/:id/log */
+export const fetchWarehouseLog = (id: string) => warehouseFetch<{ log: InboundLogLine[] }>(`/${id}/log`);

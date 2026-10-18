@@ -113,6 +113,8 @@ Where a flow's webhook step may call (see [Concepts](CONCEPTS.md#calling-your-ow
 |---|---|---|---|
 | `LOOMAIL_RESTRICT_WEBHOOK_HOSTS` | on for a hosted service (`LOOMAIL_PUBLIC_SITE` or `LOOMAIL_ENFORCE_PLANS` true), off otherwise | `true` makes webhook calls https-only and refuses any address that resolves to a loopback, private, link-local or reserved range. `false` turns the checks off | Off on a service where customers you do not trust can write flows: they can make your server call your internal network |
 | `LOOMAIL_WEBHOOK_ALLOWED_HOSTS` | none | Comma-separated hosts or addresses that skip the checks even when they are on, for a receiver on your own network | An over-broad list undoes the protection |
+| `LOOMAIL_RESTRICT_WAREHOUSE_HOSTS` | on for a hosted service, off otherwise | `true` refuses a customer-typed Postgres warehouse host that resolves to a loopback, private, link-local or reserved address ([data warehouse sources](WAREHOUSES.md)). `false` turns the check off | Off on a service where customers you do not trust can add warehouse sources: they can make your server connect into your internal network |
+| `LOOMAIL_WAREHOUSE_ALLOWED_HOSTS` | none | Comma-separated hosts that skip the check, for a database on your own network | An over-broad list undoes the protection |
 
 The signing secret each workspace's calls carry is stored encrypted with `ENCRYPTION_KEY` when one is set, and as plain
 text in the database otherwise. If `ENCRYPTION_KEY` is lost, stored secrets cannot be read; an owner can rotate to make a new one.

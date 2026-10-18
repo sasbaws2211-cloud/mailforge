@@ -16,7 +16,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { sealWebhookSecret } from "@loomail/adapters";
 import { inboundSources, inboundSourceLog } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
@@ -83,7 +83,7 @@ const issues = (error: z.ZodError) => error.issues.map((i) => ({ path: i.path.jo
 const inboundSourcesRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", { config: { minRole: "member" } }, async (request) => {
     const db: Db = request.server.db;
-    const rows = await db.select().from(inboundSources).where(eq(inboundSources.tenantId, request.tenant!.id)).orderBy(desc(inboundSources.createdAt));
+    const rows = await db.select().from(inboundSources).where(and(eq(inboundSources.tenantId, request.tenant!.id), ne(inboundSources.kind, "warehouse"))).orderBy(desc(inboundSources.createdAt));
     return { sources: rows.map(view) };
   });
 
@@ -95,7 +95,7 @@ const inboundSourcesRoutes: FastifyPluginAsync = async (app) => {
       reply.status(400);
       return { error: "Validation failed", issues: issues(parsed.error) };
     }
-    const count = (await db.select({ n: sql<number>`count(*)::int` }).from(inboundSources).where(eq(inboundSources.tenantId, tenantId)))[0]!.n;
+    const count = (await db.select({ n: sql<number>`count(*)::int` }).from(inboundSources).where(and(eq(inboundSources.tenantId, tenantId), ne(inboundSources.kind, "warehouse"))))[0]!.n;
     if (count >= MAX_INBOUND_SOURCES) {
       reply.status(409);
       return { error: `A workspace can have at most ${MAX_INBOUND_SOURCES} sources.` };
@@ -174,7 +174,7 @@ const inboundSourcesRoutes: FastifyPluginAsync = async (app) => {
 
   const own = async (db: Db, tenantId: string, id: string) => {
     if (!z.string().uuid().safeParse(id).success) return undefined;
-    return (await db.select().from(inboundSources).where(and(eq(inboundSources.id, id), eq(inboundSources.tenantId, tenantId))).limit(1))[0];
+    return (await db.select().from(inboundSources).where(and(eq(inboundSources.id, id), eq(inboundSources.tenantId, tenantId), ne(inboundSources.kind, "warehouse"))).limit(1))[0];
   };
 
   app.patch<{ Params: { id: string }; Body: unknown }>("/:id", { config: { minRole: "member" } }, async (request, reply) => {

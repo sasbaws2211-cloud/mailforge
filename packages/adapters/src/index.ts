@@ -79,3 +79,5 @@ export {
   type TransportResolutionFailure,
   type ResolveTransportResult,
 } from "./resolve-transport.js";
+
+export * from "./warehouse/index.js";

@@ -58,6 +58,8 @@ import { resolveBillingRuntime, type BillingRuntime } from "./billing/config.js"
 import ingestionRoutes from "./routes/ingestion.js";
 import webhookSecretRoutes from "./routes/webhook-secret.js";
 import inboundSourcesRoutes from "./routes/inbound-sources.js";
+import warehouseSourcesRoutes from "./routes/warehouse-sources.js";
+import type { ClientFactory as WarehouseClientFactory } from "./warehouse/sync.js";
 import resendWebhookRoute from "./routes/webhooks/resend.js";
 import resendPlatformWebhookRoute from "./routes/webhooks/resend-platform.js";
 import inboundWebhookRoute from "./routes/webhooks/inbound.js";
@@ -125,6 +127,8 @@ export interface BuildAppOptions {
    * When absent (tests without pg-boss), routes that require enqueue return 503.
    */
   enqueue?: (queue: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<string | null>;
+  /** Tests only: replaces the real Postgres / Snowflake / BigQuery clients behind warehouse sources. */
+  warehouseClientFor?: WarehouseClientFactory;
   /**
    * When true, register @fastify/static to serve the dashboard SPA from dist/
    * and add a SPA catch-all fallback for unknown paths.
@@ -439,6 +443,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       // inbound-sources: places other systems (Stripe, any JSON sender) send events to
       if (opts.db) {
         await v1.register(inboundSourcesRoutes, { prefix: "/inbound-sources" });
+        // warehouse-sources: Loomail reads rows from the customer's Postgres, Snowflake or BigQuery on a schedule
+        await v1.register(warehouseSourcesRoutes, { prefix: "/warehouse-sources", ...(opts.warehouseClientFor ? { clientFor: opts.warehouseClientFor } : {}) });
       }
 
       // webhook-secret: the secret flow webhooks are signed with (owners only)

@@ -67,6 +67,7 @@ Open the claim URL printed to the console, enter your email, and you are the own
 | [Concepts and Guides](guide/CONCEPTS.md) | The model: events, contacts, compilation, approvals, content modes. Task guides |
 | [Flow Prompt Library](guide/FLOW-PROMPTS.md) | Working prompts to paste into the flow editor |
 | [Ingestion](guide/INGESTION.md) | Sending events: curl, browser snippet, server SDKs, Segment compatibility, GTM |
+| [Data warehouse sources](guide/WAREHOUSES.md) | Reading customers and events from Postgres, Snowflake or BigQuery on a schedule |
 | [FAQ and Troubleshooting](guide/FAQ.md) | Lost admin access, secrets, email not sending, AI features idle, backups, data egress |
 | [Contributing](CONTRIBUTING.md) | The development model (open source, not open contribution) |
 | [Security](SECURITY.md) | Vulnerability reporting |
