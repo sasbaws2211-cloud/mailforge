@@ -176,8 +176,16 @@ Zero dependencies; they use a secret key, retry what is safe to retry, and give 
 `messageId` so a retry never double-counts. See each README for the full API.
 
 ```bash
-npm install @loomail/node      # packages/sdk-node
-pip install loomail            # packages/sdk-python (sync and asyncio)
+npm install @loomail/node                  # packages/sdk-node
+pip install loomail                        # packages/sdk-python (sync and asyncio)
+composer require loomail/loomail           # packages/sdk-php (with a Laravel provider and facade)
+gem install loomail                        # packages/sdk-ruby (with a Rails integration and ActiveJob helpers)
+go get github.com/sasbaws2211-cloud/mailforge/packages/sdk-go   # packages/sdk-go
+```
+
+```xml
+<!-- packages/sdk-java: Java 11+, no dependencies -->
+<dependency><groupId>site.loomail</groupId><artifactId>loomail</artifactId><version>0.1.0</version></dependency>
 ```
 
 ```javascript
@@ -192,6 +200,32 @@ from loomail import Loomail
 loomail = Loomail(secret_key="mf_live_...", host="https://YOUR_LOOMAIL_HOST")
 loomail.identify("user_123", {"email": "user@example.com", "plan": "trial"})
 loomail.track("user_123", "signed_up")
+```
+
+```php
+$loomail = new \Loomail\Client(['secret_key' => 'mf_live_...', 'host' => 'https://YOUR_LOOMAIL_HOST']);
+$loomail->identify('user_123', ['email' => 'user@example.com', 'plan' => 'trial']);
+$loomail->track('user_123', 'signed_up');
+// Laravel: set LOOMAIL_SECRET_KEY and call Loomail::track(...) through the facade.
+```
+
+```ruby
+loomail = Loomail::Client.new(secret_key: "mf_live_...", host: "https://YOUR_LOOMAIL_HOST")
+loomail.identify("user_123", email: "user@example.com", plan: "trial")
+loomail.track("user_123", "signed_up")
+# Rails: set LOOMAIL_SECRET_KEY, then Loomail.track(...) or Loomail.track_later(...) on ActiveJob.
+```
+
+```go
+client, _ := loomail.New(loomail.WithSecretKey("mf_live_..."), loomail.WithHost("https://YOUR_LOOMAIL_HOST"))
+client.Identify(ctx, "user_123", map[string]any{"email": "user@example.com", "plan": "trial"})
+client.Track(ctx, "user_123", "signed_up", nil)
+```
+
+```java
+Loomail loomail = Loomail.builder().secretKey("mf_live_...").host("https://YOUR_LOOMAIL_HOST").build();
+loomail.identify("user_123", Map.of("email", "user@example.com", "plan", "trial"));
+loomail.track("user_123", "signed_up", Map.of());
 ```
 
 ### Plain HTTP (any language)

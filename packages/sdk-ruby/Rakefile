@@ -1,0 +1,19 @@
+# frozen_string_literal: true
+
+require "rake/testtask"
+
+# The Rails tests load Rails and ActiveJob, which changes how Loomail behaves, so they run in their own process.
+namespace :test do
+  Rake::TestTask.new(:core) do |t|
+    t.libs << "test" << "lib"
+    t.test_files = FileList["test/**/*_test.rb"].exclude("test/rails_test.rb")
+  end
+
+  Rake::TestTask.new(:rails) do |t|
+    t.libs << "test" << "lib"
+    t.test_files = FileList["test/rails_test.rb"]
+  end
+end
+
+task test: %w[test:core test:rails]
+task default: :test
