@@ -140,10 +140,14 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
       {kind === "stripe" ? (
         <>
           <ol className="list-decimal space-y-1 pl-5 text-[13px] text-muted-foreground">
-            <li>In Stripe, open Developers, then Webhooks, and add an endpoint.</li>
-            <li>For the endpoint URL, use the address shown after you save this source.</li>
+            <li>In Stripe, open Developers, then Webhooks, and create an event destination of type Webhook endpoint.</li>
+            <li>
+              Set the payload to <strong className="text-foreground">Snapshot</strong>, not Thin. Thin events carry no details, so
+              Loomail cannot use them.
+            </li>
             <li>Select these events: {STRIPE_EVENTS_TO_SEND.map((e) => (<code key={e} className="mx-0.5 rounded bg-card px-1 font-mono text-[12px]">{e}</code>))}</li>
-            <li>Copy the endpoint&apos;s signing secret (starts with whsec_) and paste it below.</li>
+            <li>For the endpoint URL, use the address shown after you save this source.</li>
+            <li>Copy the endpoint&apos;s signing secret (starts with whsec_) and paste it below. Test mode and live mode have different secrets, so add one source for each mode you use.</li>
           </ol>
           <div className="max-w-md">
             <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="stripe-secret">

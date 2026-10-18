@@ -72,7 +72,7 @@ const stripePost = (sourceId: string, evt: unknown, opts: { secret?: string; t?:
 };
 let evtSeq = 0;
 // Strictly increasing times, so events read back in the order they were sent.
-const stripeEvt = (type: string, object: Record<string, unknown>) => ({ id: `evt_test_${++evtSeq}`, type, created: Math.floor(Date.now() / 1000) - 600 + evtSeq, data: { object } });
+const stripeEvt = (type: string, object: Record<string, unknown>, created?: number) => ({ id: `evt_test_${++evtSeq}`, type, created: created ?? Math.floor(Date.now() / 1000) - 600 + evtSeq, data: { object } });
 
 beforeAll(async () => {
   pool = new pg.Pool({ connectionString: DB_URL, connectionTimeoutMillis: 3000 });
@@ -408,6 +408,58 @@ describe("receiving from Stripe", () => {
     if (!dbAvailable) return;
     const r = await stripePost(source, stripeEvt("charge.refunded", { customer: "cus_100" }));
     expect(r).toEqual({ status: 200, body: { ok: true, ignored: true } });
+  });
+
+  it("an event that arrives late cannot overwrite a newer payment status or plan, but is still recorded", async () => {
+    if (!dbAvailable) return;
+    const T = Math.floor(Date.now() / 1000) - 1000;
+    const who = { app_user: "order-user" };
+    const sub = (status: string, plan: string) => ({ customer: "cus_order", status, metadata: who, items: { data: [{ price: { id: "p", nickname: plan } }] } });
+    await stripePost(source, stripeEvt("customer.subscription.updated", sub("active", "Growth"), T + 100));
+    expect(await contactBy(tenantA, "order-user")).toMatchObject({ payment_status: "paid", properties: { plan: "Growth", stripe_status_at: T + 100 } });
+
+    // A failure from BEFORE that, delivered late (an outage, a retry): it must not make them past due or change the plan.
+    const late = await stripePost(source, stripeEvt("customer.subscription.updated", sub("past_due", "Starter"), T + 50));
+    expect(late.status).toBe(200);
+    expect(await contactBy(tenantA, "order-user")).toMatchObject({ payment_status: "paid", properties: { plan: "Growth", stripe_status_at: T + 100 } });
+    const events = (await eventsOf(tenantA, "order-user")).map((e) => e.event_name);
+    expect(events).toEqual(["subscription_updated", "subscription_updated"]); // both recorded
+    const last = (await logOf(source)).at(-1)!;
+    expect(last.status).toBe("processed");
+    expect(last.summary).toMatch(/older than the current billing status/);
+
+    // A genuinely newer one applies, and so does one from the same second.
+    await stripePost(source, stripeEvt("invoice.payment_failed", { customer: "cus_order", attempt_count: 1, amount_due: 5, currency: "usd" }, T + 200));
+    expect((await contactBy(tenantA, "order-user"))!.payment_status).toBe("past_due");
+    await stripePost(source, stripeEvt("customer.subscription.updated", sub("active", "Growth"), T + 200));
+    expect((await contactBy(tenantA, "order-user"))!.payment_status).toBe("paid");
+  });
+
+  it("two different events for one occurrence are recorded once; real repeats (attempts, updates) all count", async () => {
+    if (!dbAvailable) return;
+    const base = { customer: "cus_dups", customer_email: "dups@example.com" };
+    // The same invoice paid: Stripe sends two distinct events.
+    await stripePost(source, stripeEvt("invoice.paid", { id: "in_dup", ...base, amount_paid: 100, currency: "usd" }));
+    await stripePost(source, stripeEvt("invoice.paid", { id: "in_dup", ...base, amount_paid: 100, currency: "usd" }));
+    // Two real failed attempts on one invoice, plus a duplicate of the second.
+    await stripePost(source, stripeEvt("invoice.payment_failed", { id: "in_dup2", ...base, attempt_count: 1, amount_due: 5 }));
+    await stripePost(source, stripeEvt("invoice.payment_failed", { id: "in_dup2", ...base, attempt_count: 2, amount_due: 5 }));
+    await stripePost(source, stripeEvt("invoice.payment_failed", { id: "in_dup2", ...base, attempt_count: 2, amount_due: 5 }));
+    // Several real updates to one subscription.
+    for (let i = 0; i < 3; i++) await stripePost(source, stripeEvt("customer.subscription.updated", { id: "sub_many", ...base, status: "active" }));
+    const names = (await eventsOf(tenantA, "dups@example.com")).map((e) => e.event_name);
+    expect(names.filter((n) => n === "payment_succeeded")).toHaveLength(1);
+    expect(names.filter((n) => n === "payment_failed")).toHaveLength(2);
+    expect(names.filter((n) => n === "subscription_updated")).toHaveLength(3);
+  });
+
+  it("a thin event is acknowledged, not rejected, and the log says to choose Snapshot", async () => {
+    if (!dbAvailable) return;
+    const thin = { id: "evt_thin_1", object: "v2.core.event", type: "v1.billing.meter.error_report_triggered", related_object: { id: "mtr_1", type: "billing.meter" } };
+    expect(await stripePost(source, thin)).toEqual({ status: 200, body: { ok: true, ignored: true } });
+    const last = (await logOf(source)).at(-1)!;
+    expect(last.status).toBe("ignored");
+    expect(last.summary).toMatch(/Snapshot/);
   });
 
   it("a correctly signed body that is not JSON is a 400", async () => {

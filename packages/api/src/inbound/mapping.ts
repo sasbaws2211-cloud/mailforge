@@ -26,6 +26,11 @@ export interface Actor {
 
 export interface Mapped {
   actor: Actor;
+  /**
+   * When the sender says this happened (Stripe's event time, in seconds). Used to stop an old event that arrives late
+   * from overwriting a newer payment status: Stripe does not deliver events in order.
+   */
+  statusAt?: number;
   /** Traits to set on the person (an identify). May be empty. */
   traits: Record<string, TraitValue>;
   /** The event to record (a track), if any. */
@@ -210,6 +215,33 @@ function planOf(sub: Record<string, unknown>): string | undefined {
   return price ? (str(price.nickname) ?? str(price.lookup_key) ?? str(price.id)) : undefined;
 }
 
+/**
+ * The key an event is recorded under, so the same thing arriving twice is recorded once. Stripe sometimes sends two
+ * different events for one occurrence, so for things that happen once per object (a checkout, a subscription starting or
+ * ending, an invoice being paid) the key is the object, not the event. An invoice can fail several times, once per
+ * attempt. A subscription can change many times, so for `updated` only the event id identifies a repeat.
+ */
+export function stripeMessageId(type: string, eventId: string | undefined, obj: Record<string, unknown>): string | undefined {
+  const objectId = str(obj.id);
+  const once = type === "checkout.session.completed" || type === "customer.subscription.created" || type === "customer.subscription.deleted" || type === "invoice.paid";
+  if (objectId && once) return `stripe:${type}:${objectId}`;
+  const attempt = num(obj.attempt_count);
+  if (objectId && type === "invoice.payment_failed" && attempt !== undefined) return `stripe:${type}:${objectId}:${attempt}`;
+  return eventId ? `stripe:${eventId}` : undefined;
+}
+
+/**
+ * Stripe's "thin" events carry ids, not the object, and Loomail needs the object. They come from an event destination
+ * set to the Thin payload. Recognised so they can be acknowledged (Stripe stops retrying) with a message that says what
+ * to change.
+ */
+function isThinEvent(evt: Record<string, unknown>): boolean {
+  return evt.object === "v2.core.event" || "related_object" in evt || (typeof evt.type === "string" && /^v[12]\./.test(evt.type));
+}
+
+export const STRIPE_THIN_MESSAGE =
+  "This is a Stripe thin event, which carries no details. In Stripe, edit the destination and set its payload to Snapshot.";
+
 const STRIPE_EVENT_NAMES: Record<string, string> = {
   "customer.subscription.created": "subscription_started",
   "customer.subscription.updated": "subscription_updated",
@@ -227,6 +259,7 @@ export const STRIPE_EVENT_TYPES = [
 ] as const;
 
 export function mapStripeEvent(evt: unknown, config: StripeConfig): MapResult {
+  if (isObj(evt) && isThinEvent(evt)) return { ok: false, status: "ignored", reason: STRIPE_THIN_MESSAGE };
   if (!isObj(evt) || typeof evt.type !== "string" || !isObj(evt.data) || !isObj(evt.data.object)) {
     return { ok: false, status: "rejected", reason: "That is not a Stripe event." };
   }
@@ -249,10 +282,12 @@ export function mapStripeEvent(evt: unknown, config: StripeConfig): MapResult {
   if (customerId) traits.stripe_customer_id = customerId;
 
   const created = num(evt.created);
+  const messageId = stripeMessageId(type, str(evt.id), obj);
   const base = {
     ...(created !== undefined ? { timestamp: new Date(created * 1000).toISOString() } : {}),
-    ...(str(evt.id) ? { messageId: `stripe:${evt.id}` } : {}),
+    ...(messageId ? { messageId } : {}),
   };
+  const statusAt = created;
 
   if (type === "checkout.session.completed") {
     return {
@@ -280,6 +315,7 @@ export function mapStripeEvent(evt: unknown, config: StripeConfig): MapResult {
       mapped: {
         actor,
         traits,
+        statusAt,
         track: {
           event: STRIPE_EVENT_NAMES[type]!,
           properties: { status: str(obj.status), plan, cancel_at_period_end: typeof obj.cancel_at_period_end === "boolean" ? obj.cancel_at_period_end : undefined },
@@ -293,7 +329,7 @@ export function mapStripeEvent(evt: unknown, config: StripeConfig): MapResult {
     const paid = num(obj.amount_paid);
     // A zero-amount invoice (a free trial starting) is not a payment, so it does not make the person "paid".
     if (paid !== undefined && paid > 0) traits.payment_status = "paid";
-    return { ok: true, mapped: { actor, traits, track: { event: "payment_succeeded", properties: { amount_paid: paid, currency: str(obj.currency) }, ...base } } };
+    return { ok: true, mapped: { actor, traits, statusAt, track: { event: "payment_succeeded", properties: { amount_paid: paid, currency: str(obj.currency) }, ...base } } };
   }
 
   // invoice.payment_failed
@@ -303,6 +339,7 @@ export function mapStripeEvent(evt: unknown, config: StripeConfig): MapResult {
     mapped: {
       actor,
       traits,
+      statusAt,
       track: { event: "payment_failed", properties: { amount_due: num(obj.amount_due), currency: str(obj.currency), attempt_count: num(obj.attempt_count) }, ...base },
     },
   };

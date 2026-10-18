@@ -49,6 +49,25 @@ export async function applyMapped(db: Db, enqueue: Enqueue, tenantId: string, so
   const context = { source: `inbound:${sourceId}` };
   const traits: Record<string, string | number | boolean> = { ...mapped.traits };
 
+  // Stripe does not deliver events in order. When this one would set the payment status or plan, only let it if no newer
+  // event has already set them: the time of the latest one applied is kept on the person as stripe_status_at.
+  let staleNote = "";
+  if (mapped.statusAt !== undefined && ("payment_status" in traits || "plan" in traits)) {
+    const row = (
+      await db.execute<{ at: string | null }>(sql`
+        SELECT properties ->> 'stripe_status_at' AS at FROM contacts
+        WHERE tenant_id = ${tenantId}::uuid AND external_id = ${userId} LIMIT 1`)
+    ).rows[0];
+    const current = row?.at != null ? Number(row.at) : null;
+    if (current !== null && Number.isFinite(current) && current > mapped.statusAt) {
+      delete traits.payment_status;
+      delete traits.plan;
+      staleNote = " (older than the current billing status, so the status was left as it is)";
+    } else {
+      traits.stripe_status_at = mapped.statusAt;
+    }
+  }
+
   // Give a person their email if they have none; never overwrite the one they have with whatever the sender knows.
   if (mapped.actor.email) {
     const existing = (await db.select({ email: contacts.email }).from(contacts).where(and(eq(contacts.tenantId, tenantId), eq(contacts.externalId, userId))).limit(1))[0];
@@ -76,5 +95,5 @@ export async function applyMapped(db: Db, enqueue: Enqueue, tenantId: string, so
     );
     did.push(deduplicated ? `event ${mapped.track.event} (already recorded)` : `event ${mapped.track.event}`);
   }
-  return { applied: true, summary: `${did.join(" and ")} for ${userId}` };
+  return { applied: true, summary: `${did.join(" and ")} for ${userId}${staleNote}` };
 }

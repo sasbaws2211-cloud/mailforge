@@ -306,8 +306,11 @@ the address cannot be used to find out which sources exist); `402` when your pla
 
 ### Stripe
 
-Choose **Stripe**, then in Stripe (Developers, Webhooks) add an endpoint at the address shown, select these events, and paste
-the endpoint's signing secret (`whsec_...`) into Loomail:
+Choose **Stripe**, then in Stripe (Developers, Webhooks) create an event destination of type **Webhook endpoint** at the address
+shown. Set its payload to **Snapshot**, not Thin: thin events carry only ids, and Loomail needs the details. A thin event is
+acknowledged (so Stripe stops retrying) and noted in the log with this instruction. Select these events, and paste the
+endpoint's signing secret (`whsec_...`) into Loomail. Test mode and live mode have different secrets, so add one source for
+each mode you use.
 
 | Stripe event | What Loomail records |
 |---|---|
@@ -327,6 +330,12 @@ lookup key, else its id. Other event types are acknowledged and ignored.
 carries this Stripe customer id, a person with this email, and otherwise creates one keyed by the email. Subscription events carry
 no email, which is why the customer id is remembered the first time Loomail sees it (usually at checkout). Events Loomail cannot
 match to anyone are acknowledged and noted in the log, not retried. A person's own email is never overwritten.
+
+**Order and repeats.** Stripe does not deliver events in order, and sends some events more than once (occasionally as two
+different events for one occurrence). So: each event is recorded once, and for things that happen once per object (a
+checkout, a subscription starting or ending, an invoice being paid) once per object; and an event that arrives late cannot
+overwrite a newer payment status or plan. Loomail keeps the time of the latest billing event it applied on the person
+(the `stripe_status_at` trait) and ignores an older one, while still recording the event itself.
 
 Calls are verified with Stripe's signature (`Stripe-Signature`, HMAC-SHA256 over the exact body, five-minute window) before
 anything is read. Each Stripe event is recorded once, whatever number of times Stripe sends it. The dashboard stores the signing

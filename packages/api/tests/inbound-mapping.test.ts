@@ -9,6 +9,8 @@ import {
   mapStripeEvent,
   paymentStatusFromSubscription,
   stripeConfigSchema,
+  stripeMessageId,
+  STRIPE_THIN_MESSAGE,
   verifyStripeSignature,
   STRIPE_TOLERANCE_SECONDS,
 } from "../src/inbound/mapping.js";
@@ -231,6 +233,51 @@ describe("mapStripeEvent", () => {
 
   it("the message id is the Stripe event id, so a replay is recognised", () => {
     expect((mapStripeEvent(evt("invoice.paid", { customer: "c", amount_paid: 1 }), stripeCfg) as any).mapped.track.messageId).toBe("stripe:evt_123");
+  });
+
+  it("keys once-per-object events by the object, so two different events for one occurrence are one", () => {
+    const key = (type: string, object: Record<string, unknown>, id = "evt_x") => (mapStripeEvent(evt(type, object, { id }), stripeCfg) as any).mapped.track.messageId;
+    expect(key("invoice.paid", { id: "in_1", customer: "c", amount_paid: 5 }, "evt_a")).toBe("stripe:invoice.paid:in_1");
+    expect(key("invoice.paid", { id: "in_1", customer: "c", amount_paid: 5 }, "evt_b")).toBe("stripe:invoice.paid:in_1");
+    expect(key("checkout.session.completed", { id: "cs_1" })).toBe("stripe:checkout.session.completed:cs_1");
+    expect(key("customer.subscription.created", sub("active", { id: "sub_1" }))).toBe("stripe:customer.subscription.created:sub_1");
+    expect(key("customer.subscription.deleted", sub("canceled", { id: "sub_1" }))).toBe("stripe:customer.subscription.deleted:sub_1");
+  });
+
+  it("a failed invoice is keyed per attempt; a subscription update only by its own event id", () => {
+    const failed = (attempt: number, id: string) => (mapStripeEvent(evt("invoice.payment_failed", { id: "in_2", customer: "c", attempt_count: attempt }, { id }), stripeCfg) as any).mapped.track.messageId;
+    expect(failed(1, "evt_a")).toBe("stripe:invoice.payment_failed:in_2:1");
+    expect(failed(1, "evt_b")).toBe("stripe:invoice.payment_failed:in_2:1"); // a duplicate of attempt 1
+    expect(failed(2, "evt_c")).toBe("stripe:invoice.payment_failed:in_2:2"); // a genuine second attempt
+    const updated = (id: string) => (mapStripeEvent(evt("customer.subscription.updated", sub("active", { id: "sub_1" }), { id }), stripeCfg) as any).mapped.track.messageId;
+    expect(updated("evt_u1")).toBe("stripe:evt_u1");
+    expect(updated("evt_u2")).toBe("stripe:evt_u2"); // many real updates to one subscription must all count
+  });
+
+  it("falls back to the event id when the object has no id or attempt count", () => {
+    expect(stripeMessageId("invoice.paid", "evt_1", {})).toBe("stripe:evt_1");
+    expect(stripeMessageId("invoice.payment_failed", "evt_2", { id: "in_1" })).toBe("stripe:evt_2");
+    expect(stripeMessageId("invoice.paid", undefined, {})).toBeUndefined();
+  });
+
+  it("carries the event time so a late event cannot overwrite a newer status", () => {
+    for (const [type, obj] of [
+      ["customer.subscription.updated", sub("active")],
+      ["invoice.paid", { customer: "c", amount_paid: 5 }],
+      ["invoice.payment_failed", { customer: "c", attempt_count: 1 }],
+    ] as const) {
+      expect((mapStripeEvent(evt(type, obj), stripeCfg) as any).mapped.statusAt, type).toBe(1_800_000_000);
+    }
+  });
+
+  it("recognises a thin event and says what to change; it is acknowledged, not rejected", () => {
+    const thin = [
+      { id: "evt_1", object: "v2.core.event", type: "v1.billing.meter.error_report_triggered", related_object: { id: "mtr_1", type: "billing.meter" } },
+      { id: "evt_2", type: "v1.something", created: "2026-10-18T00:00:00Z" },
+      { id: "evt_3", type: "invoice.paid", related_object: { id: "in_1" } },
+    ];
+    for (const t of thin) expect(mapStripeEvent(t, stripeCfg), JSON.stringify(t)).toEqual({ ok: false, status: "ignored", reason: STRIPE_THIN_MESSAGE });
+    expect(STRIPE_THIN_MESSAGE).toMatch(/Snapshot/);
   });
 
   it("ignores event types it does not use; rejects what is not an event", () => {
