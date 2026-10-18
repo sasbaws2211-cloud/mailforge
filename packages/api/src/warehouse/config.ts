@@ -44,12 +44,9 @@ const common = {
   send_properties: z.boolean().default(true),
 };
 
-const postgres = z.object({
-  warehouse: z.literal("postgres"),
+/** What every host-and-port database (Postgres, MySQL, SQL Server) shares: where it is, how to encrypt, and the SSH tunnel. */
+const networkDb = {
   host: z.string().trim().min(1).max(253),
-  port: z.number().int().min(1).max(65535).default(5432),
-  database: z.string().trim().min(1).max(63),
-  user: z.string().trim().min(1).max(63),
   ssl_mode: z.enum(["verify", "no-verify", "disable"]).default("verify"),
   /**
    * Reach the database through an SSH server (a bastion). `host` and `port` are then the database's address as the SSH
@@ -74,8 +71,44 @@ const postgres = z.object({
     .max(400_000)
     .refine((v) => /-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(v), "Paste the CA certificate as PEM text, including the BEGIN CERTIFICATE and END CERTIFICATE lines.")
     .optional(),
+};
+
+const postgres = z.object({
+  warehouse: z.literal("postgres"),
+  ...networkDb,
+  port: z.number().int().min(1).max(65535).default(5432),
+  database: z.string().trim().min(1).max(63),
+  user: z.string().trim().min(1).max(63),
   ...common,
 });
+
+const mysql = z.object({
+  warehouse: z.literal("mysql"),
+  ...networkDb,
+  port: z.number().int().min(1).max(65535).default(3306),
+  database: z.string().trim().min(1).max(64),
+  user: z.string().trim().min(1).max(80),
+  ...common,
+});
+
+const mssql = z.object({
+  warehouse: z.literal("mssql"),
+  ...networkDb,
+  port: z.number().int().min(1).max(65535).default(1433),
+  database: z.string().trim().min(1).max(128),
+  user: z.string().trim().min(1).max(128),
+  ...common,
+});
+
+/** Warehouses that connect to a host and port with a password, and so can use an SSH tunnel. */
+export const NETWORK_DATABASES = ["postgres", "mysql", "mssql"] as const;
+export function isNetworkDatabase(w: string): w is (typeof NETWORK_DATABASES)[number] {
+  return (NETWORK_DATABASES as readonly string[]).includes(w);
+}
+/** Narrow a parsed config to the password-based databases. */
+export function isNetworkConfig(c: WarehouseConfig): c is Extract<WarehouseConfig, { warehouse: (typeof NETWORK_DATABASES)[number] }> {
+  return isNetworkDatabase(c.warehouse);
+}
 
 const snowflake = z.object({
   warehouse: z.literal("snowflake"),
@@ -98,7 +131,7 @@ const bigquery = z.object({
 });
 
 export const warehouseConfigSchema = z
-  .discriminatedUnion("warehouse", [postgres.strict(), snowflake.strict(), bigquery.strict()])
+  .discriminatedUnion("warehouse", [postgres.strict(), mysql.strict(), mssql.strict(), snowflake.strict(), bigquery.strict()])
   .superRefine((c, ctx) => {
     if (!c.user_id_column && !c.email_column) {
       ctx.addIssue({ code: "custom", path: ["user_id_column"], message: "Say which column identifies the person: a user id column or an email column." });
@@ -111,15 +144,19 @@ export const warehouseConfigSchema = z
 export type WarehouseConfig = z.infer<typeof warehouseConfigSchema>;
 
 /** The credential each warehouse needs, as the dashboard sends it. */
+const passwordSecret = z
+  .object({
+    password: z.string().min(1).max(500),
+    /** The private key for the SSH tunnel, when the settings use one. */
+    ssh_private_key: z.string().trim().min(100).max(10_000).refine((k) => /PRIVATE KEY/.test(k), "Paste the whole SSH private key, including the BEGIN and END lines.").optional(),
+    ssh_passphrase: z.string().max(500).optional(),
+  })
+  .strict();
+
 export const warehouseSecretSchema = {
-  postgres: z
-    .object({
-      password: z.string().min(1).max(500),
-      /** The private key for the SSH tunnel, when the settings use one. */
-      ssh_private_key: z.string().trim().min(100).max(10_000).refine((k) => /PRIVATE KEY/.test(k), "Paste the whole SSH private key, including the BEGIN and END lines.").optional(),
-      ssh_passphrase: z.string().max(500).optional(),
-    })
-    .strict(),
+  postgres: passwordSecret,
+  mysql: passwordSecret,
+  mssql: passwordSecret,
   snowflake: z
     .object({
       private_key: z.string().trim().min(100).max(10_000).refine((k) => /PRIVATE KEY/.test(k), "Paste the whole private key, including the BEGIN and END lines."),
@@ -141,8 +178,8 @@ export const warehouseSecretSchema = {
     }),
 } as const;
 
-/** What may be changed without repeating the rest of the credential: Postgres fields are merged over the saved ones. */
-export const postgresSecretPatchSchema = warehouseSecretSchema.postgres.partial();
+/** What may be changed without repeating the rest of the credential: password-database fields are merged over the saved ones. */
+export const passwordSecretPatchSchema = passwordSecret.partial();
 
 export type WarehouseSecret = { password: string; ssh_private_key?: string; ssh_passphrase?: string } | { private_key: string; passphrase?: string } | { client_email: string; private_key: string };
 
@@ -150,7 +187,13 @@ export type WarehouseSecret = { password: string; ssh_private_key?: string; ssh_
 export function toConnection(config: WarehouseConfig, secret: WarehouseSecret): WarehouseConnection {
   switch (config.warehouse) {
     case "postgres":
-      return { kind: "postgres", config: { host: config.host, port: config.port, database: config.database, user: config.user, ssl_mode: config.ssl_mode, ...(config.ssl_ca ? { ssl_ca: config.ssl_ca } : {}), ...(config.ssh_tunnel ? { ssh: config.ssh_tunnel } : {}) }, secret: secret as { password: string; ssh_private_key?: string; ssh_passphrase?: string } };
+    case "mysql":
+    case "mssql":
+      return {
+        kind: config.warehouse,
+        config: { host: config.host, port: config.port, database: config.database, user: config.user, ssl_mode: config.ssl_mode, ...(config.ssl_ca ? { ssl_ca: config.ssl_ca } : {}), ...(config.ssh_tunnel ? { ssh: config.ssh_tunnel } : {}) },
+        secret: secret as { password: string; ssh_private_key?: string; ssh_passphrase?: string },
+      };
     case "snowflake":
       return {
         kind: "snowflake",

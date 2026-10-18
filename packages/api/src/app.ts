@@ -51,6 +51,10 @@ import planRoutes from "./routes/plan.js";
 import onboardingRoutes from "./routes/onboarding.js";
 import billingRoutes from "./routes/billing.js";
 import adminRoutes from "./routes/admin.js";
+import supportRoutes from "./routes/support.js";
+import assistantRoutes from "./routes/assistant.js";
+import type { LlmProvider } from "@loomail/brain-oss";
+import type { AssistantLimits } from "./assistant/limits.js";
 import accountRoutes from "./routes/account.js";
 import type { PlatformTransport } from "./platform-mailer.js";
 import billingPublicRoutes from "./routes/billing-public.js";
@@ -127,10 +131,16 @@ export interface BuildAppOptions {
    * When absent (tests without pg-boss), routes that require enqueue return 503.
    */
   enqueue?: (queue: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<string | null>;
-  /** Tests only: replaces the real Postgres / Snowflake / BigQuery clients behind warehouse sources. */
+  /** Tests only: replaces the real Postgres / MySQL / SQL Server / Snowflake / BigQuery clients behind warehouse sources. */
   warehouseClientFor?: WarehouseClientFactory;
   /** Tests only: raise the rate limits on the warehouse "test query" and "sync now" routes. */
   warehouseLimitsPerMinute?: { test?: number; sync?: number };
+  /** Tests only: a stand-in for the operator's AI provider behind the in-app assistant. */
+  assistantProvider?: LlmProvider;
+  /** Tests only: override the assistant's limits, which otherwise come from the environment. */
+  assistantLimits?: Partial<AssistantLimits>;
+  /** Tests only: how long the assistant waits for the AI provider. */
+  assistantTimeoutMs?: number;
   /**
    * When true, register @fastify/static to serve the dashboard SPA from dist/
    * and add a SPA catch-all fallback for unknown paths.
@@ -340,13 +350,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         }
         // A suspended workspace is switched off. Platform admins keep access to
         // /v1/admin so they can still reach the console from a suspended account.
-        if (request.tenant.suspended && !request.url.startsWith("/v1/admin")) {
+        // /v1/support stays open for them too: a suspended workspace most needs a way to ask why.
+        if (request.tenant.suspended && !request.url.startsWith("/v1/admin") && !request.url.startsWith("/v1/support")) {
           reply.status(403);
           reply.send({ error: "This workspace has been suspended.", code: "workspace_suspended" });
           return;
         }
         // Scheduled for deletion: only the account pages (export, cancel) and the admin console work.
-        if (request.tenant.pendingDeletion && !request.url.startsWith("/v1/admin") && !request.url.startsWith("/v1/account")) {
+        if (request.tenant.pendingDeletion && !request.url.startsWith("/v1/admin") && !request.url.startsWith("/v1/account") && !request.url.startsWith("/v1/support")) {
           reply.status(403);
           reply.send({ error: "This workspace is scheduled for deletion.", code: "workspace_pending_deletion" });
         }
@@ -401,6 +412,16 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         await v1.register(adminRoutes, { prefix: "/admin", billing: billingRuntime, dashboardUrl, noticeTransports: opts.noticeTransports });
       }
 
+      // support: a workspace's requests to the operator (answered in the admin console)
+      if (opts.db) {
+        await v1.register(supportRoutes, { prefix: "/support", dashboardUrl, noticeTransports: opts.noticeTransports });
+      }
+
+      // assistant: the read-only in-app help assistant (the operator's AI provider; a trial workspace has a daily number of questions)
+      if (opts.db) {
+        await v1.register(assistantRoutes, { prefix: "/assistant", ...(opts.assistantProvider ? { provider: opts.assistantProvider } : {}), ...(opts.assistantLimits ? { limits: opts.assistantLimits } : {}), ...(opts.assistantTimeoutMs ? { timeoutMs: opts.assistantTimeoutMs } : {}) });
+      }
+
       // analytics: lifecycle distribution/movement + sending performance
       if (opts.db) {
         await v1.register(analyticsRoutes, { prefix: "/analytics" });
@@ -445,7 +466,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       // inbound-sources: places other systems (Stripe, any JSON sender) send events to
       if (opts.db) {
         await v1.register(inboundSourcesRoutes, { prefix: "/inbound-sources" });
-        // warehouse-sources: Loomail reads rows from the customer's Postgres, Snowflake or BigQuery on a schedule
+        // warehouse-sources: Loomail reads rows from the customer's Postgres, MySQL, SQL Server, Snowflake or BigQuery on a schedule
         await v1.register(warehouseSourcesRoutes, { prefix: "/warehouse-sources", ...(opts.warehouseClientFor ? { clientFor: opts.warehouseClientFor } : {}), ...(opts.warehouseLimitsPerMinute ? { limitsPerMinute: opts.warehouseLimitsPerMinute } : {}) });
       }
 

@@ -7,6 +7,7 @@
 import { BrandLockup } from "../components/brand-lockup.js";
 import { Button } from "../components/ui/button.js";
 import { useLogout } from "../auth.js";
+import { SupportPanel } from "../components/support-panel.js";
 
 export default function SuspendedPage() {
   const logout = useLogout();
@@ -25,6 +26,7 @@ export default function SuspendedPage() {
       >
         Sign out
       </Button>
+      <SupportPanel initialSubject="My workspace is suspended" />
     </main>
   );
 }

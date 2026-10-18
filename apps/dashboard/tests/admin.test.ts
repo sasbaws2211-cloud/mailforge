@@ -30,6 +30,7 @@ function ws(over: Partial<AdminWorkspace> = {}): AdminWorkspace {
     deletion_scheduled_at: null,
     deletion_requested_by: null,
     ai_allowance_override: null,
+    warehouse_access: false,
     contacts: 0,
     emails_this_month: 0,
     members: 1,

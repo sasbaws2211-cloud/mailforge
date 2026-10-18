@@ -13,6 +13,7 @@
     "test": "turbo test",
     "typecheck": "turbo typecheck",
     "lint": "turbo lint",
+    "assistant:docs": "pnpm --filter @loomail/api assistant:docs",
     "db:generate": "drizzle-kit generate --config drizzle/drizzle.config.ts",
     "db:migrate": "drizzle-kit migrate --config drizzle/drizzle.config.ts"
   },

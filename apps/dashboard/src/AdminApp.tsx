@@ -19,6 +19,8 @@ import { StandaloneAdminLayout } from "./pages/admin/AdminLayout.js";
 import AdminPage from "./pages/admin/AdminPage.js";
 import AdminAuditPage from "./pages/admin/AdminAuditPage.js";
 import AdminAiPage from "./pages/admin/AdminAiPage.js";
+import AdminSupportPage from "./pages/admin/AdminSupportPage.js";
+import AdminSupportTicketPage from "./pages/admin/AdminSupportTicketPage.js";
 import AdminSecurityPage from "./pages/admin/AdminSecurityPage.js";
 import AdminTenantPage from "./pages/admin/AdminTenantPage.js";
 import NotFoundPage from "./pages/NotFoundPage.js";
@@ -45,6 +47,8 @@ export default function AdminApp() {
         <Route index element={<AdminPage />} />
         <Route path="ai" element={<AdminAiPage />} />
         <Route path="audit" element={<AdminAuditPage />} />
+        <Route path="support" element={<AdminSupportPage />} />
+        <Route path="support/:id" element={<AdminSupportTicketPage />} />
         <Route path="security" element={<AdminSecurityPage />} />
         <Route path="tenants/:id" element={<AdminTenantPage />} />
         <Route path="*" element={<NotFoundPage />} />

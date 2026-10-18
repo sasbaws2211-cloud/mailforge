@@ -10,9 +10,10 @@
 import pg from "pg";
 import { isIP } from "node:net";
 import tls from "node:tls";
-import { resolveWarehouseHost, warehouseHostPolicyFromEnv, type WarehouseHostPolicy } from "./guard.js";
+import { warehouseHostPolicyFromEnv, type WarehouseHostPolicy } from "./guard.js";
 import { compileQuery } from "./query.js";
-import { openTunnel, type SshTunnelConfig, type Tunnel } from "./ssh-tunnel.js";
+import { reachDatabase } from "./reach.js";
+import type { SshTunnelConfig } from "./ssh-tunnel.js";
 import { WarehouseError, type CellValue, type WarehouseClient, type WarehouseQuery, type WarehouseRows } from "./types.js";
 
 export interface PostgresConfig {
@@ -78,28 +79,7 @@ export function createPostgresClient(
       if (!compiled.ok) throw new WarehouseError(compiled.error);
 
       const policy = opts.policy ?? warehouseHostPolicyFromEnv();
-      // Where the driver connects, and the name the server's certificate must match: always the host the customer typed.
-      let driverHost: string;
-      let driverPort = config.port;
-      const identity = config.host;
-      let tunnel: Tunnel | null = null;
-
-      if (config.ssh) {
-        if (!secret.ssh_private_key) throw new WarehouseError("The SSH tunnel needs its private key.");
-        // The guard applies to the SSH server (inside openTunnel), not to the database, which the SSH server resolves.
-        tunnel = await openTunnel(
-          config.ssh,
-          { private_key: secret.ssh_private_key, ...(secret.ssh_passphrase ? { passphrase: secret.ssh_passphrase } : {}) },
-          { host: config.host, port: config.port },
-          { policy, timeoutMs: Math.min(q.timeoutMs, 15_000) },
-        );
-        driverHost = "127.0.0.1";
-        driverPort = tunnel.localPort;
-      } else {
-        const target = await resolveWarehouseHost(config.host, policy);
-        if (!target.ok) throw new WarehouseError(target.error);
-        driverHost = target.address.replace(/^\[|\]$/g, "");
-      }
+      const { host: driverHost, port: driverPort, identity, tunnel } = await reachDatabase(config, secret, policy, q.timeoutMs);
 
       const client = new pg.Client({
         host: driverHost,

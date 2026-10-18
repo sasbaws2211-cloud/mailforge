@@ -50,7 +50,21 @@ describe("warehouseConfigSchema", () => {
     expect(parse({ ...rest, warehouse: "snowflake", account: "a-b", user: "U", ssl_ca: pem }).success).toBe(false);
   });
 
-  it("takes an SSH tunnel for Postgres only, with a pinned host key", () => {
+  it("takes MySQL and SQL Server with their own default ports, and the same tunnel and CA settings", () => {
+    const FP = "SHA256:" + "A".repeat(43);
+    const tunnel = { host: "bastion.example.com", user: "tunnel", host_fingerprint: FP };
+    for (const [warehouse, port] of [["mysql", 3306], ["mssql", 1433]] as const) {
+      const r = parse({ ...base, warehouse, ssh_tunnel: tunnel });
+      expect(r.success, warehouse).toBe(true);
+      if (r.success) expect(r.data).toMatchObject({ warehouse, port, ssl_mode: "verify", ssh_tunnel: { port: 22 } });
+      expect(parse({ ...base, warehouse, ssh_tunnel: { ...tunnel, host_fingerprint: "SHA256:x" } }).success).toBe(false);
+      expect(parse({ ...base, warehouse, account: "nope" }).success).toBe(false); // another warehouse's field
+      expect(warehouseSecretSchema[warehouse].safeParse({ password: "p", ssh_private_key: "x".repeat(120) + " PRIVATE KEY" }).success).toBe(true);
+      expect(warehouseSecretSchema[warehouse].safeParse({ password: "p", ssh_private_key: "not a key".repeat(20) }).success).toBe(false);
+    }
+  });
+
+  it("takes an SSH tunnel for Postgres, MySQL and SQL Server only, with a pinned host key", () => {
     const FP = "SHA256:" + "A".repeat(43);
     const tunnel = { host: "bastion.example.com", user: "tunnel", host_fingerprint: FP };
     const ok = parse({ ...base, ssh_tunnel: tunnel });

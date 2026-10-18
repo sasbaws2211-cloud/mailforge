@@ -1,8 +1,10 @@
 # Data warehouse sources
 
-If your customer data already lives in **Postgres**, **Snowflake** or **BigQuery**, Loomail can read it on a schedule and turn each row into traits and events. Flows and segments then work on that data with no code on your side.
+If your customer data already lives in **Postgres**, **MySQL**, **SQL Server**, **Snowflake** or **BigQuery**, Loomail can read it on a schedule and turn each row into traits and events. Flows and segments then work on that data with no code on your side.
 
-Find it on the **Integrate** page, under **Data warehouse**. Redshift, Supabase, Neon, RDS, Aurora and AlloyDB all speak the Postgres protocol, so use the Postgres connector for them.
+**Warehouse sources are switched on by the Loomail team, not automatically.** A warehouse can mean a lot of data, so on **Integrate**, under **Data warehouse**, click **Request access** and tell us which database, roughly how much data, and how often it should refresh. We reply by email and set it up with you. Once it is on, the same card lets you connect a warehouse.
+
+Find it on the **Integrate** page, under **Data warehouse**. Redshift, Supabase, Neon, RDS, Aurora and AlloyDB all speak the Postgres protocol, so use the Postgres connector for them. MariaDB, Aurora MySQL, PlanetScale and TiDB speak the MySQL protocol, and Azure SQL Database speaks SQL Server's, so use those connectors for them.
 
 This is the opposite of [inbound webhooks](INGESTION.md): there, another system pushes to Loomail; here, Loomail pulls.
 
@@ -26,6 +28,8 @@ SELECT * FROM (<your query>) AS loomail_q ORDER BY <position column> ASC LIMIT <
 | Warehouse | Example |
 |---|---|
 | Postgres | `WHERE updated_at >= :cursor::timestamptz` |
+| MySQL | `WHERE updated_at >= CAST(:cursor AS DATETIME)` |
+| SQL Server | `WHERE updated_at >= CAST(:cursor AS DATETIME2)` |
 | Snowflake | `WHERE updated_at >= TO_TIMESTAMP_TZ(:cursor)` |
 | BigQuery | `WHERE updated_at >= TIMESTAMP(:cursor)` |
 
@@ -35,10 +39,11 @@ Use `>=`, not `>`. Rows that share the last position value would otherwise be lo
 
 - One statement, starting with `SELECT` or `WITH`. A trailing semicolon is fine.
 - No `$1`, `?` or `@name` parameters, and no dollar-quoted strings. `:cursor` is the only parameter.
+- **SQL Server:** a query that starts with `WITH` (a common table expression) is refused, because SQL Server cannot nest one inside the wrapper Loomail adds for ordering and the row cap. Put the `WITH` part in a view, or write it as a subquery in `FROM`. **MySQL:** `/*! ... */` comments are refused, since MySQL runs their contents as SQL.
 - The **position column** must be in the query's output, named as a plain column (letters, numbers, underscores). Name it with `AS` if needed.
 - Column names in your settings are matched without regard to case. Snowflake upper-cases unquoted names; that is fine.
 
-This check is a guard rail, not the security boundary. **The boundary is the credential**: connect with a user that can only `SELECT`. Postgres sources additionally run inside a `READ ONLY` transaction with a statement timeout.
+This check is a guard rail, not the security boundary. **The boundary is the credential**: connect with a user that can only `SELECT`. Postgres and MySQL sources additionally run inside a `READ ONLY` transaction with a statement time limit. SQL Server has no read-only transaction, so for SQL Server the login is the whole guarantee: give it `db_datareader` and nothing else.
 
 ## Setting up each warehouse
 
@@ -72,6 +77,8 @@ How the connector behaves with them:
 - "Verify" with a CA you pasted still checks the host name and rejects a certificate that CA did not sign. "Encrypted, do not verify" encrypts but accepts any certificate; use it only to get unstuck.
 
 #### A database that is not on the internet (SSH tunnel)
+
+This works the same for **Postgres, MySQL and SQL Server**: the examples say `5432`, so use `3306` for MySQL and `1433` for SQL Server.
 
 Most production databases sit on a private network. If you have an SSH server that can reach yours (a bastion or jump host), Loomail can connect to *that* and reach the database through it. Only the SSH server has to be reachable from the internet.
 
@@ -124,7 +131,47 @@ How it stays safe:
 | *Could not connect to the SSH server* / *did not answer in time* | The SSH server's address or port, or a firewall. These are retried on the next run. |
 | *Could not connect to the database: password authentication failed* | The tunnel is fine; the database user or password is wrong. |
 
-SSH tunnels are for the Postgres connector (which also covers Redshift, RDS and Aurora in a private subnet). Snowflake and BigQuery are cloud services reached over HTTPS and need none.
+SSH tunnels are for the connectors that dial a host and port: Postgres, MySQL and SQL Server (including RDS and Aurora in a private subnet). Snowflake and BigQuery are cloud services reached over HTTPS and need none.
+
+Tunnel notes for MySQL and SQL Server:
+
+- The database host name you give is used for certificate checking even though the traffic goes through the tunnel, so a private name such as `db.internal` needs a certificate for that name, or the CA pasted in, or *do not verify*.
+- **Azure SQL** may redirect a client to a different gateway address; behind a tunnel that redirect cannot be followed. Use the *Proxy* connection policy for the server, or the *Redirect* policy only without a tunnel.
+- Messages are the same as above; a wrong host or port as the SSH server sees it reads *it could not reach db.internal:3306* (or `:1433`).
+
+### MySQL
+
+Works with MySQL 5.7+ and 8.x, MariaDB, Amazon Aurora MySQL, PlanetScale and TiDB.
+
+```sql
+CREATE USER 'loomail_reader'@'%' IDENTIFIED BY '...';
+GRANT SELECT ON crm.users TO 'loomail_reader'@'%';
+```
+
+Give Loomail the host, port (3306), database, user and password. Encryption defaults to *encrypted, verify the certificate*; for Amazon RDS / Aurora paste the [RDS certificate bundle](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem) as the CA certificate.
+
+- Each run is one prepared statement inside a `START TRANSACTION READ ONLY`, with `max_execution_time` (MySQL) or `max_statement_time` (MariaDB) set to the time limit when the server has them.
+- `DATETIME` columns carry no time zone; Loomail reads them as UTC. Keep the position column in UTC, or convert it in the query (`CONVERT_TZ(updated_at, 'Europe/London', '+00:00') AS updated_at`).
+- `DECIMAL` values arrive as numbers, `JSON` columns as text, and binary columns as base64 text.
+- With the *verify* setting, the server certificate is checked against the host name you typed.
+
+### SQL Server
+
+Works with SQL Server 2016+ and Azure SQL Database / Managed Instance.
+
+```sql
+CREATE LOGIN loomail_reader WITH PASSWORD = '...';
+USE crm;
+CREATE USER loomail_reader FOR LOGIN loomail_reader;
+ALTER ROLE db_datareader ADD MEMBER loomail_reader;
+```
+
+Give Loomail the host, **port** (1433 unless you changed it), database, user and password (SQL Server authentication; Windows/Entra sign-in is not supported). Use a port, not an instance name: named instances are found over UDP, which cannot go through a tunnel or most firewalls. For a named instance, find its fixed TCP port in SQL Server Configuration Manager and give that.
+
+- Loomail declares read-only intent and applies the time limit, but SQL Server cannot enforce a read-only transaction. **Use a login that can only read.**
+- Encryption is on by default and the certificate is verified. A self-hosted SQL Server often has a self-signed certificate: either paste its CA as the CA certificate, or choose *encrypted, do not verify*. Azure SQL uses a public CA and needs nothing.
+- Timestamps (`datetime2`, `datetime`) are read as UTC. `decimal`/`money` values arrive as numbers and `uniqueidentifier` as text.
+- Cast `:cursor` explicitly: `CAST(:cursor AS DATETIME2)`.
 
 ### Snowflake
 
@@ -164,7 +211,7 @@ Set the **location** if your dataset is not in the default US/EU multi-region (f
 | Position column / type | The column that rises when a row is added or changed (`updated_at`), and whether it holds a date and time, a number or text. |
 | Start from | Optional first position. Empty reads everything the first time. |
 | Run every | 5 to 1440 minutes. After a failure the next try comes sooner (at most 15 minutes). |
-| SSH tunnel | Optional, Postgres only: reach a private database through an SSH server. See above. |
+| SSH tunnel | Optional, Postgres, MySQL and SQL Server: reach a private database through an SSH server. See above. |
 | Rows per batch | 10 to 5000. A run reads up to 5 batches, then carries on next time. |
 | User id / email column | Who the row is about. One is enough; with only an email, people are matched by it. A row with neither is skipped, not an error. |
 | Event | A fixed name, a name read from a column, or none (traits only). |
@@ -189,9 +236,11 @@ Set the **location** if your dataset is not in the default US/EU multi-region (f
 
 ## For the operator
 
+Warehouse sources are **off for every workspace** until a platform admin switches them on (admin console, open the workspace, **Warehouse sources**, with a reason that goes in the audit log). Customers ask through Support from the Data warehouse card; the request says the database, rough size and refresh rate, which is what you need to decide on pricing or a dedicated database. Switching it off stops that workspace's sources syncing and blocks creating, testing, syncing or editing; nothing is deleted, and the customer can still see, pause and delete what they have. Workspaces that already had a warehouse source when this was introduced were switched on by the migration.
+
 | Variable | Default | Purpose |
 |---|---|---|
-| `LOOMAIL_RESTRICT_WAREHOUSE_HOSTS` | on for a hosted service, off otherwise | When on, a Postgres host that resolves to a loopback, private, link-local or reserved address is refused (the same protection as SMTP and webhooks), and the connection goes to the address that was checked. |
+| `LOOMAIL_RESTRICT_WAREHOUSE_HOSTS` | on for a hosted service, off otherwise | When on, a database host that resolves to a loopback, private, link-local or reserved address is refused (the same protection as SMTP and webhooks), and the connection goes to the address that was checked. |
 | `LOOMAIL_WAREHOUSE_ALLOWED_HOSTS` | none | Comma-separated hosts that skip the check, for a database on your own network. |
 
 Snowflake and BigQuery addresses are built by Loomail from the account name or the fixed Google addresses, so customers never supply a host for them. For BigQuery, the token address inside the key file is ignored on purpose.

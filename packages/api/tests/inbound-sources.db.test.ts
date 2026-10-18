@@ -10,7 +10,7 @@
  *
  * Requires local Postgres (DATABASE_URL).
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
@@ -301,6 +301,132 @@ describe("receiving from a generic sender", () => {
     expect((await send()).status).toBe(200);
     expect(await eventsOf(tenantA, "g-dedupe")).toHaveLength(1);
     expect((await logOf(id)).map((l) => l.summary).some((s) => s.includes("already recorded"))).toBe(true);
+  });
+
+  describe("Typeform and Zapier shapes", () => {
+    // Typeform's official example (typeform.com/developers/webhooks/example-payload), trimmed of the form definition.
+    const typeform = (over: { event_id?: string; hidden?: Record<string, string>; skipFirst?: boolean; email?: string } = {}) => {
+      const answers = [
+        { type: "text", text: "It's cold right now!", field: { id: "DlXFaesGBpoF", type: "long_text" } },
+        { type: "email", email: over.email ?? "laura@example.com", field: { id: "SMEUb7VJz92Q", type: "email" } },
+        { type: "text", text: "Laura", field: { id: "JwWggjAKtOkA", type: "short_text" } },
+        { type: "choice", choice: { id: "4WIlUvKOl0UB", label: "London" }, field: { id: "k6TP9oLGgHjl", type: "multiple_choice" } },
+      ];
+      return {
+        event_id: over.event_id ?? "LtWXD3crgy",
+        event_type: "form_response",
+        form_response: { form_id: "lT4Z3j", token: "a3a12ec6", calculated: { score: 9 }, hidden: over.hidden ?? { user_id: "tf-user-1" }, answers: over.skipFirst ? answers.slice(1) : answers },
+      };
+    };
+    const TYPEFORM = {
+      event_name_path: "event_type",
+      event_id_path: "event_id",
+      user_id_path: "form_response.hidden.user_id",
+      email_path: "form_response.answers[type=email].email",
+      trait_paths: { first_name: "form_response.answers[field.type=short_text].text", favourite_city: "form_response.answers[type=choice].choice.label", quiz_score: "form_response.calculated.score" },
+    };
+
+    // The workspace holds at most 20 sources: delete what each test made, so these do not crowd out the tests after them.
+    const made: string[] = [];
+    const mine = async (config: Record<string, unknown>) => {
+      const s = await newGeneric(config);
+      made.push(s.id);
+      return s;
+    };
+    afterEach(async () => {
+      if (!dbAvailable) return;
+      for (const sid of made.splice(0)) {
+        await db.execute(sql`DELETE FROM inbound_source_log WHERE source_id = ${sid}`);
+        await db.execute(sql`DELETE FROM inbound_sources WHERE id = ${sid}`);
+      }
+    });
+
+    it("records a Typeform submission with the token in the address and finds answers by type", async () => {
+      if (!dbAvailable) return;
+      const { id, token } = await mine(TYPEFORM);
+      expect((await hook(id, typeform(), {}, `?token=${token}`)).status).toBe(200);
+      expect(await contactBy(tenantA, "tf-user-1")).toMatchObject({ email: "laura@example.com", name: null, properties: { favourite_city: "London", quiz_score: 9 } });
+      expect((await eventsOf(tenantA, "tf-user-1")).map((e) => e.event_name)).toEqual(["form_response"]);
+    });
+
+    it("a retry of the same Typeform event is recorded once, using the event_id in the body", async () => {
+      if (!dbAvailable) return;
+      const { id, token } = await mine(TYPEFORM);
+      const body = typeform({ event_id: "evt-retry-1", hidden: { user_id: "tf-retry" } });
+      expect((await hook(id, body, {}, `?token=${token}`)).status).toBe(200);
+      expect((await hook(id, body, {}, `?token=${token}`)).status).toBe(200);
+      expect(await eventsOf(tenantA, "tf-retry")).toHaveLength(1);
+      // a different submission (a new event_id) from the same person is a new event
+      expect((await hook(id, typeform({ event_id: "evt-retry-2", hidden: { user_id: "tf-retry" } }), {}, `?token=${token}`)).status).toBe(200);
+      expect(await eventsOf(tenantA, "tf-retry")).toHaveLength(2);
+    });
+
+    it("an event id from the body does not collide across two sources", async () => {
+      if (!dbAvailable) return;
+      const a = await mine(TYPEFORM);
+      const b = await mine(TYPEFORM);
+      const body = typeform({ event_id: "same-id-everywhere", hidden: { user_id: "tf-two-sources" } });
+      await hook(a.id, body, {}, `?token=${a.token}`);
+      await hook(b.id, body, {}, `?token=${b.token}`);
+      expect(await eventsOf(tenantA, "tf-two-sources")).toHaveLength(2);
+    });
+
+    it("the header wins over the body when both give an id", async () => {
+      if (!dbAvailable) return;
+      const { id, token } = await mine(TYPEFORM);
+      const send = (eventId: string, headerId: string) => hook(id, typeform({ event_id: eventId, hidden: { user_id: "tf-header" } }), { "x-loomail-event-id": headerId }, `?token=${token}`);
+      await send("body-1", "hdr-same");
+      await send("body-2", "hdr-same"); // different body id, same header id: a repeat
+      expect(await eventsOf(tenantA, "tf-header")).toHaveLength(1);
+    });
+
+    it("a skipped optional question does not lose the email or other answers", async () => {
+      if (!dbAvailable) return;
+      const { id, token } = await mine(TYPEFORM);
+      expect((await hook(id, typeform({ skipFirst: true, hidden: { user_id: "tf-skip" }, email: "skipper@example.com" }), {}, `?token=${token}`)).status).toBe(200);
+      expect(await contactBy(tenantA, "tf-skip")).toMatchObject({ email: "skipper@example.com", properties: { favourite_city: "London" } });
+    });
+
+    it("rejects an event_id_path that is empty or too long when the source is saved", async () => {
+      const bad = await api("POST", "/v1/inbound-sources", cookieA, { kind: "generic", name: "x", config: { ...TYPEFORM, event_id_path: "" } });
+      expect(bad.status).toBe(400);
+      const long = await api("POST", "/v1/inbound-sources", cookieA, { kind: "generic", name: "x", config: { ...TYPEFORM, event_id_path: "a".repeat(201) } });
+      expect(long.status).toBe(400);
+    });
+
+    it("accepts a form-encoded body (Zapier's Form payload type) and reads it like JSON", async () => {
+      if (!dbAvailable) return;
+      const { id, token } = await mine({ event_name_path: "event", user_id_path: "id", email_path: "email", trait_paths: { company: "company", seats: "seats" } });
+      const form = "id=z-form-1&email=zee%40example.com&event=new_lead&company=Zee+Co&seats=5";
+      const r = await hook(id, form, { "content-type": "application/x-www-form-urlencoded", authorization: `Bearer ${token}` });
+      expect(r).toMatchObject({ status: 200, body: { ok: true } });
+      expect(await contactBy(tenantA, "z-form-1")).toMatchObject({ email: "zee@example.com", company: "Zee Co", properties: { seats: "5" } }); // form values are text
+      expect((await eventsOf(tenantA, "z-form-1")).map((e) => e.event_name)).toEqual(["new_lead"]);
+    });
+
+    it("a form-encoded body still has to carry the token, and a key sent twice becomes a list", async () => {
+      if (!dbAvailable) return;
+      const { id, token } = await mine({ event_name: "lead", user_id_path: "id", trait_paths: { tags: "tag" } });
+      const noToken = await hook(id, "id=z-form-2&tag=a", { "content-type": "application/x-www-form-urlencoded" });
+      expect(noToken.status).toBe(401);
+      const ok = await hook(id, "id=z-form-2&tag=a&tag=b&__proto__=x", { "content-type": "application/x-www-form-urlencoded" }, `?token=${token}`);
+      expect(ok.status).toBe(200);
+      const ev = await eventsOf(tenantA, "z-form-2");
+      expect(ev[0]!.properties).toMatchObject({ id: "z-form-2", tag: ["a", "b"] });
+      expect(Object.prototype.hasOwnProperty.call(ev[0]!.properties, "__proto__")).toBe(false);
+    });
+
+    it("a form-encoded body to a Stripe source is a 400 that says to send JSON", async () => {
+      if (!dbAvailable) return;
+      const created = await api("POST", "/v1/inbound-sources", cookieA, { kind: "stripe", name: "S", stripe_signing_secret: STRIPE_SECRET });
+      made.push(created.body.source.id);
+      const raw = "a=1";
+      const t = Math.floor(Date.now() / 1000);
+      const sig = createHmac("sha256", STRIPE_SECRET).update(`${t}.${raw}`).digest("hex");
+      const r = await hook(created.body.source.id, raw, { "content-type": "application/x-www-form-urlencoded", "stripe-signature": `t=${t},v1=${sig}` });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/JSON/);
+    });
   });
 
   it("bad bodies: not JSON, not an object, and no person are 400; no event name is ignored", async () => {

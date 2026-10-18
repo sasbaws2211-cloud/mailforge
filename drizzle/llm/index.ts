@@ -51,6 +51,14 @@ export async function loadLlmCandidates(db: AnyDb, tenantId: string): Promise<Ll
     };
   }
 
+  return loadPlatformLlmCandidates(db);
+}
+
+/**
+ * The operator's own providers only, whatever the workspace has set up. For features the operator pays for whatever key a customer
+ * has added (the in-app assistant). Primary first, then the backup. Source "none" when no provider is switched on.
+ */
+export async function loadPlatformLlmCandidates(db: AnyDb): Promise<LlmCandidates> {
   const shared = await db
     .select({ slot: platformLlmConfigs.slot, provider: platformLlmConfigs.provider, config: platformLlmConfigs.config })
     .from(platformLlmConfigs)
@@ -74,6 +82,7 @@ export async function platformTokensUsed(db: AnyDb, tenantId: string, since: Dat
   const r = await db.execute<{ n: string }>(sql`
     SELECT COALESCE(sum(total_tokens), 0)::text AS n FROM llm_usage
     WHERE tenant_id = ${tenantId}::uuid AND source = 'platform'
+      AND feature <> 'assistant' -- the in-app assistant has no allowance: the operator pays for it
       AND created_at >= ${since.toISOString()}::timestamptz`);
   return Number(r.rows[0]?.n ?? 0);
 }

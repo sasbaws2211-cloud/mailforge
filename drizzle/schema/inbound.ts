@@ -10,7 +10,7 @@ import { tenants } from "./tenants.js";
  *                 customer pastes in (kept sealed in `secret_sealed`). `config` names the metadata key that holds
  *                 the customer's own user id.
  *
- * kind "warehouse": no address. Loomail reads rows from the customer's Postgres, Snowflake or BigQuery on a schedule
+ * kind "warehouse": no address. Loomail reads rows from the customer's Postgres, MySQL, SQL Server, Snowflake or BigQuery on a schedule
  *                 (see packages/api/src/warehouse). `config` holds the connection details and the mapping; the
  *                 credential (password, private key, service-account key) is sealed JSON in `secret_sealed`.
  *

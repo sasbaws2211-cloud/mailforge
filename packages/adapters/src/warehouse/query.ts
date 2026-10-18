@@ -27,7 +27,7 @@ export type QueryCheck = { ok: true; sql: string; cursorUses: number[] } | { ok:
  * is real SQL. Returns an error text for text that could hide a second statement from this check.
  */
 function scan(sql: string, kind: WarehouseKind, visit: (i: number) => void): string | null {
-  const backslash = kind !== "postgres"; // Snowflake and BigQuery treat \ as an escape inside strings
+  const backslash = kind !== "postgres" && kind !== "mssql"; // Snowflake, BigQuery and MySQL treat \ as an escape inside strings
   let i = 0;
   while (i < sql.length) {
     const c = sql[i]!;
@@ -37,22 +37,43 @@ function scan(sql: string, kind: WarehouseKind, visit: (i: number) => void): str
       i = end === -1 ? sql.length : end + 1;
       continue;
     }
-    if (c === "#" && kind === "bigquery") {
+    if (c === "#" && (kind === "bigquery" || kind === "mysql")) {
       const end = sql.indexOf("\n", i);
       i = end === -1 ? sql.length : end + 1;
       continue;
     }
     if (c === "/" && next === "*") {
+      // MySQL runs the text of /*! ... */ and /*+ ... */ as SQL, so it cannot be skipped as a comment.
+      if (kind === "mysql" && (sql[i + 2] === "!" )) return "MySQL's /*! ... */ comments run as SQL and are not allowed. Remove it.";
       const end = sql.indexOf("*/", i + 2);
       if (end === -1) return "A comment is never closed.";
       i = end + 2;
       continue;
     }
-    if (c === "$" && kind !== "bigquery") {
+    if (c === "$" && (kind === "postgres" || kind === "snowflake")) {
       // $$...$$ and $tag$...$tag$ quoting would hide text from this check.
       if (/^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.test(sql.slice(i))) return "Dollar-quoted text ($$...$$) is not allowed. Use ordinary quotes.";
     }
-    if (c === "'" || c === '"' || (c === "`" && kind === "bigquery")) {
+    if (c === "[" && kind === "mssql") {
+      // [quoted name]; ]] is a literal ]
+      let j = i + 1;
+      let closed = false;
+      while (j < sql.length) {
+        if (sql[j] === "]") {
+          if (sql[j + 1] === "]") {
+            j += 2;
+            continue;
+          }
+          closed = true;
+          break;
+        }
+        j++;
+      }
+      if (!closed) return "A [quoted name] is never closed.";
+      i = j + 1;
+      continue;
+    }
+    if (c === "'" || c === '"' || (c === "`" && (kind === "bigquery" || kind === "mysql"))) {
       let j = i + 1;
       let closed = false;
       while (j < sql.length) {
@@ -103,7 +124,8 @@ export function checkQuery(raw: string, kind: WarehouseKind): QueryCheck {
     if (c === ":" && sql[i - 1] !== ":" && sql[i + 1] !== ":" && /^:cursor(?![A-Za-z0-9_])/i.test(sql.slice(i))) cursorUses.push(i);
     if (kind === "postgres" && c === "$") collision = "Use :cursor for the sync position, not $1.";
     if (kind === "snowflake" && c === "?") collision = "Use :cursor for the sync position, not ?.";
-    if (kind === "bigquery" && c === "@") collision = "Use :cursor for the sync position, not @name.";
+    if ((kind === "bigquery" || kind === "mssql") && c === "@") collision = "Use :cursor for the sync position, not @name.";
+    if (kind === "mysql" && c === "?") collision = "Use :cursor for the sync position, not ?.";
   });
   if (err) return { ok: false, error: err };
   if (collision) return { ok: false, error: collision };
@@ -117,13 +139,13 @@ export function checkQuery(raw: string, kind: WarehouseKind): QueryCheck {
 /** The placeholder each warehouse uses for the cursor. */
 function placeholder(kind: WarehouseKind): string {
   if (kind === "postgres") return "$1"; // one numbered parameter, however many times it is used
-  if (kind === "snowflake") return "?";
-  return "@cursor";
+  if (kind === "snowflake" || kind === "mysql") return "?"; // one value per use, in order
+  return "@cursor"; // bigquery and mssql: a named parameter, however many times it is used
 }
 
 export interface CompiledQuery {
   sql: string;
-  /** How many times the query takes the cursor. Postgres and Snowflake bind it once per use. */
+  /** How many times the query takes the cursor. Snowflake and MySQL bind it once per use. */
   cursorCount: number;
 }
 
@@ -151,7 +173,18 @@ export function compileQuery(
   });
   out += checked.sql.slice(last);
 
-  const trailingComment = /--[^\n]*$/.test(out) ? "\n" : "";
+  const trailingComment = /--[^\n]*$|#[^\n]*$/.test(out) ? "\n" : "";
+  if (kind === "mssql") {
+    // SQL Server has no LIMIT, and a WITH clause cannot sit inside the wrapping subquery.
+    if (/^[\s(]*WITH\b/i.test(out)) {
+      return { ok: false, error: "SQL Server cannot run a WITH (common table expression) query here. Put the WITH part in a view, or rewrite it as a subquery in the FROM clause." };
+    }
+    return {
+      ok: true,
+      sql: `SELECT TOP (${maxRows}) * FROM (${out}${trailingComment}) AS loomail_q ORDER BY ${cursorColumn} ASC`,
+      cursorCount: checked.cursorUses.length,
+    };
+  }
   return {
     ok: true,
     sql: `SELECT * FROM (${out}${trailingComment}) AS loomail_q ORDER BY ${cursorColumn} ASC LIMIT ${maxRows}`,

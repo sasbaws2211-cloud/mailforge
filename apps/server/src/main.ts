@@ -453,7 +453,7 @@ async function start(): Promise<void> {
       // bounces or spam complaints would hurt the shared account. Does nothing unless managed sending is offered.
       startSendingMonitor(db, { log: app.log });
 
-      // Warehouse sources (Postgres, Snowflake, BigQuery): read what is due and record it as traits and events.
+      // Warehouse sources (Postgres, MySQL, SQL Server, Snowflake, BigQuery): read what is due and record it as traits and events.
       // Does nothing when no workspace has one.
       startWarehouseSyncMonitor(db, enqueue, { log: app.log });
 

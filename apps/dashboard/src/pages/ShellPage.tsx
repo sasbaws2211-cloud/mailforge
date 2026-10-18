@@ -34,11 +34,13 @@ import {
   Menu,
   X,
   ShieldCheck,
+  LifeBuoy,
 } from "lucide-react";
 import { useLogout } from "../auth.js";
 import { BrandLockup } from "../components/brand-lockup.js";
 import { ThemeToggle } from "../components/theme-toggle.js";
 import { PlanBanner } from "../components/plan-banner.js";
+import { AssistantWidget } from "../components/assistant-widget.js";
 import type { MeResponse } from "../api.js";
 
 // ---------------------------------------------------------------------------
@@ -78,6 +80,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Knowledge Base", path: "/kb", icon: BookOpen, enabled: true },
   { label: "Analytics", path: "/analytics", icon: BarChart3, enabled: true },
   { label: "Settings", path: "/settings", icon: Settings, enabled: true },
+  { label: "Support", path: "/support", icon: LifeBuoy, enabled: true },
 ];
 
 // ---------------------------------------------------------------------------
@@ -162,7 +165,8 @@ export default function ShellPage({ me }: ShellPageProps) {
           return (
             <NavLink
               key={item.path}
-              to={item.path}
+              // Support remembers the page you were on, so the request can say where you needed help.
+              to={item.path === "/support" && !location.pathname.startsWith("/support") ? `/support?from=${encodeURIComponent(location.pathname + location.search)}` : item.path}
               className={({ isActive }) =>
                 [
                   "flex items-center gap-3 rounded-md px-3 py-2 text-[14px] transition-colors duration-(--dur-fast) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -252,6 +256,8 @@ export default function ShellPage({ me }: ShellPageProps) {
           <Outlet />
         </main>
       </div>
+      {/* The in-app assistant: in the corner of every page. Locked workspaces never reach this shell. */}
+      <AssistantWidget />
     </div>
   );
 }

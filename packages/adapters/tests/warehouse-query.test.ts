@@ -89,6 +89,48 @@ describe("compileQuery", () => {
   });
 });
 
+describe("MySQL queries", () => {
+  it("binds :cursor as one ? per use, and wraps with LIMIT", () => {
+    const r = compileQuery("SELECT id, ts FROM t WHERE ts >= CAST(:cursor AS DATETIME) OR ts > :cursor", "mysql", "ts", 50);
+    expect(r).toEqual({ ok: true, cursorCount: 2, sql: "SELECT * FROM (SELECT id, ts FROM t WHERE ts >= CAST(? AS DATETIME) OR ts > ?) AS loomail_q ORDER BY ts ASC LIMIT 50" });
+  });
+  it("knows backticks, backslash escapes and # comments", () => {
+    expect(checkQuery("SELECT `a;b` FROM t", "mysql").ok).toBe(true);
+    expect(checkQuery("SELECT 'a\\'; DROP TABLE t; --' FROM t", "mysql").ok).toBe(true); // the quote is escaped, the semicolon is text
+    expect(checkQuery("SELECT 1 # ; DROP TABLE t", "mysql").ok).toBe(true);
+    expect(checkQuery("SELECT 1; DROP TABLE t", "mysql").ok).toBe(false);
+    expect(checkQuery("SELECT `a FROM t", "mysql").ok).toBe(false);
+  });
+  it("closes the wrapper after a # comment, refuses ? and the executable /*! comment", () => {
+    expect((compileQuery("SELECT a FROM t # note", "mysql", "a", 3) as { sql: string }).sql).toBe("SELECT * FROM (SELECT a FROM t # note\n) AS loomail_q ORDER BY a ASC LIMIT 3");
+    expect(checkQuery("SELECT * FROM t WHERE a > ?", "mysql").ok).toBe(false);
+    expect(checkQuery("SELECT /*!50000 1; DROP TABLE t */ 1", "mysql").ok).toBe(false);
+    expect(checkQuery("SELECT 1 /* plain */", "mysql").ok).toBe(true);
+    expect(checkQuery("SELECT a$b FROM t", "mysql").ok).toBe(true); // $ is an ordinary identifier character here
+  });
+});
+
+describe("SQL Server queries", () => {
+  it("binds :cursor as @cursor and caps with TOP", () => {
+    const r = compileQuery("SELECT id, ts FROM dbo.t WHERE ts >= CAST(:cursor AS DATETIME2);", "mssql", "ts", 25);
+    expect(r).toEqual({ ok: true, cursorCount: 1, sql: "SELECT TOP (25) * FROM (SELECT id, ts FROM dbo.t WHERE ts >= CAST(@cursor AS DATETIME2)) AS loomail_q ORDER BY ts ASC" });
+  });
+  it("knows [bracket] names, treats backslash as plain, and refuses @", () => {
+    expect(checkQuery("SELECT [a;b], [c]]d;e] FROM t", "mssql").ok).toBe(true);
+    expect(checkQuery("SELECT [a FROM t", "mssql").ok).toBe(false);
+    expect(checkQuery("SELECT 'a\\'; DROP TABLE t; --' FROM t", "mssql").ok).toBe(false); // the string ends at the quote
+    expect(checkQuery("SELECT * FROM t WHERE a > @x", "mssql").ok).toBe(false);
+    expect(checkQuery("SELECT '@x' FROM t", "mssql").ok).toBe(true);
+    expect(checkQuery("SELECT 1; DROP TABLE t", "mssql").ok).toBe(false);
+  });
+  it("explains that a WITH query cannot be wrapped, rather than failing in the database", () => {
+    const r = compileQuery("WITH a AS (SELECT 1 AS n) SELECT n FROM a", "mssql", "n", 5);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/WITH/);
+    expect(compileQuery("WITH a AS (SELECT 1 AS n) SELECT n FROM a", "mysql", "n", 5).ok).toBe(true);
+  });
+});
+
 describe("resolveWarehouseHost", () => {
   const hosted = (lookup?: (h: string) => Promise<Array<{ address: string; family: number }>>) => ({ restrict: true, allowedHosts: [], lookup });
   it("is on for a hosted service and off self-hosted", () => {

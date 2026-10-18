@@ -55,6 +55,10 @@ import AdminPage from "./pages/admin/AdminPage.js";
 import AdminTenantPage from "./pages/admin/AdminTenantPage.js";
 import AdminAuditPage from "./pages/admin/AdminAuditPage.js";
 import AdminAiPage from "./pages/admin/AdminAiPage.js";
+import AdminSupportPage from "./pages/admin/AdminSupportPage.js";
+import AdminSupportTicketPage from "./pages/admin/AdminSupportTicketPage.js";
+import SupportPage from "./pages/SupportPage.js";
+import SupportTicketPage from "./pages/SupportTicketPage.js";
 import AdminLayout from "./pages/admin/AdminLayout.js";
 
 /**
@@ -102,6 +106,8 @@ export default function App() {
         <Route index element={<AdminPage />} />
         <Route path="ai" element={<AdminAiPage />} />
         <Route path="audit" element={<AdminAuditPage />} />
+        <Route path="support" element={<AdminSupportPage />} />
+        <Route path="support/:id" element={<AdminSupportTicketPage />} />
         <Route path="tenants/:id" element={<AdminTenantPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
@@ -123,6 +129,8 @@ export default function App() {
         <Route index element={<DefaultRoute />} />
         <Route path="home" element={<HomePage />} />
         <Route path="integrate" element={<IntegratePage />} />
+        <Route path="support" element={<SupportPage />} />
+        <Route path="support/:id" element={<SupportTicketPage />} />
         <Route path="flows" element={<FlowsPage />} />
         <Route path="flows/new" element={<FlowEditorPage />} />
         <Route path="flows/:id/edit" element={<FlowEditorPage />} />

@@ -2117,10 +2117,10 @@ const jsonInit = (method: string, body?: unknown): RequestInit => ({
 /** GET /v1/inbound-sources */
 export const fetchInboundSources = () => inboundFetch<{ sources: InboundSource[] }>("");
 /** POST /v1/inbound-sources - a generic source's token comes back once. */
-export const createInboundSource = (input: { kind: InboundSource["kind"]; name: string; config?: unknown; stripe_signing_secret?: string; paystack_secret_key?: string }) =>
+export const createInboundSource = (input: { kind: InboundSource["kind"]; name: string; config?: unknown; signing_secret?: string; stripe_signing_secret?: string; paystack_secret_key?: string }) =>
   inboundFetch<{ source: InboundSource; token?: string }>("", jsonInit("POST", input));
 /** PATCH /v1/inbound-sources/:id */
-export const updateInboundSource = (id: string, input: { name?: string; enabled?: boolean; config?: unknown; stripe_signing_secret?: string; paystack_secret_key?: string }) =>
+export const updateInboundSource = (id: string, input: { name?: string; enabled?: boolean; config?: unknown; signing_secret?: string; stripe_signing_secret?: string; paystack_secret_key?: string }) =>
   inboundFetch<{ source: InboundSource }>(`/${id}`, jsonInit("PATCH", input));
 /** POST /v1/inbound-sources/:id/rotate-token */
 export const rotateInboundToken = (id: string) => inboundFetch<{ source: InboundSource; token: string }>(`/${id}/rotate-token`, jsonInit("POST"));
@@ -2170,7 +2170,7 @@ async function warehouseFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** GET /v1/warehouse-sources */
-export const fetchWarehouseSources = () => warehouseFetch<{ sources: WarehouseSource[] }>("");
+export const fetchWarehouseSources = () => warehouseFetch<{ sources: WarehouseSource[]; access: boolean }>("");
 /** POST /v1/warehouse-sources */
 export const createWarehouseSource = (input: { name: string; config: unknown; secret: unknown }) => warehouseFetch<{ source: WarehouseSource }>("", jsonInit("POST", input));
 /** PATCH /v1/warehouse-sources/:id */

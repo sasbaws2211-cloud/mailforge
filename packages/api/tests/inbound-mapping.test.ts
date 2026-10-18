@@ -11,12 +11,96 @@ import {
   stripeConfigSchema,
   stripeMessageId,
   STRIPE_THIN_MESSAGE,
+  verifyHmacSignature,
   verifyStripeSignature,
   STRIPE_TOLERANCE_SECONDS,
 } from "../src/inbound/mapping.js";
 
 const generic = (c: Record<string, unknown>) => genericConfigSchema.parse(c);
 const stripeCfg = stripeConfigSchema.parse({});
+
+describe("verifyHmacSignature", () => {
+  const secret = "shared-signing-secret";
+  const body = '{"id":1,"email":"a@x.test"}';
+  const mac = createHmac("sha256", secret).update(body).digest();
+  const hex = mac.toString("hex");
+  const b64 = mac.toString("base64");
+
+  it("accepts the HMAC-SHA256 of the exact body, as hex or base64", () => {
+    expect(verifyHmacSignature(secret, body, hex)).toBe(true);
+    expect(verifyHmacSignature(secret, body, b64)).toBe(true);
+    expect(verifyHmacSignature(secret, body, hex.toUpperCase())).toBe(true);
+    expect(verifyHmacSignature(secret, body, mac.toString("base64url"))).toBe(true);
+  });
+  it("can be told to take only one encoding", () => {
+    expect(verifyHmacSignature(secret, body, hex, { encoding: "hex" })).toBe(true);
+    expect(verifyHmacSignature(secret, body, hex, { encoding: "base64" })).toBe(false);
+    expect(verifyHmacSignature(secret, body, b64, { encoding: "base64" })).toBe(true);
+    expect(verifyHmacSignature(secret, body, b64, { encoding: "hex" })).toBe(false);
+  });
+  it("ignores a prefix such as sha256=, in any case", () => {
+    expect(verifyHmacSignature(secret, body, "sha256=" + b64, { prefix: "sha256=" })).toBe(true);
+    expect(verifyHmacSignature(secret, body, "SHA256=" + hex, { prefix: "sha256=" })).toBe(true);
+    expect(verifyHmacSignature(secret, body, "sha256=" + hex)).toBe(false); // no prefix configured: not a bare signature
+  });
+  it("refuses a wrong secret, a changed body, a re-serialised body, and anything that is not a 32-byte value", () => {
+    expect(verifyHmacSignature("other-secret", body, hex)).toBe(false);
+    expect(verifyHmacSignature(secret, body.replace("a@x.test", "b@x.test"), hex)).toBe(false);
+    expect(verifyHmacSignature(secret, JSON.stringify(JSON.parse(body), null, 2), hex)).toBe(false);
+    for (const bad of ["", " ", "abc", "0".repeat(63), "0".repeat(65), "g".repeat(64), hex.slice(0, 32), b64 + "AA", "sha256=" + hex]) {
+      expect(verifyHmacSignature(secret, body, bad), JSON.stringify(bad)).toBe(false);
+    }
+    expect(verifyHmacSignature("", body, hex)).toBe(false);
+  });
+});
+
+describe("generic settings: signature mode and header options", () => {
+  const base = { user_id_path: "id", event_name: "x" };
+  it("signature mode needs a header; a header needs signature mode", () => {
+    expect(genericConfigSchema.safeParse({ ...base, verification: "signature" }).success).toBe(false);
+    expect(genericConfigSchema.safeParse({ ...base, verification: "signature", signature_header: "X-Shopify-Hmac-Sha256" }).success).toBe(true);
+    expect(genericConfigSchema.safeParse({ ...base, signature_header: "X-Shopify-Hmac-Sha256" }).success).toBe(false);
+    expect(genericConfigSchema.safeParse({ ...base }).success).toBe(true);
+  });
+  it("defaults to the token, and takes header names that are plain", () => {
+    const r = genericConfigSchema.parse(base);
+    expect(r).toMatchObject({ verification: "token", signature_encoding: "either" });
+    for (const bad of ["", "has space", "a:b", "x".repeat(65), "bad_underscore!"]) {
+      expect(genericConfigSchema.safeParse({ ...base, event_name_header: bad }).success, bad).toBe(false);
+    }
+    expect(genericConfigSchema.safeParse({ user_id_path: "id", event_name_header: "X-Shopify-Topic" }).success).toBe(true);
+  });
+});
+
+describe("naming an event from a header, and the id that makes a repeat harmless", () => {
+  const cfg = (over: Record<string, unknown>) => genericConfigSchema.parse({ email_path: "email", ...over });
+  const track = (r: ReturnType<typeof mapGeneric>) => (r.ok ? r.mapped.track : undefined);
+
+  it("takes the event name from the header, over the path and the fixed name", () => {
+    const c = cfg({ event_name_header: "x-topic", event_name_path: "kind", event_name: "fallback" });
+    expect(track(mapGeneric(c, { email: "a@x.test", kind: "from_body" }, undefined, { eventNameFromHeader: "orders/paid" }))?.event).toBe("orders/paid");
+    expect(track(mapGeneric(c, { email: "a@x.test", kind: "from_body" }))?.event).toBe("from_body"); // no header sent: the path
+    expect(track(mapGeneric(c, { email: "a@x.test" }))?.event).toBe("fallback");
+    expect(track(mapGeneric(c, { email: "a@x.test" }, undefined, { eventNameFromHeader: "  " }))?.event).toBe("fallback");
+  });
+  it("a header-named event with nothing else to go on is ignored, not rejected", () => {
+    expect(mapGeneric(cfg({ event_name_header: "x-topic" }), { email: "a@x.test" })).toMatchObject({ ok: false, status: "ignored" });
+  });
+  it("keeps the name out of the id when the name is fixed, and puts it in when the request names the event", () => {
+    const fixed = mapGeneric(cfg({ event_name: "tally_submitted" }), { email: "a@x.test" }, "in:src:evt-1", { idFromSettings: true });
+    expect(track(fixed)?.messageId).toBe("in:src:evt-1");
+    const dynamic = cfg({ event_name_path: "triggerEvent" });
+    const created = mapGeneric(dynamic, { email: "a@x.test", triggerEvent: "BOOKING_CREATED" }, "in:src:uid-9", { idFromSettings: true });
+    const cancelled = mapGeneric(dynamic, { email: "a@x.test", triggerEvent: "BOOKING_CANCELLED" }, "in:src:uid-9", { idFromSettings: true });
+    expect(track(created)?.messageId).toBe("in:src:uid-9:BOOKING_CREATED");
+    expect(track(cancelled)?.messageId).toBe("in:src:uid-9:BOOKING_CANCELLED"); // same booking id, different event: not a repeat
+    const viaHeader = mapGeneric(cfg({ event_name_header: "x-topic" }), { email: "a@x.test" }, "in:src:9", { eventNameFromHeader: "customers/create", idFromSettings: true });
+    expect(track(viaHeader)?.messageId).toBe("in:src:9:customers/create");
+    // an id the sender chose with X-Loomail-Event-Id is used exactly as sent, as before
+    const own = mapGeneric(dynamic, { email: "a@x.test", triggerEvent: "BOOKING_CREATED" }, "in:src:mine");
+    expect(track(own)?.messageId).toBe("in:src:mine");
+  });
+});
 
 describe("getPath", () => {
   const o = { a: { b: [{ c: 1 }, { c: 2 }] }, "x.y": 5, n: null };
@@ -26,6 +110,56 @@ describe("getPath", () => {
   });
   it("gives undefined for anything missing, never throwing", () => {
     for (const p of ["z", "a.z", "a.b.9.c", "a.b.x", "n.q", "", "a..b", "a.b.0.c.d"]) expect(getPath(o, p), p).toBeUndefined();
+  });
+  describe("searching a list with [key=value]", () => {
+    const form = {
+      form_response: {
+        answers: [
+          { type: "text", text: "Laura", field: { id: "f1", ref: "first_name" } },
+          { type: "email", email: "laura@example.com", field: { id: "f2", ref: "work_email" } },
+          { type: "number", number: 5, field: { id: "f3", ref: "seats" } },
+          { type: "boolean", boolean: true, field: { id: "f4", ref: "legal" } },
+          { type: "text", text: "second text", field: { id: "f5", ref: "other" } },
+        ],
+      },
+    };
+    it("finds the first item whose key equals the value", () => {
+      expect(getPath(form, "form_response.answers[type=email].email")).toBe("laura@example.com");
+      expect(getPath(form, "form_response.answers[type=text].text")).toBe("Laura"); // the first of two
+    });
+    it("matches on a dotted key, numbers and booleans as text", () => {
+      expect(getPath(form, "form_response.answers[field.ref=work_email].email")).toBe("laura@example.com");
+      expect(getPath(form, "form_response.answers[field.ref=other].text")).toBe("second text");
+      expect(getPath(form, "form_response.answers[number=5].field.ref")).toBe("seats");
+      expect(getPath(form, "form_response.answers[boolean=true].field.id")).toBe("f4");
+    });
+    it("still finds the answer when a skipped question moves the others (an index does not)", () => {
+      const skipped = { form_response: { answers: form.form_response.answers.slice(1) } };
+      expect(getPath(skipped, "form_response.answers[type=email].email")).toBe("laura@example.com");
+      expect(getPath(skipped, "form_response.answers.1.email")).toBeUndefined();
+    });
+    it("gives undefined when nothing matches, on something that is not a list, or when written badly", () => {
+      for (const p of [
+        "form_response.answers[type=phone].phone",
+        "form_response[type=email].email",
+        "form_response.answers[type=email]email", // no dot after the search
+        "form_response.answers[type=email].",
+        "form_response.answers[type=email].nope",
+        "form_response.answers[type=email][type=text].text",
+        "form_response.answers[nope.deeper=x].text",
+      ]) {
+        expect(getPath(form, p), p).toBeUndefined();
+      }
+    });
+    it("can search twice in a row, and can end on the item itself", () => {
+      const nested = { groups: [{ kind: "a", rows: [{ k: "x", v: 1 }, { k: "y", v: 2 }] }, { kind: "b", rows: [{ k: "y", v: 3 }] }] };
+      expect(getPath(nested, "groups[kind=b].rows[k=y].v")).toBe(3);
+      expect(getPath(nested, "groups[kind=a]")).toMatchObject({ kind: "a" });
+    });
+    it("leaves ordinary paths, and keys that merely contain a bracket, alone", () => {
+      expect(getPath({ "a[b]": 1, c: [{ d: 2 }] }, "a[b]")).toBe(1);
+      expect(getPath({ c: [{ d: 2 }] }, "c.0.d")).toBe(2);
+    });
   });
   it("does not read inherited properties", () => {
     expect(getPath({}, "__proto__")).toBeUndefined();

@@ -33,6 +33,7 @@ import {
   sourceUrl,
   type GenericForm,
 } from "../inbound-sources.js";
+import { PRESET_GROUPS, TOOL_PRESETS, presetById } from "../inbound-presets.js";
 import { Badge, type BadgeVariant } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
 import { Input } from "./ui/input.js";
@@ -83,6 +84,28 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
   const [verification, setVerification] = useState<"token" | "signature">(initial?.config.verification === "signature" ? "signature" : "token");
   const [ipCheck, setIpCheck] = useState(initial?.config.require_paystack_ip === true);
   const [problems, setProblems] = useState<string[]>([]);
+  /** A ready-made tool (Typeform, Tally...) chosen for a new generic source. */
+  const [presetId, setPresetId] = useState<string>("");
+  /** The secret the sender signs with, for a source that checks signatures. */
+  const [signingSecret, setSigningSecret] = useState("");
+  const preset = presetId ? presetById(presetId) : undefined;
+
+  /** The type selector holds one value: a kind, or `tool:<id>` for a ready-made tool. */
+  const chooseType = (value: string) => {
+    if (value.startsWith("tool:")) {
+      const chosen = presetById(value.slice(5));
+      if (!chosen) return;
+      setKind("generic");
+      setPresetId(chosen.id);
+      setGeneric({ ...emptyGenericForm(), ...chosen.form });
+      if (!name.trim() || TOOL_PRESETS.some((p) => p.label === name)) setName(chosen.label);
+      return;
+    }
+    setPresetId("");
+    if (preset && TOOL_PRESETS.some((p) => p.label === name)) setName("");
+    if (preset) setGeneric(emptyGenericForm());
+    setKind(value as InboundSource["kind"]);
+  };
 
   const save = useMutation({
     mutationFn: async () => {
@@ -93,6 +116,7 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
         const built = buildGenericConfig(generic);
         if (!built.ok) issues.push(...built.problems);
         else config = built.config;
+        if (generic.verification === "signature" && !editing && !signingSecret.trim()) issues.push("Paste the signing secret the other tool signs its calls with.");
       } else if (kind === "stripe") {
         if (!editing && !looksLikeStripeSecret(secret)) issues.push("Paste the signing secret from Stripe. It starts with whsec_.");
         else if (editing && secret.trim() !== "" && !looksLikeStripeSecret(secret)) issues.push("That does not look like a Stripe signing secret. It starts with whsec_.");
@@ -108,6 +132,7 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
       }
       setProblems([]);
       const secrets = {
+        ...(kind === "generic" && generic.verification === "signature" && signingSecret.trim() ? { signing_secret: signingSecret.trim() } : {}),
         ...(kind === "stripe" && secret.trim() ? { stripe_signing_secret: secret.trim() } : {}),
         ...(kind === "paystack" && verification === "signature" && secret.trim() ? { paystack_secret_key: secret.trim() } : {}),
       };
@@ -141,11 +166,20 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
       {!editing && (
         <div className="max-w-xs">
           <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="source-kind">Type</label>
-          <Select id="source-kind" value={kind} onChange={(e) => setKind(e.target.value as InboundSource["kind"])}>
-            <option value="generic">Any JSON webhook (Typeform, Zapier, your own app...)</option>
+          <Select id="source-kind" value={preset ? `tool:${preset.id}` : kind} onChange={(e) => chooseType(e.target.value)}>
+            <option value="generic">Any JSON webhook (Zapier, Make, your own app...)</option>
+            {PRESET_GROUPS.map((group) => (
+              <optgroup key={group} label={group}>
+                {TOOL_PRESETS.filter((t) => t.group === group).map((t) => (
+                  <option key={t.id} value={`tool:${t.id}`}>{t.label}</option>
+                ))}
+              </optgroup>
+            ))}
             <option value="stripe">Stripe</option>
-            <option value="paystack">Paystack</option>
-            <option value="flutterwave">Flutterwave</option>
+            {/* Paystack and Flutterwave are hidden from new sources for now. Existing ones still work and can be edited
+                (this dropdown only shows when adding). To bring them back, add:
+                <option value="paystack">Paystack</option>
+                <option value="flutterwave">Flutterwave</option> */}
           </Select>
         </div>
       )}
@@ -246,21 +280,38 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
         </>
       ) : (
         <>
+          {preset && !editing && (
+            <div className="rounded-md border border-border bg-card p-3" data-testid="tool-steps">
+              <p className="text-[13px] font-medium text-foreground">{preset.summary}</p>
+              <ol className="mt-2 list-decimal space-y-1 pl-5 text-[13px] text-muted-foreground">
+                {preset.steps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+              {preset.note && <p className="mt-2 text-[12px] text-muted-foreground">{preset.note}</p>}
+              <p className="mt-2 text-[12px] text-muted-foreground">
+                {preset.confidence === "docs"
+                  ? "The settings below follow the tool's own documentation. You can change them."
+                  : "The settings below follow the tool's documentation, but a full example of what it sends was not available. Send a test and read this source's log; change the fields below if something is not found."}
+              </p>
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="event-mode">The event</label>
               <Select id="event-mode" value={generic.eventMode} onChange={(e) => set({ eventMode: e.target.value as GenericForm["eventMode"] })}>
                 <option value="fixed">Always the same name</option>
                 <option value="path">Named by a field in the payload</option>
+                <option value="header">Named by a request header (Shopify, WooCommerce...)</option>
                 <option value="none">No event, only set traits</option>
               </Select>
             </div>
             {generic.eventMode !== "none" && (
               <div>
                 <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="event-value">
-                  {generic.eventMode === "fixed" ? "Event name" : "Field holding the event name"}
+                  {generic.eventMode === "fixed" ? "Event name" : generic.eventMode === "header" ? "Header holding the event name" : "Field holding the event name"}
                 </label>
-                <Input id="event-value" value={generic.eventValue} onChange={(e) => set({ eventValue: e.target.value })} placeholder={generic.eventMode === "fixed" ? "form_submitted" : "type"} />
+                <Input id="event-value" value={generic.eventValue} onChange={(e) => set({ eventValue: e.target.value })} placeholder={generic.eventMode === "fixed" ? "form_submitted" : generic.eventMode === "header" ? "X-Topic" : "type"} />
               </div>
             )}
             <div>
@@ -271,11 +322,27 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
               <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="email-path">Field holding the email</label>
               <Input id="email-path" value={generic.emailPath} onChange={(e) => set({ emailPath: e.target.value })} placeholder="data.user.email" />
             </div>
+            {generic.eventMode !== "none" && (
+              <div className="sm:col-span-2">
+                <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="event-id-path">
+                  Field holding the sender&apos;s own id for the event <span className="font-normal text-muted-foreground">(optional)</span>
+                </label>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Input id="event-id-path" value={generic.eventIdPath} onChange={(e) => set({ eventIdPath: e.target.value })} placeholder="event_id" aria-label="Field holding the sender's event id" />
+                  <Input id="event-id-header" value={generic.eventIdHeader} onChange={(e) => set({ eventIdHeader: e.target.value })} placeholder="or a header, such as X-Shopify-Event-Id" aria-label="Header holding the sender's event id" />
+                </div>
+                <p className="mt-1 text-[12px] text-muted-foreground">
+                  If the sender retries a delivery, the same id is recorded once. Typeform sends <code className="font-mono">event_id</code>. Senders
+                  that can set headers can send <code className="font-mono">X-Loomail-Event-Id</code> instead.
+                </p>
+              </div>
+            )}
           </div>
           <p className="text-[12px] text-muted-foreground">
             A field is written as a path into the JSON, such as <code className="font-mono">data.user.email</code> or{" "}
-            <code className="font-mono">items.0.id</code>. Give a user id, an email, or both; with only an email, people are
-            matched by it.
+            <code className="font-mono">items.0.id</code>. To pick an item from a list by what it is rather than where it is, search
+            it: <code className="font-mono">answers[type=email].email</code> finds the answer whose type is email, even when
+            a skipped question moves the others. Give a user id, an email, or both; with only an email, people are matched by it.
           </p>
 
           <div>
@@ -314,6 +381,64 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
             </label>
           )}
         </>
+      )}
+
+      {kind === "generic" && (
+        <div className="rounded-md border border-border bg-card p-3" data-testid="verification">
+          <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="verification">How Loomail checks that a call is genuine</label>
+          {editing ? (
+            <p className="text-[13px] text-muted-foreground">
+              {generic.verification === "signature" ? "By the sender's signature." : "By the token in the address or header."} This cannot be changed after the source is made.
+            </p>
+          ) : (
+            <Select
+              id="verification"
+              value={generic.verification}
+              onChange={(e) => {
+                const mode = e.target.value as GenericForm["verification"];
+                const sig = preset?.signature;
+                set(mode === "signature" && sig ? { verification: mode, signatureHeader: sig.header, signatureEncoding: sig.encoding, signaturePrefix: sig.prefix ?? "" } : { verification: mode });
+              }}
+            >
+              <option value="token">A token Loomail makes (in the address or a header)</option>
+              <option value="signature">The sender&apos;s own signature (you paste the shared signing secret)</option>
+            </Select>
+          )}
+          {generic.verification === "signature" && (
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {!editing && (
+                <>
+                  <div>
+                    <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="sig-header">Header carrying the signature</label>
+                    <Input id="sig-header" value={generic.signatureHeader} onChange={(e) => set({ signatureHeader: e.target.value })} placeholder="X-Hub-Signature-256" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="sig-encoding">Written as</label>
+                    <Select id="sig-encoding" value={generic.signatureEncoding} onChange={(e) => set({ signatureEncoding: e.target.value as GenericForm["signatureEncoding"] })}>
+                      <option value="either">Hex or base64 (either)</option>
+                      <option value="hex">Hex</option>
+                      <option value="base64">Base64</option>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="sig-prefix">Text before the signature (optional)</label>
+                    <Input id="sig-prefix" value={generic.signaturePrefix} onChange={(e) => set({ signaturePrefix: e.target.value })} placeholder="sha256=" />
+                  </div>
+                </>
+              )}
+              <div className="sm:col-span-2">
+                <label className="mb-1 block text-[13px] font-medium text-foreground" htmlFor="sig-secret">
+                  Signing secret{editing && <span className="font-normal text-muted-foreground"> (leave empty to keep the saved one)</span>}
+                </label>
+                <Input id="sig-secret" type="password" autoComplete="new-password" value={signingSecret} onChange={(e) => setSigningSecret(e.target.value)} />
+                <p className="mt-1 text-[12px] text-muted-foreground">
+                  {preset?.signature?.secretHint ?? "The secret the sender signs each call with. It is stored encrypted and never shown again."} Loomail checks an
+                  HMAC-SHA256 of the exact request body. No token is made, so the address can be shared with the tool as it is.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {problems.length > 0 && (
@@ -378,6 +503,14 @@ function Fresh({ source, token, form, onDismiss }: { source: InboundSource; toke
             <code className="break-all rounded bg-card px-2 py-1 font-mono text-[12px]" data-testid="source-token">{token}</code>
             <CopyButton text={token} />
           </div>
+          <p className="mt-3 text-[13px] text-foreground">
+            For tools that cannot set a header (Typeform, Webflow, Cal.com, Gumroad, Shopify and others), give them this address instead, token
+            included. Keep it private:
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <code className="break-all rounded bg-card px-2 py-1 font-mono text-[12px]" data-testid="source-url-with-token">{addressWithToken(url, token)}</code>
+            <CopyButton text={addressWithToken(url, token)} />
+          </div>
           {form && (
             <details className="mt-3 text-[13px]">
               <summary className="cursor-pointer text-muted-foreground">Try it with curl</summary>
@@ -387,9 +520,11 @@ function Fresh({ source, token, form, onDismiss }: { source: InboundSource; toke
         </>
       ) : (
         <p className="mt-3 text-[13px] text-foreground">
-          {source.kind === "paystack"
-            ? "Paystack will sign each call with your secret key, so there is no token to keep. Finish by pasting this address as the webhook URL in Paystack."
-            : "Stripe will sign each call, so there is no token to keep. Finish by adding this address as an endpoint in Stripe."}
+          {source.kind === "generic"
+            ? "Calls are checked by the sender's signature, so there is no token to keep. Give the other tool this address and the same signing secret you pasted here."
+            : source.kind === "paystack"
+              ? "Paystack will sign each call with your secret key, so there is no token to keep. Finish by pasting this address as the webhook URL in Paystack."
+              : "Stripe will sign each call, so there is no token to keep. Finish by adding this address as an endpoint in Stripe."}
         </p>
       )}
       <Button type="button" variant="ghost" size="sm" className="mt-3" onClick={onDismiss}>

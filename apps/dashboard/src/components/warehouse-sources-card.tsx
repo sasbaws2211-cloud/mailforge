@@ -1,5 +1,5 @@
 /**
- * Data warehouse sources on the Integrate page: Loomail reads rows from your Postgres, Snowflake or BigQuery on a
+ * Data warehouse sources on the Integrate page: Loomail reads rows from your Postgres, MySQL, SQL Server, Snowflake or BigQuery on a
  * schedule and turns them into traits and events. See ../warehouse-sources.ts for the form logic and the API's
  * warehouse/ folder for the rules.
  *
@@ -7,7 +7,8 @@
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Plus } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Database, LifeBuoy, Plus } from "lucide-react";
 import {
   createWarehouseSource,
   deleteWarehouseSource,
@@ -22,6 +23,11 @@ import {
 import {
   CREDENTIAL_HELP,
   EXAMPLE_QUERY,
+  ACCESS_DATABASES,
+  ACCESS_SUBJECT,
+  SELECTABLE_WAREHOUSES,
+  accessRequestMessage,
+  accessRequestProblem,
   SYNC_STATE_LABEL,
   WAREHOUSE_LABEL,
   WAREHOUSE_SHORT,
@@ -29,12 +35,14 @@ import {
   buildWarehouseSecret,
   describeInterval,
   emptyWarehouseForm,
+  isPasswordDb,
   syncState,
   warehouseFormFromConfig,
   type SyncState,
   type Warehouse,
   type WarehouseForm,
 } from "../warehouse-sources.js";
+import { createTicket } from "../support.js";
 import { LOG_STATUS_LABEL } from "../inbound-sources.js";
 import { Badge, type BadgeVariant } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
@@ -167,7 +175,7 @@ function SourceForm({ initial, onCancel, onSaved }: { initial?: WarehouseSource;
         {!editing && (
           <Field id="wh-kind" label="Warehouse">
             <Select id="wh-kind" value={w} onChange={(e) => setF(emptyWarehouseForm(e.target.value as Warehouse))}>
-              {(Object.keys(WAREHOUSE_LABEL) as Warehouse[]).map((k) => (
+              {SELECTABLE_WAREHOUSES.map((k) => (
                 <option key={k} value={k}>{WAREHOUSE_LABEL[k]}</option>
               ))}
             </Select>
@@ -180,7 +188,7 @@ function SourceForm({ initial, onCancel, onSaved }: { initial?: WarehouseSource;
 
       <fieldset className="space-y-3">
         <legend className="text-[13px] font-semibold text-foreground">Connection</legend>
-        {w === "postgres" && (
+        {isPasswordDb(w) && (
           <div className="grid gap-3 sm:grid-cols-2">
             <Field id="wh-host" label={f.sshEnabled ? "Database host, as the SSH server sees it" : "Host"} hint={f.sshEnabled ? "Often a private name or address, such as db.internal or 10.0.3.7. The SSH server resolves it." : undefined}>
               <Input id="wh-host" value={f.host} onChange={(e) => set({ host: e.target.value })} placeholder={f.sshEnabled ? "db.internal" : "db.example.com"} />
@@ -219,14 +227,14 @@ function SourceForm({ initial, onCancel, onSaved }: { initial?: WarehouseSource;
                   </div>
                   <p className="text-[12px] text-muted-foreground sm:col-span-2">
                     Create a key pair for Loomail, put the public half in that user&apos;s <code className="font-mono">authorized_keys</code> (ideally with{" "}
-                    <code className="font-mono">restrict,port-forwarding,permitopen=&quot;db.internal:5432&quot;</code> in front of it, so the key can do nothing else), and paste
+                    <code className="font-mono">restrict,port-forwarding,permitopen=&quot;db.internal:{f.port.trim() || "5432"}&quot;</code> in front of it, so the key can do nothing else), and paste
                     the private half below. The SSH server must allow TCP forwarding.
                   </p>
                 </div>
               )}
             </div>
             <div className="sm:col-span-2">
-              <Field id="wh-ca" label="CA certificate (only for Amazon RDS, Supabase or a private CA)" hint="Amazon RDS and Supabase sign with their own certificate authority. Paste it here (RDS: the global bundle; Supabase: the CA from Database Settings) and Loomail still verifies the server. Neon, Redshift and most other services need nothing here.">
+              <Field id="wh-ca" label="CA certificate (only for Amazon RDS, Supabase, Azure or a private CA)" hint="Amazon RDS and Supabase sign with their own certificate authority. Paste it here (RDS: the global bundle; Supabase: the CA from Database Settings) and Loomail still verifies the server. Neon, Redshift and most other services need nothing here.">
                 <Textarea id="wh-ca" rows={3} spellCheck={false} className="font-mono text-[12px]" value={f.sslCa} onChange={(e) => set({ sslCa: e.target.value })} placeholder="-----BEGIN CERTIFICATE-----" />
               </Field>
             </div>
@@ -252,7 +260,7 @@ function SourceForm({ initial, onCancel, onSaved }: { initial?: WarehouseSource;
 
         <div>
           <p className="mb-1 text-[12px] text-muted-foreground">{CREDENTIAL_HELP[w]}</p>
-          {w === "postgres" && (
+          {isPasswordDb(w) && (
             <div className="space-y-3">
               <Field id="wh-pw" label={`Database password${editing ? " (leave empty to keep the saved one)" : ""}`}>
                 <Input id="wh-pw" type="password" autoComplete="new-password" value={f.password} onChange={(e) => set({ password: e.target.value })} />
@@ -480,6 +488,68 @@ function SourceRow({ source, onEdit }: { source: WarehouseSource; onEdit: () => 
 }
 
 // ---------------------------------------------------------------------------
+// Asking for access
+// ---------------------------------------------------------------------------
+
+/** Warehouse sources are switched on by the Loomail team: this sends them the details they need to size and price it. */
+function AccessRequest() {
+  const [database, setDatabase] = useState<string>(ACCESS_DATABASES[0]);
+  const [size, setSize] = useState("");
+  const [refresh, setRefresh] = useState("");
+  const [notes, setNotes] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
+  const send = useMutation({
+    mutationFn: () => createTicket({ subject: ACCESS_SUBJECT, message: accessRequestMessage({ database, size, refresh, notes }), category: "feature", page_url: "/integrate" }),
+    onError: (err) => setProblem(err instanceof Error ? err.message : "Could not send the request. Please try again."),
+  });
+
+  if (send.data) {
+    return (
+      <div className="mt-4 rounded-md border border-border bg-background p-4 text-[14px]" role="status">
+        <p className="font-medium text-foreground">Request sent.</p>
+        <p className="mt-1 text-muted-foreground">We will reply by email to set it up with you. You can follow it under <Link to={`/support/${send.data.ticket.id}`} className="underline underline-offset-4">Support</Link>.</p>
+      </div>
+    );
+  }
+  return (
+    <form
+      className="mt-4 space-y-3 rounded-md border border-border bg-background p-4"
+      aria-label="Request warehouse access"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const p = accessRequestProblem({ database, size, refresh, notes });
+        setProblem(p);
+        if (!p && !send.isPending) send.mutate();
+      }}
+    >
+      <p className="text-[13px] text-muted-foreground">
+        A warehouse can mean a lot of data, so we switch it on with you rather than automatically. It helps us if you tell us a bit about it.
+      </p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Field id="wh-req-db" label="Which database?">
+          <Select id="wh-req-db" value={database} onChange={(e) => setDatabase(e.target.value)}>
+            {ACCESS_DATABASES.map((d) => (<option key={d} value={d}>{d}</option>))}
+          </Select>
+        </Field>
+        <Field id="wh-req-size" label="Roughly how much data?">
+          <Input id="wh-req-size" value={size} maxLength={200} onChange={(e) => setSize(e.target.value)} placeholder="e.g. 2 million customers" />
+        </Field>
+        <Field id="wh-req-refresh" label="How often should it refresh?">
+          <Input id="wh-req-refresh" value={refresh} maxLength={200} onChange={(e) => setRefresh(e.target.value)} placeholder="e.g. once a day" />
+        </Field>
+      </div>
+      <Field id="wh-req-notes" label="Anything else? (optional)">
+        <Textarea id="wh-req-notes" rows={3} value={notes} maxLength={2000} onChange={(e) => setNotes(e.target.value)} placeholder="What you want to do with it" />
+      </Field>
+      {problem && <p className="text-[13px] text-danger" role="alert">{problem}</p>}
+      <Button type="submit" size="sm" disabled={send.isPending}>
+        <LifeBuoy size={16} strokeWidth={1.5} aria-hidden="true" /> {send.isPending ? "Sending..." : "Send request"}
+      </Button>
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // The card
 // ---------------------------------------------------------------------------
 
@@ -488,6 +558,8 @@ export function WarehouseSourcesCard() {
   const [mode, setMode] = useState<{ kind: "none" } | { kind: "add" } | { kind: "edit"; id: string }>({ kind: "none" });
   const sources = q.data?.sources ?? [];
   const editing = mode.kind === "edit" ? sources.find((s) => s.id === mode.id) : undefined;
+  const access = q.data?.access ?? true; // until it is known, do not flash the locked version
+  const [asking, setAsking] = useState(false);
 
   return (
     <section className="rounded-lg border border-border bg-card p-6" aria-label="Data warehouse">
@@ -498,23 +570,35 @@ export function WarehouseSourcesCard() {
             Data warehouse
           </h2>
           <p className="mt-2 max-w-2xl text-[14px] text-muted-foreground">
-            Already keep your customer data in Postgres, Snowflake or BigQuery? Loomail reads it on a schedule and turns each row into
+            Already keep your customer data in Postgres, MySQL or SQL Server? Loomail reads it on a schedule and turns each row into
             traits and events, so flows and segments can use it. It only reads, and only the query you write.
           </p>
         </div>
-        {mode.kind === "none" && (
+        {mode.kind === "none" && access && (
           <Button size="sm" onClick={() => setMode({ kind: "add" })}>
             <Plus size={16} strokeWidth={1.5} /> Connect a warehouse
           </Button>
         )}
+        {!access && !asking && (
+          <Button size="sm" onClick={() => setAsking(true)}>
+            <LifeBuoy size={16} strokeWidth={1.5} aria-hidden="true" /> Request access
+          </Button>
+        )}
       </div>
 
+      {!access && sources.length === 0 && !asking && (
+        <p className="mt-4 text-[13px] text-muted-foreground">Warehouse sources are set up with our team. Request access and tell us about your data.</p>
+      )}
+      {!access && sources.length > 0 && (
+        <p className="mt-4 text-[13px] text-warning" role="status">Warehouse sources are switched off for this workspace, so these are not syncing. Contact Support to switch them back on.</p>
+      )}
+      {!access && asking && <AccessRequest />}
       {mode.kind === "add" && <SourceForm onCancel={() => setMode({ kind: "none" })} onSaved={() => setMode({ kind: "none" })} />}
       {mode.kind === "edit" && editing && <SourceForm key={editing.id} initial={editing} onCancel={() => setMode({ kind: "none" })} onSaved={() => setMode({ kind: "none" })} />}
 
       {q.isLoading && <p className="mt-4 text-[13px] text-muted-foreground">Loading...</p>}
       {q.isError && <p className="mt-4 text-[13px] text-danger" role="alert">Could not load your warehouse sources.</p>}
-      {q.data && sources.length === 0 && mode.kind === "none" && (
+      {q.data && access && sources.length === 0 && mode.kind === "none" && (
         <p className="mt-4 text-[13px] text-muted-foreground">No warehouse connected yet.</p>
       )}
       {sources.length > 0 && (

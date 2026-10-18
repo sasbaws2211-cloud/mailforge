@@ -56,6 +56,91 @@ describe("buildGenericConfig", () => {
   });
 });
 
+describe("the sender's own event id", () => {
+  it("is sent as event_id_path when given, and left out when empty or when there is no event", () => {
+    const built = (over: Partial<GenericForm>) => {
+      const r = buildGenericConfig(form(over));
+      if (!r.ok) throw new Error(r.problems.join(" "));
+      return r.config;
+    };
+    expect(built({ eventIdPath: " event_id " })).toMatchObject({ event_id_path: "event_id" });
+    expect(built({ eventIdPath: "" })).not.toHaveProperty("event_id_path");
+    // an id belongs to an event: a traits-only source has none, even if text was left in the hidden field
+    expect(built({ eventMode: "none", eventValue: "", eventIdPath: "event_id", traits: [{ name: "plan", path: "plan" }] })).not.toHaveProperty("event_id_path");
+  });
+  it("is read back from a saved source", () => {
+    expect(genericFormFromConfig({ event_name: "x", user_id_path: "id", event_id_path: "event_id" }).eventIdPath).toBe("event_id");
+    expect(genericFormFromConfig({ event_name: "x", user_id_path: "id" }).eventIdPath).toBe("");
+  });
+  it("a sample request skips a path that is a search, rather than inventing a place for it", () => {
+    const curl = sampleCurl("https://x.test/webhooks/in/1", "tok", form({ emailPath: "answers[type=email].email", userIdPath: "hidden.user_id" }));
+    expect(curl).toContain('"hidden":{"user_id":"user_123"}');
+    expect(curl).not.toContain("answers");
+  });
+});
+
+describe("events named by a header, and calls checked by signature", () => {
+  const built = (over: Partial<GenericForm>) => {
+    const r = buildGenericConfig(form(over));
+    return r.ok ? r.config : r.problems;
+  };
+
+  it("names the event from a header, and reads the id from a header", () => {
+    expect(built({ eventMode: "header", eventValue: "X-Shopify-Topic", eventIdHeader: "X-Shopify-Event-Id", emailPath: "email" })).toMatchObject({
+      event_name_header: "X-Shopify-Topic",
+      event_id_header: "X-Shopify-Event-Id",
+    });
+    expect(built({ eventMode: "header", eventValue: "X-Shopify-Topic" })).not.toHaveProperty("event_name");
+    // an id belongs to an event: a traits-only source has none
+    expect(built({ eventMode: "none", eventValue: "", eventIdHeader: "X-Id", traits: [{ name: "a", path: "a" }] })).not.toHaveProperty("event_id_header");
+  });
+
+  it("refuses a header that is not a header name", () => {
+    for (const bad of ["has space", "a:b", "bad_underscore", "x".repeat(65)]) {
+      expect(built({ eventMode: "header", eventValue: bad }), bad).toEqual(["The event name header must be a header name: letters, numbers and hyphens."]);
+      expect(built({ eventIdHeader: bad }), bad).toEqual(["The event id header must be a header name: letters, numbers and hyphens."]);
+    }
+    expect(built({ eventMode: "header", eventValue: "" })).toContain("Say which header holds the event name.");
+  });
+
+  it("sends the signature settings only when calls are checked by signature", () => {
+    expect(built({})).not.toHaveProperty("verification");
+    expect(built({})).not.toHaveProperty("signature_header");
+    expect(built({ verification: "token", signatureHeader: "left-over" })).not.toHaveProperty("signature_header"); // text left in hidden fields is ignored
+    expect(built({ verification: "signature", signatureHeader: " X-Shopify-Hmac-Sha256 ", signatureEncoding: "base64", signaturePrefix: " sha256= " })).toMatchObject({
+      verification: "signature",
+      signature_header: "X-Shopify-Hmac-Sha256",
+      signature_encoding: "base64",
+      signature_prefix: "sha256=",
+    });
+    expect(built({ verification: "signature", signatureHeader: "X-Sig" })).not.toHaveProperty("signature_prefix");
+  });
+
+  it("says what is missing for signature mode", () => {
+    expect(built({ verification: "signature", signatureHeader: "" })).toEqual(["Say which header carries the signature."]);
+    expect(built({ verification: "signature", signatureHeader: "not a header" })).toEqual(["The signature header must be a header name: letters, numbers and hyphens."]);
+  });
+
+  it("is read back from a saved source", () => {
+    const back = genericFormFromConfig({
+      event_name_header: "X-Topic",
+      event_id_header: "X-Event-Id",
+      email_path: "email",
+      verification: "signature",
+      signature_header: "X-Sig",
+      signature_encoding: "hex",
+      signature_prefix: "sha256=",
+    });
+    expect(back).toMatchObject({ eventMode: "header", eventValue: "X-Topic", eventIdHeader: "X-Event-Id", verification: "signature", signatureHeader: "X-Sig", signatureEncoding: "hex", signaturePrefix: "sha256=" });
+    expect(genericFormFromConfig({ event_name: "x", user_id_path: "id" })).toMatchObject({ verification: "token", signatureEncoding: "either", eventIdHeader: "" });
+  });
+
+  it("a sample curl names the event header when the event is named by one", () => {
+    const curl = sampleCurl("https://x.test/webhooks/in/1", "tok", form({ eventMode: "header", eventValue: "X-Topic", emailPath: "email" }));
+    expect(curl).toContain("-H 'X-Topic: form_submitted'");
+  });
+});
+
 describe("genericFormFromConfig", () => {
   it("is the inverse of building", () => {
     const f = form({ eventMode: "path", eventValue: "type", emailPath: "data.email", traits: [{ name: "plan", path: "data.plan" }], sendProperties: false });

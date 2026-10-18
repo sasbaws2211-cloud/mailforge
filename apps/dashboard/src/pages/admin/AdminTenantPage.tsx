@@ -129,6 +129,21 @@ function AllowancePanel({ d }: { d: AdminTenantDetail }) {
   );
 }
 
+/** Switch warehouse sources on or off for this workspace, after the customer has asked Support. */
+function WarehousePanel({ d }: { d: AdminTenantDetail }) {
+  const on = d.workspace.warehouse_access;
+  return (
+    <ActionPanel
+      workspaceId={d.workspace.id}
+      title="Warehouse sources"
+      description={`Currently ${on ? "ON" : "OFF"}. When on, the workspace can connect Postgres, MySQL or SQL Server and have Loomail read it on a schedule. A warehouse can mean a lot of data, so switch it on only after talking to the customer about size, refresh rate and any pricing. Switching it off stops the sources syncing (nothing is deleted).`}
+      buttonLabel={on ? "Switch off" : "Switch on"}
+      destructive={on}
+      build={(reason) => ({ kind: "warehouse-access", enabled: !on, reason })}
+    />
+  );
+}
+
 /** Pause or resume a workspace's managed sending. Its mail waits, untouched, while paused. */
 function SendingPanel({ d }: { d: AdminTenantDetail }) {
   const s = d.sending;
@@ -188,6 +203,7 @@ function Actions({ d }: { d: AdminTenantDetail }) {
         build={(reason) => ({ kind: "plan", plan, reason })}
       />
       <AllowancePanel d={d} />
+      <WarehousePanel d={d} />
       <SendingPanel d={d} />
       <ActionPanel
         workspaceId={w.id}

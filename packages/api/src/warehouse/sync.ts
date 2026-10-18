@@ -201,7 +201,7 @@ export async function dueSources(db: Db, now: Date, limit = 10): Promise<string[
     WHERE s.kind = 'warehouse' AND s.enabled
       AND (s.next_sync_at IS NULL OR s.next_sync_at <= ${now})
       AND (s.sync_lease_until IS NULL OR s.sync_lease_until <= ${now})
-      AND t.suspended_at IS NULL AND t.deletion_scheduled_at IS NULL
+      AND t.suspended_at IS NULL AND t.deletion_scheduled_at IS NULL AND t.warehouse_access
     ORDER BY s.next_sync_at NULLS FIRST
     LIMIT ${limit}`);
   return r.rows.map((x) => x.id);

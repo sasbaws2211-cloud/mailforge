@@ -27,6 +27,7 @@ export interface AdminWorkspace {
   deletion_requested_by: string | null;
   /** A hand-set Loomail AI token allowance: null = the plan's, -1 = no cap. */
   ai_allowance_override: number | null;
+  warehouse_access: boolean;
   contacts: number;
   emails_this_month: number;
   members: number;
@@ -165,6 +166,7 @@ export type AdminAction =
   | { kind: "delete"; confirm: string; immediate: boolean; reason: string }
   | { kind: "cancel-deletion"; reason: string }
   | { kind: "ai-allowance"; tokens: number | "unlimited" | null; reason: string }
+  | { kind: "warehouse-access"; enabled: boolean; reason: string }
   | { kind: "managed-sending"; action: "pause" | "resume"; reason: string };
 
 export function postAdminAction(id: string, a: AdminAction) {
@@ -176,6 +178,8 @@ export function postAdminAction(id: string, a: AdminAction) {
       return adminPost<{ ok: true }>(`${base}/trial`, { days: a.days, reason: a.reason });
     case "managed-sending":
       return adminPost<{ ok: true }>(`${base}/managed-sending`, { action: a.action, reason: a.reason });
+    case "warehouse-access":
+      return adminPost<{ ok: true }>(`${base}/warehouse-access`, { enabled: a.enabled, reason: a.reason });
     case "ai-allowance":
       return adminPost<{ ok: true }>(`${base}/ai-allowance`, { tokens: a.tokens, reason: a.reason });
     case "delete":

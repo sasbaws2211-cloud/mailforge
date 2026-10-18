@@ -344,6 +344,32 @@ Choose **Any JSON webhook** and say where things are in the payload, using dotte
 - **Traits**: any number of `trait name` from `field` pairs (up to 20). Empty or missing fields are skipped, so a request
   never clears a trait. `company`, `name`, `email`, `plan` and `payment_status` set the built-in fields, as in `identify`.
 - **Payload**: by default the whole JSON body is kept on the event, so flows and segments can use any of it.
+- **The sender's own id for the event** (optional): a path such as `event_id`, or a request header such as `X-Shopify-Event-Id`. If
+  the sender retries a delivery, the same id is recorded once. Senders that can set a header can send `X-Loomail-Event-Id` instead,
+  which wins over both and is used exactly as sent. When the event's name also comes from the request (a path or a header), the name is
+  part of the id, so one booking id on a "created" and a "cancelled" event are two events, not a repeat.
+- **The event name from a header** (optional): for senders that keep the topic out of the body (Shopify's `X-Shopify-Topic`, WooCommerce's
+  `X-WC-Webhook-Topic`). One source then records every topic, each under its own name.
+
+**Picking from a list.** A path can step into a list by position (`answers.1.email`) or search it by what an item is
+(`answers[type=email].email`: the `email` of the first item whose `type` is `email`). The key can be dotted
+(`answers[field.ref=work_email].email`), and searches can follow each other. Prefer a search when the list can change length:
+a position moves when an optional question is skipped, a search does not. Values are compared as text, so `[number=5]` matches 5.
+
+The body can be JSON, or form-encoded (`application/x-www-form-urlencoded`, which some tools send by default). A form body is read
+as a flat object of text values; a field sent twice becomes a list. Numbers arrive as text (`"5"`), so a trait from a form body is
+text. Stripe, Paystack and Flutterwave sources need JSON.
+
+**How calls are checked.** Choose when you add the source (it cannot be changed afterwards):
+
+- **A token** (the default), described next.
+- **The sender's own signature.** Some tools sign every call: an HMAC-SHA256 of the exact request body, made with a secret you and the
+  tool share, sent in a header (Shopify `X-Shopify-Hmac-Sha256`, WooCommerce `X-WC-Webhook-Signature`, Tally `Tally-Signature`, Cal.com
+  `X-Cal-Signature-256`). Give Loomail the header name, how the signature is written (hex, base64, or either), any text before it such
+  as `sha256=`, and the shared secret. Loomail stores the secret encrypted, makes no token, and accepts a call only when its signature
+  matches. The address can then be shared with the tool as it is. A new secret can be saved later; the old signature stops working at once.
+  This proves who sent the call, not when: a signed call that is captured and replayed still verifies, and the sender's event id
+  (above) is what keeps a replay from being recorded twice.
 
 The source gives you a token, shown once. Send it as `Authorization: Bearer <token>`, as `X-Loomail-Token: <token>`, or
 as `?token=<token>` on the address for tools that cannot set headers (the address then is a secret; do not share it).
@@ -355,10 +381,72 @@ curl -X POST 'https://YOUR_LOOMAIL_HOST/webhooks/in/SOURCE_ID' \
   -d '{"event_type":"form_response","user":{"id":"u_1","email":"ada@example.com"}}'
 ```
 
-Answers: `200` when handled, or deliberately ignored (nothing to record); `400` for a body that is not a JSON object or has no
+Answers: `200` when handled, or deliberately ignored (nothing to record); `400` for a body that is not a JSON object (or form) or has no
 person at the configured paths; `401` for a wrong token, a disabled source or an unknown address (all the same answer, so
 the address cannot be used to find out which sources exist); `402` when your plan's contact limit stopped a new person;
 `429` past 600 requests a minute for one source.
+
+### Ready-made tools
+
+On the Integrate page, **Connect other tools**, the **Type** list has ready-made settings for the tools below. Pick one, follow the
+steps it shows, save, and give the tool the address Loomail shows (for tools that cannot send a header, the address includes the
+token: keep it private). Each is a generic source with the fields filled in, so you can change any of them afterwards.
+
+| Tool | Becomes | Person | Retries | Checked against the tool's docs |
+|---|---|---|---|---|
+| Typeform | `typeform_submitted` | hidden field `user_id`, else the email answer | once, by `event_id` | official example payload |
+| Tally | `tally_form_submitted` | the email question | once, by `eventId` | official page; signature check available; Tally can also send an `Authorization` header |
+| Webflow form | `webflow_form_submitted` | `payload.data.email` (rename to your field) | once, by `payload.id` | field list only: send a test and read the log |
+| Cal.com | the trigger, such as `BOOKING_CREATED` | first attendee's email | once per booking and trigger, by `payload.uid` | official example payload; signature check available |
+| Gumroad | `gumroad_sale` | `email` (form fields, price in US cents) | not deduplicated | Ping field list; no full example found |
+| Shopify | the topic header, such as `customers/create` or `orders/paid` | `email` | once, by `X-Shopify-Event-Id` | topic, event-id and signature headers confirmed; payload fields: check the first delivery |
+| WooCommerce customers | the topic header, such as `customer.created` | `email` | once, by the delivery id header | topic and signature headers confirmed; customer fields: check the first delivery |
+| Segment | the track call's event name | `userId`, email from `context.traits.email` | once, by `messageId` | official track spec |
+
+Where the payload shape is only partly documented, the form says so. Send one real or test delivery and open the source's log: a request
+the settings cannot read is logged as rejected with the reason, and you can fix the path and send again.
+
+Tally, Cal.com, Shopify and WooCommerce sign their calls, and their presets offer the signature check (see "How calls are checked"
+above) as well as a token: you paste the secret that tool signs with. For Shopify and WooCommerce the signature is the better choice,
+because neither can send a token header. Webflow, Typeform, Segment and Gumroad: Loomail checks the token only. A WooCommerce order
+carries its email under `billing`, so order webhooks are logged as rejected: this preset is for customers.
+
+Tools without a ready-made preset (Fillout, Formspree, PostHog, Getwaitlist and others) work through **Any JSON webhook** when they can
+POST JSON or form fields to a URL: send a test, open the log and set the paths from what arrives. Jotform (it wraps the answers in a
+multipart body) and Google Forms (no webhook) need Zapier or Make in between.
+
+### Typeform
+
+Typeform cannot set headers, so put the token in the address: add the source, then give Typeform
+`https://YOUR_LOOMAIL_HOST/webhooks/in/SOURCE_ID?token=mf_in_YOUR_TOKEN` as the webhook URL (keep it private). Typeform sends
+`form_response` events like this (trimmed):
+
+```json
+{ "event_id": "LtWXD3crgy", "event_type": "form_response",
+  "form_response": { "hidden": { "user_id": "abc123456" }, "calculated": { "score": 9 },
+    "answers": [ { "type": "email", "email": "laura@example.com", "field": { "id": "SMEUb7VJz92Q", "type": "email" } },
+                 { "type": "text", "text": "Laura", "field": { "id": "JwWggjAKtOkA", "type": "short_text" } } ] } }
+```
+
+Settings that work for it:
+
+| Setting | Value |
+|---|---|
+| Event | named by `event_type`, or always `typeform_submitted` |
+| User id | `form_response.hidden.user_id` (pass your own id to the form as a Typeform hidden field) |
+| Email | `form_response.answers[type=email].email` |
+| Event id | `event_id`, so a retry of the same submission is recorded once |
+| A trait from a short answer | `form_response.answers[field.ref=YOUR_QUESTION_REF].text`, or `[field.type=short_text].text` for the first |
+
+Use a search (`[type=email]`) rather than a position (`answers.1.email`): Typeform leaves skipped questions out of `answers`, so every
+later answer moves up by one. Loomail checks the token in the address; it does not check Typeform's optional `Typeform-Signature`.
+
+### Zapier, Make, n8n and other no-code tools
+
+Use their **Webhooks** (HTTP request) action and set the method to POST. Zapier's *Webhooks by Zapier, POST* can set a header:
+add `Authorization: Bearer mf_in_YOUR_TOKEN`, or use `?token=` in the URL. Choose **JSON** as the payload type if offered; a form payload
+works too. Send flat fields (`id`, `email`, `event`, `company`) and point the paths at them. Give each Zap its own source if the
+payloads differ, and send an `X-Loomail-Event-Id` header (or an id field plus the event id path) when a step can run twice.
 
 ### Stripe
 

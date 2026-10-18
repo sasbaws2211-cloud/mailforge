@@ -8,7 +8,7 @@
  * Mirror side: PUBLIC (packages/adapters is mirrored).
  */
 
-export type WarehouseKind = "postgres" | "snowflake" | "bigquery";
+export type WarehouseKind = "postgres" | "mysql" | "mssql" | "snowflake" | "bigquery";
 
 export type CellValue = string | number | boolean | null;
 

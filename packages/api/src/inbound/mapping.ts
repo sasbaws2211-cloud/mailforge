@@ -54,18 +54,55 @@ export function cleanEmail(v: unknown): string | undefined {
 
 export const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** Read a value by a dotted path ("data.user.id", "items.0.price"). Missing anywhere along the way gives undefined. */
+/** A `[key=value]` step in a path: pick the first element of an array whose `key` (itself a dotted path) equals `value`. */
+const FILTER_STEP = /(\[[A-Za-z0-9_.-]+=[^\]]*\])/;
+
+/**
+ * Read a value by a dotted path ("data.user.id", "items.0.price"). Missing anywhere along the way gives undefined.
+ *
+ * An array can also be searched instead of indexed: `form_response.answers[type=email].email` is the `email` of the first
+ * answer whose `type` is `email`. The key can be dotted (`answers[field.ref=work_email].email`). That keeps working when an
+ * optional question is skipped and the answers after it change position, which an index (`answers.1.email`) does not.
+ * Values are compared as text, so `[number=5]` matches 5.
+ */
 export function getPath(root: unknown, path: string): unknown {
+  const pieces = path.split(FILTER_STEP);
+  // Steps in order: a name or index to step into, or a filter to search the array we are in.
+  const steps: Array<string | { key: string; value: string }> = [];
+  for (let i = 0; i < pieces.length; i++) {
+    const piece = pieces[i]!;
+    if (i % 2 === 1) {
+      const eq = piece.indexOf("=");
+      steps.push({ key: piece.slice(1, eq), value: piece.slice(eq + 1, -1) });
+      continue;
+    }
+    if (piece === "" && pieces.length > 1 && i > 0) continue; // nothing between two filters, or after the last one
+    // A name after a filter must be joined with a dot: `answers[type=email].email`.
+    const text = i > 0 ? (piece.startsWith(".") ? piece.slice(1) : null) : piece;
+    if (text === null) return undefined;
+    for (const part of text.split(".")) {
+      if (part === "") return undefined;
+      steps.push(part);
+    }
+  }
   let cur: unknown = root;
-  for (const part of path.split(".")) {
-    if (part === "") return undefined;
-    if (Array.isArray(cur)) {
-      if (!/^\d+$/.test(part)) return undefined;
-      cur = cur[Number(part)];
-    } else if (isObj(cur) && Object.prototype.hasOwnProperty.call(cur, part)) {
-      cur = cur[part];
+  for (const step of steps) {
+    if (typeof step === "string") {
+      if (Array.isArray(cur)) {
+        if (!/^\d+$/.test(step)) return undefined;
+        cur = cur[Number(step)];
+      } else if (isObj(cur) && Object.prototype.hasOwnProperty.call(cur, step)) {
+        cur = cur[step];
+      } else {
+        return undefined;
+      }
     } else {
-      return undefined;
+      if (!Array.isArray(cur)) return undefined;
+      cur = cur.find((el) => {
+        const v = getPath(el, step.key);
+        return (typeof v === "string" || typeof v === "number" || typeof v === "boolean") && String(v) === step.value;
+      });
+      if (cur === undefined) return undefined;
     }
   }
   return cur;
@@ -84,15 +121,38 @@ function scalar(v: unknown): TraitValue | undefined {
 // ---------------------------------------------------------------------------
 
 const pathSchema = z.string().trim().min(1).max(200);
+/** An HTTP header name: letters, digits and hyphens. */
+const headerNameSchema = z.string().trim().regex(/^[A-Za-z0-9-]{1,64}$/, "A header name: letters, numbers and hyphens.");
 
 export const genericConfigSchema = z
   .object({
     /** A fixed event name, or the path to one in the payload. With neither, the request only sets traits. */
     event_name: z.string().trim().min(1).max(100).optional(),
     event_name_path: pathSchema.optional(),
+    /** The name of a request header that holds the event name (Shopify: `X-Shopify-Topic`), for senders that keep it out of the body. */
+    event_name_header: headerNameSchema.optional(),
     /** Where the person is. user_id_path wins; email_path is used when it is missing (and as the email trait). */
     user_id_path: pathSchema.optional(),
     email_path: pathSchema.optional(),
+    /**
+     * Where the sender's own id for this event is in the payload (Typeform: `event_id`). A repeat delivery of the same id is
+     * recorded once. Senders that can set a header can send `X-Loomail-Event-Id` instead, which wins when both are given.
+     */
+    event_id_path: pathSchema.optional(),
+    /** Or the request header that holds it (Shopify: `X-Shopify-Event-Id`). `X-Loomail-Event-Id` wins over both. */
+    event_id_header: headerNameSchema.optional(),
+    /**
+     * How calls are checked: with the token Loomail made (the default), or with the sender's own signature, an HMAC-SHA256 of the
+     * exact body made with a secret the sender and Loomail share (Shopify, Tally, WooCommerce, Cal.com). A signature source holds
+     * that secret and has no token. It cannot change once the source is made.
+     */
+    verification: z.enum(["token", "signature"]).default("token"),
+    /** The header that carries the signature (Shopify: `X-Shopify-Hmac-Sha256`). */
+    signature_header: headerNameSchema.optional(),
+    /** How the signature is written: hex, base64, or either (the default accepts both: the same 256-bit value). */
+    signature_encoding: z.enum(["hex", "base64", "either"]).default("either"),
+    /** Text in front of the signature that is not part of it, such as `sha256=`. */
+    signature_prefix: z.string().trim().max(20).optional(),
     /** Trait name -> path in the payload. */
     trait_paths: z
       .record(pathSchema)
@@ -108,14 +168,55 @@ export const genericConfigSchema = z
     if (!c.user_id_path && !c.email_path) {
       ctx.addIssue({ code: "custom", path: ["user_id_path"], message: "Say where the person is in the payload: a user id path or an email path." });
     }
-    if (!c.event_name && !c.event_name_path && Object.keys(c.trait_paths).length === 0) {
+    if (!c.event_name && !c.event_name_path && !c.event_name_header && Object.keys(c.trait_paths).length === 0) {
       ctx.addIssue({ code: "custom", path: ["event_name"], message: "Give an event name, or at least one trait to set." });
+    }
+    if (c.verification === "signature" && !c.signature_header) {
+      ctx.addIssue({ code: "custom", path: ["signature_header"], message: "Say which header carries the signature." });
+    }
+    if (c.verification === "token" && (c.signature_header || c.signature_prefix)) {
+      ctx.addIssue({ code: "custom", path: ["verification"], message: "A signature header only applies when calls are checked by signature." });
     }
   });
 
 export type GenericConfig = z.infer<typeof genericConfigSchema>;
 
-export function mapGeneric(config: GenericConfig, body: unknown, eventId?: string): MapResult {
+/**
+ * Is `header` the HMAC-SHA256 of `rawBody` made with `secret`? The sender's value may be hex or base64 (per `encoding`) and may
+ * carry a prefix such as `sha256=`. Compared in constant time. Anything that is not a 32-byte value is simply not a match.
+ */
+export function verifyHmacSignature(secret: string, rawBody: string, header: string, opts: { encoding?: "hex" | "base64" | "either"; prefix?: string } = {}): boolean {
+  let given = header.trim();
+  const prefix = opts.prefix?.trim();
+  if (prefix && given.toLowerCase().startsWith(prefix.toLowerCase())) given = given.slice(prefix.length).trim();
+  const encoding = opts.encoding ?? "either";
+  let bytes: Buffer | null = null;
+  if ((encoding === "hex" || encoding === "either") && /^[0-9a-fA-F]{64}$/.test(given)) bytes = Buffer.from(given, "hex");
+  else if ((encoding === "base64" || encoding === "either") && /^[A-Za-z0-9+/]{43}=?$/.test(given)) bytes = Buffer.from(given, "base64");
+  else if ((encoding === "base64" || encoding === "either") && /^[A-Za-z0-9_-]{43}=?$/.test(given)) bytes = Buffer.from(given.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+  if (!bytes || bytes.length !== 32) return false;
+  const expected = createHmac("sha256", secret).update(rawBody).digest();
+  return timingSafeEqual(bytes, expected);
+}
+
+/**
+ * The key that makes a repeat harmless. An id the source reads from the sender's own payload or headers can stand for different
+ * events when the name comes from the request too (a booking created, then cancelled), so the name is part of the key then.
+ * An `X-Loomail-Event-Id` the sender chose is used exactly as sent: they decide what counts as a repeat.
+ */
+function dedupeKey(config: GenericConfig, eventId: string, event: string, extras: GenericRequestExtras): string {
+  return extras.idFromSettings && (config.event_name_path || config.event_name_header) ? `${eventId}:${event}` : eventId;
+}
+
+/** What the request carried outside the body that a generic source may read. */
+export interface GenericRequestExtras {
+  /** The value of the header named by `event_name_header`, when it was sent. */
+  eventNameFromHeader?: string;
+  /** The event id was read through this source's settings (a body path or a named header), not sent as X-Loomail-Event-Id. */
+  idFromSettings?: boolean;
+}
+
+export function mapGeneric(config: GenericConfig, body: unknown, eventId?: string, extras: GenericRequestExtras = {}): MapResult {
   if (!isObj(body)) return { ok: false, status: "rejected", reason: "The body must be a JSON object." };
 
   const email = config.email_path ? cleanEmail(getPath(body, config.email_path)) : undefined;
@@ -130,7 +231,11 @@ export function mapGeneric(config: GenericConfig, body: unknown, eventId?: strin
   }
 
   let event: string | undefined = config.event_name;
-  if (config.event_name_path) {
+  if (config.event_name_header) {
+    const named = extras.eventNameFromHeader?.trim();
+    if (named) event = named.slice(0, 100);
+  }
+  if (!extras.eventNameFromHeader?.trim() && config.event_name_path) {
     const named = getPath(body, config.event_name_path);
     if (typeof named === "string" && named.trim() !== "") event = named.trim().slice(0, 100);
     else if (!config.event_name) event = undefined;
@@ -145,7 +250,7 @@ export function mapGeneric(config: GenericConfig, body: unknown, eventId?: strin
       actor: { userId, email },
       traits,
       ...(event
-        ? { track: { event, properties: config.send_properties ? body : {}, ...(eventId ? { messageId: eventId } : {}) } }
+        ? { track: { event, properties: config.send_properties ? body : {}, ...(eventId ? { messageId: dedupeKey(config, eventId, event, extras) } : {}) } }
         : {}),
     },
   };

@@ -9,6 +9,7 @@ import { Download } from "lucide-react";
 import { BrandLockup } from "../components/brand-lockup.js";
 import { Button, buttonVariants } from "../components/ui/button.js";
 import { useLogout } from "../auth.js";
+import { SupportPanel } from "../components/support-panel.js";
 import { EXPORT_URL, timeUntilErasure, useCancelDeletion } from "../account.js";
 import { cn } from "../lib/utils.js";
 import { formatDay } from "../plan.js";
@@ -41,6 +42,7 @@ export default function PendingDeletionPage({ scheduledAt, isOwner }: { schedule
         </Button>
       </div>
       {cancel.isError && <p className="mt-4 text-[14px] text-danger">{errorMessage(cancel.error)}</p>}
+      <SupportPanel />
     </main>
   );
 }

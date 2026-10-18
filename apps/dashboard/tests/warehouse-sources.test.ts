@@ -1,5 +1,6 @@
 /** Warehouse sources, form half: building and reading the settings and credential, and the helper text. */
 import { describe, it, expect } from "vitest";
+import { ACCESS_DATABASES, accessRequestMessage, accessRequestProblem } from "../src/warehouse-sources.js";
 import {
   EXAMPLE_QUERY,
   SSH_FINGERPRINT,
@@ -195,5 +196,46 @@ describe("labels", () => {
     expect(s(true, "error")).toBe("error");
     expect(s(false, "ok")).toBe("off");
     expect(s(true, "ok", true)).toBe("running");
+  });
+});
+
+describe("MySQL and SQL Server", () => {
+  const KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----";
+  for (const [w, port] of [["mysql", "3306"], ["mssql", "1433"]] as const) {
+    it(`${w}: starts with its own port and example query, and builds host settings with a tunnel`, () => {
+      const f = emptyWarehouseForm(w);
+      expect(f.port).toBe(port);
+      expect(f.query).not.toBe(emptyWarehouseForm("postgres").query);
+      const filled = { ...f, host: "db.internal", database: "app", user: "loomail", password: "pw", sshEnabled: true, sshHost: "bastion.example.com", sshUser: "loomail", sshFingerprint: "SHA256:" + "A".repeat(43), sshPrivateKey: KEY, eventValue: "user_synced" };
+      const c = buildWarehouseConfig(filled);
+      expect(c.ok).toBe(true);
+      if (c.ok) expect(c.value).toMatchObject({ host: "db.internal", port: Number(port), database: "app", ssh_tunnel: { host: "bastion.example.com", port: 22 } });
+      expect(buildWarehouseSecret(filled, false)).toEqual({ ok: true, value: { password: "pw", ssh_private_key: KEY } });
+      expect(buildWarehouseSecret({ ...filled, password: "", sshPrivateKey: "" }, true, true)).toEqual({ ok: true, value: null });
+      expect(buildWarehouseSecret({ ...filled, password: "" }, false).ok).toBe(false);
+    });
+    it(`${w}: is read back from a saved source`, () => {
+      const back = warehouseFormFromConfig({ warehouse: w, host: "h", port: 4000, database: "d", user: "u", ssh_tunnel: { host: "b", port: 2222, user: "s", host_fingerprint: "SHA256:" + "A".repeat(43) }, query: "SELECT 1" });
+      expect(back).toMatchObject({ warehouse: w, port: "4000", sshEnabled: true, sshPort: "2222" });
+    });
+  }
+});
+
+describe("asking Support for warehouse access", () => {
+  const ok = { database: "Postgres", size: " about 2 million customers ", refresh: "once a day", notes: "" };
+
+  it("needs the size and the refresh rate, the two things Support must know to price it", () => {
+    expect(accessRequestProblem(ok)).toBeNull();
+    expect(accessRequestProblem({ ...ok, size: "  " })).toMatch(/how big/);
+    expect(accessRequestProblem({ ...ok, refresh: "" })).toMatch(/how often/);
+  });
+
+  it("writes the request as a short message Support can read, with the notes only when given", () => {
+    expect(accessRequestMessage(ok)).toBe(
+      "I would like warehouse sources switched on for my workspace.\n\nDatabase: Postgres\nRoughly how much data: about 2 million customers\nHow often it needs to refresh: once a day",
+    );
+    expect(accessRequestMessage({ ...ok, notes: " Sync orders too " })).toMatch(/refresh: once a day\n\nSync orders too$/);
+    expect(accessRequestMessage({ ...ok, notes: "x".repeat(9000) }).length).toBeLessThanOrEqual(5000);
+    expect(ACCESS_DATABASES).toContain("Postgres");
   });
 });

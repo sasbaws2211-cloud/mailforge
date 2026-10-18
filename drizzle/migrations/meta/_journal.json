@@ -309,6 +309,20 @@
       "when": 1792294318030,
       "tag": "0043_warehouse_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1792346311008,
+      "tag": "0044_support",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1792350896305,
+      "tag": "0045_warehouse_access",
+      "breakpoints": true
     }
   ]
 }

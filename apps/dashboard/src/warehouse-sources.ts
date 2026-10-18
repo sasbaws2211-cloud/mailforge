@@ -6,14 +6,27 @@
  * Mirror side: PUBLIC (apps/dashboard is mirrored).
  */
 
-export type Warehouse = "postgres" | "snowflake" | "bigquery";
+export type Warehouse = "postgres" | "mysql" | "mssql" | "snowflake" | "bigquery";
+
+/** Warehouses reached by host, port and password (and, optionally, through an SSH tunnel). */
+export type PasswordDb = "postgres" | "mysql" | "mssql";
+export const isPasswordDb = (w: Warehouse): w is PasswordDb => w === "postgres" || w === "mysql" || w === "mssql";
+export const DEFAULT_PORT: Record<PasswordDb, string> = { postgres: "5432", mysql: "3306", mssql: "1433" };
 
 export const WAREHOUSE_LABEL: Record<Warehouse, string> = {
   postgres: "Postgres (also Redshift, Supabase, Neon, RDS...)",
+  mysql: "MySQL (also MariaDB, Aurora, PlanetScale...)",
+  mssql: "SQL Server (also Azure SQL)",
   snowflake: "Snowflake",
   bigquery: "Google BigQuery",
 };
-export const WAREHOUSE_SHORT: Record<Warehouse, string> = { postgres: "Postgres", snowflake: "Snowflake", bigquery: "BigQuery" };
+/**
+ * What the "Connect a warehouse" form offers for a new source. Snowflake and BigQuery are built and tested but hidden for
+ * now; add "snowflake" and "bigquery" here to bring them back. Existing sources of either kind are unaffected.
+ */
+export const SELECTABLE_WAREHOUSES: readonly Warehouse[] = ["postgres", "mysql", "mssql"];
+
+export const WAREHOUSE_SHORT: Record<Warehouse, string> = { postgres: "Postgres", mysql: "MySQL", mssql: "SQL Server", snowflake: "Snowflake", bigquery: "BigQuery" };
 
 export interface TraitRow {
   name: string;
@@ -71,6 +84,8 @@ export interface WarehouseForm {
 /** A starting query for each warehouse. `:cursor` is the sync position; it is the only parameter. */
 export const EXAMPLE_QUERY: Record<Warehouse, string> = {
   postgres: "SELECT id, email, plan, updated_at\nFROM users\nWHERE updated_at >= :cursor::timestamptz",
+  mysql: "SELECT id, email, plan, updated_at\nFROM users\nWHERE updated_at >= CAST(:cursor AS DATETIME)",
+  mssql: "SELECT id, email, [plan], updated_at\nFROM dbo.users\nWHERE updated_at >= CAST(:cursor AS DATETIME2)",
   snowflake: "SELECT id, email, plan, updated_at\nFROM analytics.public.users\nWHERE updated_at >= TO_TIMESTAMP_TZ(:cursor)",
   bigquery: "SELECT id, email, plan, updated_at\nFROM `my-project.crm.users`\nWHERE updated_at >= TIMESTAMP(:cursor)",
 };
@@ -79,7 +94,7 @@ export function emptyWarehouseForm(warehouse: Warehouse = "postgres"): Warehouse
   return {
     warehouse,
     host: "",
-    port: "5432",
+    port: isPasswordDb(warehouse) ? DEFAULT_PORT[warehouse] : "5432",
     database: "",
     user: "",
     sslMode: "verify",
@@ -143,7 +158,7 @@ export function buildWarehouseConfig(f: WarehouseForm): Built<Record<string, unk
   };
 
   let connection: Record<string, unknown> = {};
-  if (w === "postgres") {
+  if (isPasswordDb(w)) {
     need(f.host, "Give the database host.");
     need(f.database, "Give the database name.");
     need(f.user, "Give the database user.");
@@ -183,7 +198,7 @@ export function buildWarehouseConfig(f: WarehouseForm): Built<Record<string, unk
     };
   }
 
-  if (w === "postgres" && f.sslCa.trim() && !/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(f.sslCa)) {
+  if (isPasswordDb(w) && f.sslCa.trim() && !/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(f.sslCa)) {
     problems.push("The CA certificate must be PEM text, including the BEGIN CERTIFICATE and END CERTIFICATE lines.");
   }
   if (!f.query.trim()) problems.push("Write the query.");
@@ -248,7 +263,7 @@ export function buildWarehouseConfig(f: WarehouseForm): Built<Record<string, unk
  */
 export function buildWarehouseSecret(f: WarehouseForm, hasSaved: boolean, hadTunnelKey = false): Built<Record<string, unknown> | null> {
   const w = f.warehouse;
-  if (w === "postgres") {
+  if (isPasswordDb(w)) {
     // Only what was typed is sent; the server merges it over what is saved, so changing the password keeps the SSH key.
     const out: Record<string, unknown> = {};
     if (f.password !== "") out.password = f.password;
@@ -286,7 +301,8 @@ export function buildWarehouseSecret(f: WarehouseForm, hasSaved: boolean, hadTun
 /** The form for a stored source (the inverse of buildWarehouseConfig). Credentials are never sent back, so they are empty. */
 export function warehouseFormFromConfig(config: Record<string, unknown>): WarehouseForm {
   const str = (v: unknown) => (typeof v === "string" ? v : "");
-  const w: Warehouse = config.warehouse === "snowflake" || config.warehouse === "bigquery" ? config.warehouse : "postgres";
+  const w: Warehouse =
+    config.warehouse === "snowflake" || config.warehouse === "bigquery" || config.warehouse === "mysql" || config.warehouse === "mssql" ? config.warehouse : "postgres";
   const base = emptyWarehouseForm(w);
   const traits = config.trait_columns && typeof config.trait_columns === "object" ? Object.entries(config.trait_columns as Record<string, unknown>).map(([name, column]) => ({ name, column: str(column) })) : [];
   return {
@@ -348,6 +364,42 @@ export const SYNC_STATE_LABEL: Record<SyncState, string> = { never: "Not run yet
 /** What the credential field is called for each warehouse. */
 export const CREDENTIAL_HELP: Record<Warehouse, string> = {
   postgres: "Use a read-only user. Loomail only ever reads, inside a read-only transaction, but a read-only user means the database enforces it too.",
+  mysql: "Use a read-only user (GRANT SELECT on the tables you need). Loomail only ever reads, inside a read-only transaction, but a read-only user means the database enforces it too.",
+  mssql: "Use a login that can only read (the db_datareader role on the database). SQL Server has no read-only transaction, so the login is what keeps this read-only. Connect to a port, usually 1433, not an instance name.",
   snowflake: "Key-pair sign-in. Create a key pair, run ALTER USER <name> SET RSA_PUBLIC_KEY='...' in Snowflake with the public half, and paste the private half here. Use a role that can only SELECT.",
   bigquery: "Create a service account, give it BigQuery Job User on the project and BigQuery Data Viewer on the dataset, create a JSON key for it and paste the whole file here.",
 };
+
+// ---------------------------------------------------------------------------
+// Asking Support for warehouse access
+// ---------------------------------------------------------------------------
+
+/** What a person tells Support when asking for warehouse sources, so the team can size and price it. */
+export interface AccessRequest {
+  database: string;
+  size: string;
+  refresh: string;
+  notes: string;
+}
+
+export const ACCESS_DATABASES = ["Postgres", "MySQL", "SQL Server", "Snowflake", "BigQuery", "Something else"] as const;
+export const ACCESS_SUBJECT = "Warehouse access request";
+
+export function accessRequestProblem(r: AccessRequest): string | null {
+  if (r.size.trim() === "") return 'Tell us roughly how big your data is, for example "about 2 million customers".';
+  if (r.refresh.trim() === "") return 'Tell us how often it needs to refresh, for example "once a day".';
+  return null;
+}
+
+/** The request as the message Support reads. */
+export function accessRequestMessage(r: AccessRequest): string {
+  const lines = [
+    "I would like warehouse sources switched on for my workspace.",
+    "",
+    `Database: ${r.database}`,
+    `Roughly how much data: ${r.size.trim()}`,
+    `How often it needs to refresh: ${r.refresh.trim()}`,
+  ];
+  if (r.notes.trim() !== "") lines.push("", r.notes.trim());
+  return lines.join("\n").slice(0, 5000);
+}

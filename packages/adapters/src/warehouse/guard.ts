@@ -1,5 +1,5 @@
 /**
- * Where a customer-typed warehouse address may point (Postgres only: Snowflake and BigQuery addresses are built by
+ * Where a customer-typed warehouse address may point (Postgres, MySQL and SQL Server: Snowflake and BigQuery addresses are built by
  * Loomail from an account name, so the customer never supplies a host for them).
  *
  * Same worry and same rule as the SMTP and webhook guards: the server must not become a way to reach the

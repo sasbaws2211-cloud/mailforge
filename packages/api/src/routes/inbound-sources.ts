@@ -36,8 +36,11 @@ const paystackKeySchema = z
   .trim()
   .regex(/^sk_(test|live)_[A-Za-z0-9]{10,}$/, "That does not look like a Paystack secret key. It starts with sk_test_ or sk_live_.");
 
+/** The secret a sender signs with (Shopify, Tally, WooCommerce, Cal.com...). Their formats differ, so only its size is checked. */
+const signingSecretSchema = z.string().min(1, "Paste the signing secret.").max(500);
+
 const createSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("generic"), name: z.string().trim().min(1).max(100), config: z.unknown() }),
+  z.object({ kind: z.literal("generic"), name: z.string().trim().min(1).max(100), config: z.unknown(), signing_secret: signingSecretSchema.optional() }),
   z.object({ kind: z.literal("stripe"), name: z.string().trim().min(1).max(100), config: z.unknown().optional(), stripe_signing_secret: stripeSecretSchema }),
   z.object({ kind: z.literal("paystack"), name: z.string().trim().min(1).max(100), config: z.unknown().optional(), paystack_secret_key: paystackKeySchema.optional() }),
   z.object({ kind: z.literal("flutterwave"), name: z.string().trim().min(1).max(100), config: z.unknown().optional() }),
@@ -58,6 +61,7 @@ const patchSchema = z
     config: z.unknown().optional(),
     stripe_signing_secret: stripeSecretSchema.optional(),
     paystack_secret_key: paystackKeySchema.optional(),
+    signing_secret: signingSecretSchema.optional(),
   })
   .strict();
 
@@ -106,6 +110,23 @@ const inboundSourcesRoutes: FastifyPluginAsync = async (app) => {
       if (!config.success) {
         reply.status(400);
         return { error: "Validation failed", issues: issues(config.error).map((i) => ({ ...i, path: `config.${i.path}` })) };
+      }
+      if (config.data.verification === "signature") {
+        // Checked by the sender's signature: Loomail holds the shared secret (sealed) and makes no token.
+        if (!parsed.data.signing_secret) {
+          reply.status(400);
+          return { error: "Validation failed", issues: [{ path: "signing_secret", message: "Signature checking needs the signing secret the sender uses. Or choose the token instead." }] };
+        }
+        const [row] = await db
+          .insert(inboundSources)
+          .values({ tenantId, name: parsed.data.name, kind: "generic", config: config.data, secretSealed: sealWebhookSecret(parsed.data.signing_secret) })
+          .returning();
+        reply.status(201);
+        return { source: view(row!) };
+      }
+      if (parsed.data.signing_secret) {
+        reply.status(400);
+        return { error: "Validation failed", issues: [{ path: "signing_secret", message: "A signing secret only applies when calls are checked by signature." }] };
       }
       const token = newToken();
       const [row] = await db
@@ -206,7 +227,22 @@ const inboundSourcesRoutes: FastifyPluginAsync = async (app) => {
         reply.status(400);
         return { error: "Validation failed", issues: [{ path: "config.verification", message: "A Paystack source cannot change how it verifies calls. Add a new source instead." }] };
       }
+      if (existing.kind === "generic") {
+        const wasMode = (existing.config as { verification?: string }).verification ?? "token";
+        const nowMode = (config.data as { verification?: string }).verification ?? "token";
+        if (nowMode !== wasMode) {
+          reply.status(400);
+          return { error: "Validation failed", issues: [{ path: "config.verification", message: "A source cannot change how it checks calls. Add a new source instead." }] };
+        }
+      }
       set.config = config.data;
+    }
+    if (parsed.data.signing_secret !== undefined) {
+      if (existing.kind !== "generic" || (existing.config as { verification?: string }).verification !== "signature") {
+        reply.status(400);
+        return { error: "Validation failed", issues: [{ path: "signing_secret", message: "Only a source that checks signatures holds a signing secret." }] };
+      }
+      set.secretSealed = sealWebhookSecret(parsed.data.signing_secret);
     }
     if (parsed.data.stripe_signing_secret !== undefined) {
       if (existing.kind !== "stripe") {

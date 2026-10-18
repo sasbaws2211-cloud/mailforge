@@ -26,7 +26,11 @@ export function isPlatformLlmSlot(v: unknown): v is PlatformLlmSlot {
 }
 
 /** What each recorded AI call was for. */
-export const LLM_FEATURES = ["compile", "content", "ai_draft", "embedding"] as const;
+export const LLM_FEATURES = ["compile", "content", "ai_draft", "embedding", "assistant"] as const;
+
+// "assistant" is the in-app help assistant. The operator pays for it and it has no per-workspace token allowance: its usage is
+// recorded (so it counts against the operator's monthly dollar budget and shows in the admin console) but is left out of a
+// workspace's allowance (see platformTokensUsed in drizzle/llm).
 export type LlmFeature = (typeof LLM_FEATURES)[number];
 
 /** The name customers see for the operator's provider. The real vendor and model are never shown. */

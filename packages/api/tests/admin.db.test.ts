@@ -599,3 +599,35 @@ describe("audit trail", () => {
     expect(await auditActions(t.id)).toEqual(["set_plan"]);
   });
 });
+
+describe("warehouse access", () => {
+  it("is off by default, can be switched on and off with a reason, is audited and shown on the workspace", async () => {
+    if (!dbAvailable) return;
+    const a = await withAdmin();
+    const t = await newTenant();
+    const flag = async () => (await q<{ warehouse_access: boolean }>(sql`SELECT warehouse_access FROM tenants WHERE id = ${t.id}::uuid`))[0]!.warehouse_access;
+    expect(await flag()).toBe(false);
+    expect((await get(a, `/v1/admin/tenants/${t.id}`)).json().workspace.warehouse_access).toBe(false);
+
+    expect((await post(a, `/v1/admin/tenants/${t.id}/warehouse-access`, { enabled: true })).statusCode).toBe(400); // a reason is required
+    expect((await post(a, `/v1/admin/tenants/${t.id}/warehouse-access`, { enabled: "yes", reason: "x" })).statusCode).toBe(400);
+    expect(await flag()).toBe(false);
+
+    const on = await post(a, `/v1/admin/tenants/${t.id}/warehouse-access`, { enabled: true, reason: "agreed 2M rows daily on a call" });
+    expect(on.statusCode).toBe(200);
+    expect(on.json().workspace.warehouse_access).toBe(true);
+    expect(await flag()).toBe(true);
+    expect((await post(a, `/v1/admin/tenants/${t.id}/warehouse-access`, { enabled: false, reason: "plan ended" })).statusCode).toBe(200);
+    expect(await flag()).toBe(false);
+    expect((await auditActions(t.id)).filter((x) => x === "set_warehouse_access")).toHaveLength(2);
+  });
+
+  it("is refused for anyone who is not a platform admin", async () => {
+    if (!dbAvailable) return;
+    const owner = await newTenant({ plan: "growth" });
+    const victim = await newTenant();
+    const r = await post(owner, `/v1/admin/tenants/${victim.id}/warehouse-access`, { enabled: true, reason: "sneaky" });
+    expect(r.statusCode).toBe(404);
+    expect((await q<{ warehouse_access: boolean }>(sql`SELECT warehouse_access FROM tenants WHERE id = ${victim.id}::uuid`))[0]!.warehouse_access).toBe(false);
+  });
+});

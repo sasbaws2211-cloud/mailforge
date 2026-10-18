@@ -56,6 +56,8 @@ export const EXPORT_TABLES: readonly ExportTable[] = [
   { key: "subscriptions", table: "subscriptions" },
   { key: "payment_attempts", table: "billing_checkouts", drop: ["checkout_url"] },
   { key: "usage_top_ups", table: "addon_purchases" },
+  { key: "support_requests", table: "support_tickets" },
+  { key: "support_messages", table: "support_messages" },
 ];
 
 /** Tenant tables not exported on purpose, with the reason. */

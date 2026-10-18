@@ -1,5 +1,5 @@
 /**
- * Warehouse sources: Loomail reads rows from the customer's Postgres, Snowflake or BigQuery on a schedule and records
+ * Warehouse sources: Loomail reads rows from the customer's Postgres, MySQL, SQL Server, Snowflake or BigQuery on a schedule and records
  * them as traits and events (see warehouse/sync.ts). They live in the same table as the webhook sources
  * (`inbound_sources`, kind "warehouse"), but have their own routes because they have a credential, a schedule and a
  * position instead of an address and a token.
@@ -15,16 +15,20 @@
  *
  * Reading is open to any member; anything that stores or uses a credential is owner-only.
  *
+ * Warehouse sources are off for a workspace until a platform admin switches them on (tenants.warehouse_access), after the customer
+ * asks Support. While off, creating, testing, syncing or editing is refused with code "warehouse_not_enabled"; listing, deleting and
+ * pausing a source still work, so nothing is trapped.
+ *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { resolveWarehouseHost, sealWebhookSecret, warehouseHostPolicyFromEnv, WAREHOUSE_HOST_NOT_ALLOWED } from "@loomail/adapters";
-import { inboundSources, inboundSourceLog } from "@loomail/db/schema";
+import { inboundSources, inboundSourceLog, tenants } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
 import { createLimiter } from "../marketing/signup-logic.js";
-import { MAX_WAREHOUSE_SOURCES, postgresSecretPatchSchema, warehouseConfigSchema, warehouseSecretSchema, type WarehouseConfig, type WarehouseSecret } from "../warehouse/config.js";
+import { MAX_WAREHOUSE_SOURCES, passwordSecretPatchSchema, isNetworkConfig, isNetworkDatabase, warehouseConfigSchema, warehouseSecretSchema, type WarehouseConfig, type WarehouseSecret } from "../warehouse/config.js";
 import { previewQuery } from "../warehouse/preview.js";
 import { readSecret, syncSource, type ClientFactory } from "../warehouse/sync.js";
 
@@ -73,7 +77,7 @@ type Issue = { path: string; message: string };
 
 /** Where our server connects, checked against the private-address guard: the SSH server when there is a tunnel, else the database. */
 async function hostProblem(config: WarehouseConfig): Promise<Issue | null> {
-  if (config.warehouse !== "postgres") return null;
+  if (!isNetworkConfig(config)) return null;
   const policy = warehouseHostPolicyFromEnv();
   if (config.ssh_tunnel) {
     // The database address is resolved by the SSH server, on the customer's network: it is meant to be private.
@@ -85,19 +89,19 @@ async function hostProblem(config: WarehouseConfig): Promise<Issue | null> {
 }
 
 /**
- * The credential to store or use. A new source (or a test with nothing saved) needs all of it. When editing a Postgres
- * source, what is given is merged over what is saved, so changing the password does not lose the SSH key and the other
+ * The credential to store or use. A new source (or a test with nothing saved) needs all of it. When editing a password-based
+ * source (Postgres, MySQL, SQL Server), what is given is merged over what is saved, so changing the password does not lose the SSH key and the other
  * way round; other warehouses take the new credential whole. An SSH key is required exactly when the settings use a tunnel,
  * and dropped when they do not.
  */
 function resolveSecret(config: WarehouseConfig, given: unknown, saved: WarehouseSecret | null): { ok: true; secret: WarehouseSecret } | { ok: false; issues: Issue[] } {
-  if (config.warehouse !== "postgres") {
+  if (!isNetworkConfig(config)) {
     if (given === undefined) return saved ? { ok: true, secret: saved } : { ok: false, issues: [{ path: "secret", message: "Give the credential." }] };
     return parseSecret(config.warehouse, given);
   }
   let merged: Record<string, unknown> = {};
   if (given !== undefined) {
-    const r = (saved ? postgresSecretPatchSchema : warehouseSecretSchema.postgres).safeParse(given);
+    const r = (saved ? passwordSecretPatchSchema : warehouseSecretSchema[config.warehouse]).safeParse(given);
     if (!r.success) return { ok: false, issues: issues(r.error, "secret") };
     merged = { ...(saved ?? {}), ...r.data };
   } else if (saved) {
@@ -113,12 +117,33 @@ function resolveSecret(config: WarehouseConfig, given: unknown, saved: Warehouse
   return { ok: true, secret: merged as WarehouseSecret };
 }
 
+export const WAREHOUSE_NOT_ENABLED = {
+  error: "Warehouse sources are not switched on for this workspace. Ask Support and we will set it up with you.",
+  code: "warehouse_not_enabled",
+};
+
+export async function warehouseAccess(db: Db, tenantId: string): Promise<boolean> {
+  const r = await db.select({ on: tenants.warehouseAccess }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+  return r[0]?.on === true;
+}
+
 /** A warehouse credential is only ever stored encrypted. */
 const NEEDS_KEY = { error: "ENCRYPTION_KEY is not set on this install, so a warehouse credential cannot be stored safely. Set ENCRYPTION_KEY and try again." };
 
 const warehouseSourcesRoutes: FastifyPluginAsync<WarehouseRouteOptions> = async (app, opts) => {
   const testLimit = createLimiter({ windowMs: 60_000, max: opts.limitsPerMinute?.test ?? 10 });
   const syncLimit = createLimiter({ windowMs: 60_000, max: opts.limitsPerMinute?.sync ?? 6 });
+
+  // Reading, deleting and pausing are always allowed; anything that creates, changes, tests or runs a source needs access.
+  app.addHook("preHandler", async (request, reply) => {
+    if (request.method === "GET" || request.method === "DELETE" || !request.tenant) return;
+    if (request.method === "PATCH") {
+      const b = request.body as Record<string, unknown> | null;
+      if (b && typeof b === "object" && Object.keys(b).length === 1 && b.enabled === false) return;
+    }
+    if (await warehouseAccess(request.server.db, request.tenant.id)) return;
+    reply.status(403).send(WAREHOUSE_NOT_ENABLED);
+  });
 
   const own = async (db: Db, tenantId: string, id: string) => {
     if (!z.string().uuid().safeParse(id).success) return undefined;
@@ -128,7 +153,7 @@ const warehouseSourcesRoutes: FastifyPluginAsync<WarehouseRouteOptions> = async 
   app.get("/", { config: { minRole: "member" } }, async (request) => {
     const db: Db = request.server.db;
     const rows = await db.select().from(inboundSources).where(and(eq(inboundSources.tenantId, request.tenant!.id), eq(inboundSources.kind, "warehouse"))).orderBy(desc(inboundSources.createdAt));
-    return { sources: rows.map(view) };
+    return { sources: rows.map(view), access: await warehouseAccess(db, request.tenant!.id) };
   });
 
   app.post<{ Body: unknown }>("/", { config: { minRole: "owner" } }, async (request, reply) => {
@@ -215,10 +240,10 @@ const warehouseSourcesRoutes: FastifyPluginAsync<WarehouseRouteOptions> = async 
         set.nextSyncAt = null;
       }
     }
-    // A credential is rewritten when one is given, and for Postgres also when the settings change (turning a tunnel on needs
+    // A credential is rewritten when one is given, and for Postgres, MySQL and SQL Server also when the settings change (turning a tunnel on needs
     // its key; turning it off drops the key).
     const finalConfig = (set.config as WarehouseConfig | undefined) ?? (old.success ? old.data : undefined);
-    const settingsChanged = set.config !== undefined && finalConfig?.warehouse === "postgres";
+    const settingsChanged = set.config !== undefined && !!finalConfig && isNetworkDatabase(finalConfig.warehouse);
     if (body.data.secret !== undefined || settingsChanged) {
       if (!process.env.ENCRYPTION_KEY) {
         reply.status(503);

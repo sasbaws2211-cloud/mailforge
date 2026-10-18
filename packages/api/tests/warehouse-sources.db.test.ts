@@ -121,7 +121,7 @@ beforeAll(async () => {
     await db.execute(sql`DELETE FROM tenants WHERE slug = ${slug}`);
   }
   const make = async (slug: string) => {
-    const [t] = await db.insert(tenants).values({ name: slug, slug, plan: "free" }).returning({ id: tenants.id });
+    const [t] = await db.insert(tenants).values({ name: slug, slug, plan: "free", warehouseAccess: true }).returning({ id: tenants.id });
     const [u] = await db.insert(users).values({ tenantId: t!.id, email: `owner@${slug}.test`, role: "owner" }).returning({ id: users.id });
     const [s] = await db.insert(sessions).values({ tenantId: t!.id, userId: u!.id, expiresAt: new Date(Date.now() + 86400_000) }).returning({ id: sessions.id });
     return { id: t!.id, cookie: `loomail_session=${s!.id}` };
@@ -161,7 +161,7 @@ beforeEach(async () => {
   for (const tbl of ["inbound_source_log", "inbound_sources", "contact_conflicts", "lifecycle_transitions", "events", "contacts"]) {
     await db.execute(sql`DELETE FROM ${sql.raw(tbl)} WHERE tenant_id IN (${tenantA}, ${tenantB})`);
   }
-  await db.execute(sql`UPDATE tenants SET suspended_at = NULL WHERE id IN (${tenantA}, ${tenantB})`);
+  await db.execute(sql`UPDATE tenants SET suspended_at = NULL, warehouse_access = true WHERE id IN (${tenantA}, ${tenantB})`);
 });
 
 const run = (name: string, fn: () => Promise<void>) => it(name, async () => (dbAvailable ? fn() : undefined));
@@ -678,6 +678,51 @@ describe("syncing", () => {
     expect(out).toMatchObject({ ok: false, note: "This source has no credential saved." });
     await db.execute(sql`UPDATE inbound_sources SET config = '{"warehouse":"nope"}'::jsonb WHERE id = ${id}`);
     expect((await syncSource(db, id, deps()))!.note).toMatch(/settings are not valid/);
+  });
+});
+
+describe("the warehouse access switch", () => {
+  const off = (tenant: string) => db.execute(sql`UPDATE tenants SET warehouse_access = false WHERE id = ${tenant}`);
+  const NOT_ENABLED = { code: "warehouse_not_enabled" };
+
+  run("reports whether access is on, and refuses to create, test, sync or change a source while it is off", async () => {
+    const id = await newSource(CONFIG, cookieA, "kept");
+    expect((await api("GET", "/v1/warehouse-sources", cookieA)).body.access).toBe(true);
+    await off(tenantA);
+    expect((await api("GET", "/v1/warehouse-sources", cookieA)).body).toMatchObject({ access: false });
+    for (const [method, url, payload] of [
+      ["POST", "/v1/warehouse-sources", { name: "x", config: CONFIG, secret: SECRET }],
+      ["POST", "/v1/warehouse-sources/test", { config: CONFIG, secret: SECRET }],
+      ["POST", `/v1/warehouse-sources/${id}/sync`, undefined],
+      ["PATCH", `/v1/warehouse-sources/${id}`, { name: "renamed" }],
+      ["PATCH", `/v1/warehouse-sources/${id}`, { enabled: true }],
+    ] as const) {
+      const r = await api(method, url, cookieA, payload);
+      expect(r.status, `${method} ${url}`).toBe(403);
+      expect(r.body).toMatchObject(NOT_ENABLED);
+    }
+    expect((await sourceRow(id)).name).toBe("kept");
+  });
+
+  run("still lets a workspace see, pause and delete what it has", async () => {
+    const id = await newSource(CONFIG, cookieA, "mine");
+    await off(tenantA);
+    expect((await api("GET", "/v1/warehouse-sources", cookieA)).body.sources).toHaveLength(1);
+    expect((await api("PATCH", `/v1/warehouse-sources/${id}`, cookieA, { enabled: false })).status).toBe(200);
+    expect((await api("DELETE", `/v1/warehouse-sources/${id}`, cookieA)).status).toBe(200);
+  });
+
+  run("only affects the workspace it is off for", async () => {
+    await off(tenantA);
+    expect((await api("POST", "/v1/warehouse-sources", cookieB, { name: "b", config: CONFIG, secret: SECRET })).status).toBe(201);
+  });
+
+  run("stops scheduled syncs for a workspace without access, and resumes when it is switched back on", async () => {
+    const id = await newSource(CONFIG, cookieA, "scheduled");
+    await off(tenantA);
+    expect(await dueSources(db, new Date())).toEqual([]);
+    await db.execute(sql`UPDATE tenants SET warehouse_access = true WHERE id = ${tenantA}`);
+    expect(await dueSources(db, new Date())).toEqual([id]);
   });
 });
 

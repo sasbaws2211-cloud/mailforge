@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, jsonb, integer } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, integer, boolean } from "drizzle-orm/pg-core";
 
 export const tenants = pgTable("tenants", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -35,6 +35,12 @@ export const tenants = pgTable("tenants", {
    * Only has an effect when plan enforcement is on.
    */
   aiAllowanceOverride: integer("ai_allowance_override"),
+  /**
+   * Set by a platform admin once a workspace has asked for warehouse sources (Postgres, MySQL, SQL Server pulled on a schedule) through
+   * Support. Off by default: a warehouse can mean a lot of data and may need its own pricing or database. While off, the workspace
+   * cannot create, test or run a warehouse source, and none of its existing ones sync.
+   */
+  warehouseAccess: boolean("warehouse_access").notNull().default(false),
   settings: jsonb("settings"), // all tenant config (throttle, lifecycle, etc.)
   businessModel: text("business_model"), // preview_free|freemium|time_limited_trial
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),

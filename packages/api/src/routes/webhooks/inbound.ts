@@ -30,7 +30,7 @@ import { openWebhookSecret } from "@loomail/adapters";
 import { inboundSources, inboundSourceLog } from "@loomail/db/schema";
 import type { Db } from "../../plugins/db.js";
 import { createLimiter } from "../../marketing/signup-logic.js";
-import { genericConfigSchema, mapGeneric, mapStripeEvent, stripeConfigSchema, verifyStripeSignature, type MapResult } from "../../inbound/mapping.js";
+import { genericConfigSchema, getPath, mapGeneric, mapStripeEvent, stripeConfigSchema, verifyHmacSignature, verifyStripeSignature, type MapResult } from "../../inbound/mapping.js";
 import {
   PAYSTACK_IPS,
   flutterwaveConfigSchema,
@@ -50,6 +50,17 @@ export const sha256 = (s: string) => createHash("sha256").update(s).digest("hex"
 
 const UNAUTHORIZED = { error: "Unauthorized." };
 
+/** A form-encoded body as a flat object. A key sent more than once becomes a list. Values stay text. */
+export function formToObject(raw: string): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {};
+  for (const [key, value] of new URLSearchParams(raw)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
+    const had = Object.prototype.hasOwnProperty.call(out, key) ? out[key]! : undefined;
+    out[key] = had === undefined ? value : Array.isArray(had) ? [...had, value] : [had, value];
+  }
+  return out;
+}
+
 function safeEqualHex(a: string, b: string): boolean {
   const x = Buffer.from(a, "hex");
   const y = Buffer.from(b, "hex");
@@ -63,6 +74,8 @@ const inboundWebhookRoute: FastifyPluginAsync = async (app) => {
   // Keep the body as text: Stripe signs the exact bytes.
   app.addContentTypeParser("application/json", { parseAs: "string", bodyLimit: INBOUND_BODY_LIMIT }, (_req, body, done) => done(null, body));
   app.addContentTypeParser("text/plain", { parseAs: "string", bodyLimit: INBOUND_BODY_LIMIT }, (_req, body, done) => done(null, body));
+  // Some tools (Zapier's default "Form" payload, plain HTML forms) post key=value pairs instead of JSON.
+  app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string", bodyLimit: INBOUND_BODY_LIMIT }, (_req, body, done) => done(null, body));
 
   app.post<{ Params: { sourceId: string }; Querystring: { token?: string } }>(
     "/:sourceId",
@@ -142,7 +155,21 @@ const inboundWebhookRoute: FastifyPluginAsync = async (app) => {
           }
         }
       } else {
-        authorised = tokenOk(tokenGiven());
+        // A generic source is checked by its token, or, when it was made that way, by the sender's own HMAC signature.
+        const generic = source.kind === "generic" ? genericConfigSchema.safeParse(source.config) : null;
+        if (generic?.success && generic.data.verification === "signature") {
+          failure = "Signature check failed.";
+          const header = request.headers[(generic.data.signature_header ?? "").toLowerCase()];
+          if (typeof header === "string" && source.secretSealed) {
+            try {
+              authorised = verifyHmacSignature(openWebhookSecret(source.secretSealed), rawBody, header, { encoding: generic.data.signature_encoding, prefix: generic.data.signature_prefix });
+            } catch {
+              authorised = false;
+            }
+          }
+        } else {
+          authorised = tokenOk(tokenGiven());
+        }
       }
       if (!authorised) {
         await log("rejected", failure);
@@ -152,12 +179,18 @@ const inboundWebhookRoute: FastifyPluginAsync = async (app) => {
 
       // --- Read -----------------------------------------------------------
       let body: unknown;
-      try {
-        body = JSON.parse(rawBody);
-      } catch {
-        await log("rejected", "The body is not valid JSON.");
-        reply.status(400);
-        return { error: "The body is not valid JSON." };
+      const isForm = String(request.headers["content-type"] ?? "").toLowerCase().startsWith("application/x-www-form-urlencoded");
+      if (isForm && source.kind === "generic") {
+        body = formToObject(rawBody);
+      } else {
+        try {
+          body = JSON.parse(rawBody);
+        } catch {
+          const why = isForm ? "This source reads JSON. Send the body as JSON (in Zapier, set Payload Type to JSON)." : "The body is not valid JSON.";
+          await log("rejected", why);
+          reply.status(400);
+          return { error: why };
+        }
       }
 
       // --- Map ------------------------------------------------------------
@@ -180,8 +213,16 @@ const inboundWebhookRoute: FastifyPluginAsync = async (app) => {
           reply.status(500);
           return { error: "This source is not set up correctly." };
         }
-        const eventId = request.headers["x-loomail-event-id"];
-        result = mapGeneric(cfg.data, body, typeof eventId === "string" && eventId !== "" ? `in:${sourceId}:${eventId.slice(0, 200)}` : undefined);
+        // The id that makes a repeat harmless: the header if the sender set one, else the one in the payload.
+        const header = request.headers["x-loomail-event-id"];
+        const inBody = cfg.data.event_id_path ? getPath(body, cfg.data.event_id_path) : undefined;
+        const bodyId = typeof inBody === "string" && inBody.trim() !== "" ? inBody.trim() : typeof inBody === "number" && Number.isFinite(inBody) ? String(inBody) : undefined;
+        const named = cfg.data.event_id_header ? request.headers[cfg.data.event_id_header.toLowerCase()] : undefined;
+        const headerNamed = typeof named === "string" && named.trim() !== "" ? named.trim() : undefined;
+        const ownId = typeof header === "string" && header !== "";
+        const eventId = ownId ? (header as string) : (headerNamed ?? bodyId);
+        const nameHeader = cfg.data.event_name_header ? request.headers[cfg.data.event_name_header.toLowerCase()] : undefined;
+        result = mapGeneric(cfg.data, body, eventId ? `in:${sourceId}:${eventId.slice(0, 200)}` : undefined, { eventNameFromHeader: typeof nameHeader === "string" ? nameHeader : undefined, idFromSettings: !ownId });
       }
       if (!result.ok) {
         await log(result.status, result.reason);

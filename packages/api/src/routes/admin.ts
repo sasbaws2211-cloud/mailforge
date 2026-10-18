@@ -50,6 +50,7 @@ import { loadNoticeContext, notifyDeletionCancelled, notifyDeletionScheduled, no
 import type { PlatformTransport } from "../platform-mailer.js";
 import { cancelDeletion, deletionGraceDays, scheduleDeletion } from "../account/deletion.js";
 import adminAiRoutes from "./admin-ai.js";
+import adminSupportRoutes from "./admin-support.js";
 import { loadSendingRow } from "../sending/context.js";
 import { buildSenderPausedEmail, buildSenderResumedEmail, mailEach, ownerEmails } from "../sending/health.js";
 import { getPlatformTransport } from "../platform-mailer.js";
@@ -90,6 +91,7 @@ type TenantRow = {
   deletion_scheduled_at: Date | string | null;
   deletion_requested_by: string | null;
   ai_allowance_override: number | null;
+  warehouse_access: boolean;
   created_at: Date | string | null;
   owner_email: string | null;
   contacts: string;
@@ -128,6 +130,8 @@ function shapeTenant(r: TenantRow, now: Date) {
     deletion_requested_by: r.deletion_requested_by,
     // A hand-set Loomail AI token allowance: null = the plan's, -1 = no cap.
     ai_allowance_override: r.ai_allowance_override,
+    // Whether warehouse sources are switched on for this workspace.
+    warehouse_access: r.warehouse_access,
     contacts: Number(r.contacts),
     emails_this_month: Number(r.emails_this_month),
     members: Number(r.members),
@@ -139,7 +143,7 @@ function shapeTenant(r: TenantRow, now: Date) {
 function tenantSelect(monthStart: Date) {
   return sql`
     SELECT t.id, t.name, t.slug, t.plan, t.trial_ends_at, t.plan_paid_through,
-           t.suspended_at, t.suspended_reason, t.deletion_scheduled_at, t.deletion_requested_by, t.ai_allowance_override, t.created_at,
+           t.suspended_at, t.suspended_reason, t.deletion_scheduled_at, t.deletion_requested_by, t.ai_allowance_override, t.warehouse_access, t.created_at,
            (SELECT u.email FROM users u WHERE u.tenant_id = t.id AND u.role = 'owner'
               ORDER BY u.created_at ASC LIMIT 1) AS owner_email,
            (SELECT count(*) FROM contacts c WHERE c.tenant_id = t.id)::text AS contacts,
@@ -197,6 +201,9 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
 
   // The operator's own AI provider (Loomail AI): same gate, same audit log.
   await app.register(adminAiRoutes);
+
+  // Support requests from every workspace: same gate, same audit log.
+  await app.register(adminSupportRoutes, { dashboardUrl: opts.dashboardUrl ?? process.env.DASHBOARD_URL ?? "", noticeTransports: opts.noticeTransports });
 
   /** Find a workspace or answer 404. */
   async function loadTenant(db: Db, id: string, now: Date) {
@@ -506,6 +513,25 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
       await audited(db, request, "set_plan", row.id, { reason, before, after: { plan } }, async (tx) => {
         // Granted by hand: no paid-through date, so it never lapses. A running trial is replaced.
         await tx.update(tenants).set({ plan, trialEndsAt: null, planPaidThrough: null }).where(eq(tenants.id, row.id));
+      });
+      return { ok: true, workspace: shapeTenant((await loadTenant(db, row.id, now))!, now) };
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { enabled?: unknown; reason?: unknown } }>(
+    "/tenants/:id/warehouse-access",
+    { config: { minRole: "member" } },
+    async (request, reply) => {
+      const db: Db = request.server.db;
+      const now = new Date();
+      const row = await loadTenant(db, request.params.id, now);
+      if (!row) return reply.status(404).send({ error: "Workspace not found." });
+      const enabled = request.body?.enabled;
+      if (typeof enabled !== "boolean") return reply.status(400).send({ error: "enabled must be true or false.", code: "invalid_enabled" });
+      const reason = cleanReason(request.body?.reason);
+      if (!reason) return needReason(reply);
+      await audited(db, request, "set_warehouse_access", row.id, { reason, before: { warehouse_access: row.warehouse_access }, after: { warehouse_access: enabled } }, async (tx) => {
+        await tx.update(tenants).set({ warehouseAccess: enabled }).where(eq(tenants.id, row.id));
       });
       return { ok: true, workspace: shapeTenant((await loadTenant(db, row.id, now))!, now) };
     },

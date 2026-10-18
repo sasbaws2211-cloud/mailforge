@@ -51,6 +51,7 @@ const FEATURE_LABEL: Record<string, string> = {
   compile: "Flow compiling",
   content: "Email generation",
   ai_draft: "AI drafting in the editor",
+  assistant: "In-app assistant",
   embedding: "Knowledge-base search",
 };
 

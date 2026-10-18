@@ -29,3 +29,4 @@ export { flowSplitChoices } from "./flow-split-choices.js";
 export { anonymousEvents, anonymousAliases } from "./anonymous.js";
 export { flowWebhookDeliveries, webhookSecrets } from "./webhooks.js";
 export { inboundSources, inboundSourceLog } from "./inbound.js";
+export { supportTickets, supportMessages } from "./support.js";

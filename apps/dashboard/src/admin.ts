@@ -164,6 +164,10 @@ export function auditSummary(e: AdminAuditEntry): string {
       const after = (d.after ?? {}) as { ai_allowance_override?: number | null };
       return `Set the AI allowance to ${describeAllowance(after.ai_allowance_override)}`;
     }
+    case "set_warehouse_access": {
+      const after = (d.after ?? {}) as { warehouse_access?: boolean };
+      return after.warehouse_access ? "Switched warehouse sources on" : "Switched warehouse sources off";
+    }
     case "managed_sending_pause":
       return "Paused managed sending";
     case "managed_sending_resume":
@@ -186,6 +190,12 @@ export function auditSummary(e: AdminAuditEntry): string {
       return `Switched the ${slotLabel(d.slot)} AI provider off`;
     case "ai_provider_remove":
       return `Removed the ${slotLabel(d.slot)} AI provider`;
+    case "support_reply":
+      return d.closed === true ? "Answered a support request and closed it" : "Answered a support request";
+    case "support_close":
+      return "Closed a support request";
+    case "support_reopen":
+      return "Reopened a support request";
     default:
       return e.action.replace(/_/g, " ");
   }
@@ -217,7 +227,8 @@ export function auditWorkspaceName(e: AdminAuditEntry): string | null {
 }
 
 /** Which admin header tab a path belongs to: workspace pages count as Overview. */
-export function adminTabFor(pathname: string): "overview" | "ai" | "audit" | "security" {
+export function adminTabFor(pathname: string): "overview" | "support" | "ai" | "audit" | "security" {
+  if (pathname === "/admin/support" || pathname.startsWith("/admin/support/")) return "support";
   if (pathname === "/admin/ai" || pathname.startsWith("/admin/ai/")) return "ai";
   if (pathname === "/admin/audit" || pathname.startsWith("/admin/audit/")) return "audit";
   if (pathname === "/admin/security" || pathname.startsWith("/admin/security/")) return "security";

@@ -331,6 +331,59 @@ The budget is independent of plan enforcement and of per-workspace allowances: e
 The check is a spend total computed when AI is used, so one call that starts just below the line can
 finish a little over it; set the budget a little under the amount you can really afford.
 
+## 8. Support requests
+
+Customers can ask you for help from inside the dashboard, and you answer from the console.
+
+**For customers.** A **Support** link in the sidebar opens a form: what it is about (a question, something broken, billing, a feature
+request, other), a subject and a message. The page they were on is attached, so you can see what they meant. They get a page listing their
+requests with a status (*Waiting for support*, *Support replied*, *Closed*), the full conversation, and a box to reply or to close a
+request that is resolved. A reply from them puts it back in your queue. Everyone in a workspace sees the workspace's requests. A
+suspended workspace, or one waiting for deletion, still has a **Contact support** button on the screen it is left with: that is when
+they most need to ask.
+
+**For you.** The **Support** tab in the console lists requests from every workspace: *Waiting for us* (longest-waiting first, with how
+long), *Answered*, *Closed* and *All*, with counts and a search over subject, requester and workspace. Open one to see the conversation, who
+asked and from which workspace and plan (with a link to the workspace), and the page they were on. Then:
+
+- **Send answer** saves it, emails it to whoever asked, and shows it in their dashboard. The request becomes *Answered*.
+- **Send and close** does the same and closes the request.
+- **Close without answering** and **Reopen** change the status only.
+
+Staff appear to customers only as "Support", never by email address. Each answer and each close or reopen is recorded in the audit log
+(that it happened and whether it closed the request; the words stay in the conversation).
+
+**Email.** Two emails go out, both from the platform sender (`PLATFORM_FROM_EMAIL` with its Resend key or SMTP settings, as for login
+links):
+
+| Email | To | Reply-To |
+|---|---|---|
+| A new request: who, which workspace, the message, the page, and a link to answer it | `LOOMAIL_SUPPORT_EMAIL` | the customer, so you can also answer from your own mail |
+| Your answer, with a link to the conversation | whoever opened the request | `LOOMAIL_SUPPORT_EMAIL` |
+
+Everything is saved first, so a missing sender or a failed send never loses a request: it is simply not emailed, and the console still
+shows it. The console tells you when an answer could not be emailed. An answer you send by replying from your own mailbox is **not**
+added to the conversation in the console: answer in the console to keep the history in one place. If you run the console as its own
+deployment, set `LOOMAIL_ADMIN_URL` so the link in the new-request email points to it.
+
+**Limits.** To keep it from being abused, a person can open 5 requests an hour and send 30 replies an hour, a workspace can have 20 requests
+waiting at once, a conversation holds 200 messages, a subject is up to 150 characters and a message up to 5,000. Text is shown as plain
+text and escaped in email. Support requests are part of the workspace's data export and are erased with the workspace.
+
+**Turning it on.** It needs one database migration (`pnpm db:migrate`), which adds the `support_tickets` and `support_messages` tables. It needs
+`LOOMAIL_SUPPORT_EMAIL` and a platform sender for the emails; without them the feature still works inside the dashboard and console.
+
+## 9. The in-app assistant
+
+A floating "Ask Loomail" button on every dashboard page. It explains features and points to pages; it changes nothing and never sees contacts. It can hand a conversation to Support (section 8).
+
+- **It always uses the platform's AI provider** (section 7), never a customer's own key. With no platform provider configured, the button is not shown.
+- **You pay for it, and it does not count against a workspace's AI allowance.** It shows in the AI usage page as "In-app assistant". The monthly dollar budget (if set) pauses it.
+- **Limits:** nobody has a daily cap, trials included. If you see abuse, set `LOOMAIL_ASSISTANT_TRIAL_DAILY` and/or `LOOMAIL_ASSISTANT_FREE_DAILY` to cap those workspaces per UTC day. Everyone has a burst guard of 12 questions a minute.
+- **Not shown** on suspended or pending-deletion workspaces.
+- **Knowledge** comes from the customer-facing guides plus a hand-written map of the dashboard. After changing the guides or `packages/api/src/assistant/app-map.ts`, run `pnpm assistant:docs` (a test fails if the generated file is stale).
+- Conversations are not stored on the server; they live in the customer's browser tab.
+
 ## Signup funnel
 
 The Overview page has a **Signup funnel** (last 7, 30 or 90 days) for workspaces created through public signup:
