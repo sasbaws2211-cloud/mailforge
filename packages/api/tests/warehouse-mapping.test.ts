@@ -38,6 +38,18 @@ describe("warehouseConfigSchema", () => {
     expect(parse({ ...base, port: 0 }).success).toBe(false);
     expect(parse({ ...base, password: "oops" }).success).toBe(false); // the credential never lives in the settings
   });
+  it("takes a CA certificate for Postgres only, and only as PEM text", () => {
+    const pem = ["-----BEGIN CERTIFICATE-----", "MIIBkTCB+wIJAKHBfpegPjMCMA0GCSqGSIb3DQEBCwUA", "-----END CERTIFICATE-----"].join("\n");
+    const ok = parse({ ...base, ssl_ca: pem });
+    expect(ok.success).toBe(true);
+    if (ok.success) expect((ok.data as { ssl_ca?: string }).ssl_ca).toBe(pem);
+    expect(parse({ ...base, ssl_ca: "not a certificate" }).success).toBe(false);
+    expect(parse({ ...base, ssl_ca: ["-----BEGIN PRIVATE KEY-----", "abc", "-----END PRIVATE KEY-----"].join("\n") }).success).toBe(false);
+    expect(parse({ ...base, ssl_ca: "-----BEGIN CERTIFICATE-----" + "A".repeat(400_000) + "-----END CERTIFICATE-----" }).success).toBe(false);
+    const { host: _h, database: _d, ssl_mode: _s, ...rest } = { ...base, ssl_mode: undefined } as Record<string, unknown>;
+    expect(parse({ ...rest, warehouse: "snowflake", account: "a-b", user: "U", ssl_ca: pem }).success).toBe(false);
+  });
+
   it("checks each warehouse's own fields", () => {
     const { host: _h, database: _d, ssl_mode: _s, ...rest } = { ...base, ssl_mode: undefined } as Record<string, unknown>;
     const sf = { ...rest, warehouse: "snowflake", account: "myorg-myaccount", user: "READER" };

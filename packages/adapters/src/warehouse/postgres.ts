@@ -6,6 +6,7 @@
  */
 import pg from "pg";
 import { isIP } from "node:net";
+import tls from "node:tls";
 import { resolveWarehouseHost, warehouseHostPolicyFromEnv, type WarehouseHostPolicy } from "./guard.js";
 import { compileQuery } from "./query.js";
 import { WarehouseError, type CellValue, type WarehouseClient, type WarehouseQuery, type WarehouseRows } from "./types.js";
@@ -17,6 +18,12 @@ export interface PostgresConfig {
   user: string;
   /** verify: encrypted and the certificate is checked (default). no-verify: encrypted, certificate not checked. disable: plain. */
   ssl_mode: "verify" | "no-verify" | "disable";
+  /**
+   * PEM text of the certificate authority (or a bundle of them) that signed the server's certificate, for services that
+   * use their own: Amazon RDS, Supabase, a private CA. With it, "verify" still checks the certificate and host name.
+   * Public CAs (Neon, Redshift, most others) need nothing.
+   */
+  ssl_ca?: string;
 }
 
 export interface PostgresSecret {
@@ -73,7 +80,16 @@ export function createPostgresClient(
         ssl:
           config.ssl_mode === "disable"
             ? false
-            : { rejectUnauthorized: config.ssl_mode === "verify", servername: isIP(target.servername) === 0 ? target.servername : undefined },
+            : {
+                rejectUnauthorized: config.ssl_mode === "verify",
+                servername: isIP(target.servername) === 0 ? target.servername : undefined,
+                // A given CA replaces the built-in list, which is what a private or provider CA needs.
+                ...(config.ssl_ca ? { ca: config.ssl_ca } : {}),
+                // Always check the certificate against the host the customer typed, whether that is a name or an address,
+                // and even when a guard made us connect to the address it checked. (Left alone, a socket given an address
+                // would be checked against "localhost".)
+                checkServerIdentity: (_connectedTo: string, cert: tls.PeerCertificate) => tls.checkServerIdentity(target.servername, cert),
+              },
       });
       client.on("error", () => {}); // a dropped connection surfaces through the pending call
 
@@ -84,7 +100,14 @@ export function createPostgresClient(
       }
       try {
         await client.query("BEGIN READ ONLY");
-        await client.query(`SET LOCAL statement_timeout = ${Math.floor(q.timeoutMs)}`);
+        try {
+          await client.query(`SET LOCAL statement_timeout = ${Math.floor(q.timeoutMs)}`);
+        } catch {
+          // A Postgres-compatible service that does not take this setting: carry on without it (the client still
+          // gives up after the time limit). The failed statement aborted the transaction, so start it again.
+          await client.query("ROLLBACK");
+          await client.query("BEGIN READ ONLY");
+        }
         // Every :cursor became $1, and Postgres takes one value for all uses of it.
         const res = await client.query({ text: compiled.sql, values: compiled.cursorCount > 0 ? [q.cursor] : [] });
         await client.query("ROLLBACK");

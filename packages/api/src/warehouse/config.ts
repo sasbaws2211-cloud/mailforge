@@ -51,6 +51,13 @@ const postgres = z.object({
   database: z.string().trim().min(1).max(63),
   user: z.string().trim().min(1).max(63),
   ssl_mode: z.enum(["verify", "no-verify", "disable"]).default("verify"),
+  /** The CA that signed the server's certificate, when it is not a public one (Amazon RDS, Supabase, a private CA). */
+  ssl_ca: z
+    .string()
+    .trim()
+    .max(400_000)
+    .refine((v) => /-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(v), "Paste the CA certificate as PEM text, including the BEGIN CERTIFICATE and END CERTIFICATE lines.")
+    .optional(),
   ...common,
 });
 
@@ -117,7 +124,7 @@ export type WarehouseSecret = { password: string } | { private_key: string; pass
 export function toConnection(config: WarehouseConfig, secret: WarehouseSecret): WarehouseConnection {
   switch (config.warehouse) {
     case "postgres":
-      return { kind: "postgres", config: { host: config.host, port: config.port, database: config.database, user: config.user, ssl_mode: config.ssl_mode }, secret: secret as { password: string } };
+      return { kind: "postgres", config: { host: config.host, port: config.port, database: config.database, user: config.user, ssl_mode: config.ssl_mode, ...(config.ssl_ca ? { ssl_ca: config.ssl_ca } : {}) }, secret: secret as { password: string } };
     case "snowflake":
       return {
         kind: "snowflake",

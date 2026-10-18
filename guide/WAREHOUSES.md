@@ -53,6 +53,24 @@ GRANT SELECT ON users TO loomail_reader;
 
 Give Loomail the host, port, database, user and password. Encryption defaults to *encrypted, verify the certificate*. Your database must be reachable from wherever Loomail runs; allow its address in your firewall or security group.
 
+#### Managed Postgres services
+
+The Postgres connector speaks the ordinary Postgres protocol, so it works with the services built on it. What differs is the address, the certificate and the pooler:
+
+| Service | Host and port | Certificate | Notes |
+|---|---|---|---|
+| **Neon** | `ep-....neon.tech`, 5432. A `-pooler` host is PgBouncer in transaction mode. | Public CA: leave **CA certificate** empty. | Use either host. A scaled-to-zero database takes a few seconds to wake, so the first run after a quiet spell can take longer (it is retried). |
+| **Supabase** | The **session pooler** host from *Connect* (port 5432, user `postgres.<project-ref>`) works from any server. The *direct* host `db.<ref>.supabase.co` is **IPv6 only** unless you buy the IPv4 add-on, and many servers have no IPv6. The transaction pooler (port 6543) also works. | Supabase signs with its own CA: paste the **CA certificate** from *Database Settings* into **CA certificate**, keep encryption on *verify*. | Create a read-only role and use that, not `postgres`. |
+| **Amazon RDS / Aurora** | The instance or cluster endpoint, port 5432. | Amazon's own CA: paste the [RDS certificate bundle](https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem) (the whole file) into **CA certificate**, keep *verify*. | Allow Loomail's outgoing address in the security group. The database must be reachable from the internet, or through a VPN or tunnel you provide. IAM authentication is not supported: use a database user. |
+| **Amazon Redshift** (provisioned or Serverless) | The cluster or workgroup endpoint, port **5439**. | Issued by AWS Certificate Manager, publicly trusted: leave **CA certificate** empty. | Redshift must be publicly accessible, with Loomail's address allowed. Use a read-only user. If a query starting with `WITH` is refused, put it in a view and select from the view. |
+
+How the connector behaves with them:
+
+- It opens a read-only transaction (`BEGIN READ ONLY`, supported by Redshift too) and sets a statement timeout for it. If a service refuses the timeout setting, the query still runs, still read-only, and the client's own time limit applies.
+- The certificate is always checked against the host name exactly as you typed it, including when it is an IP address, and the name is sent for SNI (Neon routes on it).
+- Poolers in transaction mode are fine: nothing is kept between transactions.
+- "Verify" with a CA you pasted still checks the host name and rejects a certificate that CA did not sign. "Encrypted, do not verify" encrypts but accepts any certificate; use it only to get unstuck.
+
 ### Snowflake
 
 Loomail uses Snowflake's SQL API with **key-pair sign-in** (no password is stored).

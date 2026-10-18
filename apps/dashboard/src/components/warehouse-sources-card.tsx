@@ -193,6 +193,11 @@ function SourceForm({ initial, onCancel, onSaved }: { initial?: WarehouseSource;
                 <option value="disable">None (only for a trusted network)</option>
               </Select>
             </Field>
+            <div className="sm:col-span-2">
+              <Field id="wh-ca" label="CA certificate (only for Amazon RDS, Supabase or a private CA)" hint="Amazon RDS and Supabase sign with their own certificate authority. Paste it here (RDS: the global bundle; Supabase: the CA from Database Settings) and Loomail still verifies the server. Neon, Redshift and most other services need nothing here.">
+                <Textarea id="wh-ca" rows={3} spellCheck={false} className="font-mono text-[12px]" value={f.sslCa} onChange={(e) => set({ sslCa: e.target.value })} placeholder="-----BEGIN CERTIFICATE-----" />
+              </Field>
+            </div>
           </div>
         )}
         {w === "snowflake" && (

@@ -28,6 +28,8 @@ export interface WarehouseForm {
   database: string;
   user: string;
   sslMode: "verify" | "no-verify" | "disable";
+  /** PEM of a provider's CA (Amazon RDS, Supabase). Empty for services with a public certificate. */
+  sslCa: string;
   account: string;
   sfWarehouse: string;
   role: string;
@@ -72,6 +74,7 @@ export function emptyWarehouseForm(warehouse: Warehouse = "postgres"): Warehouse
     database: "",
     user: "",
     sslMode: "verify",
+    sslCa: "",
     account: "",
     sfWarehouse: "",
     role: "",
@@ -128,7 +131,7 @@ export function buildWarehouseConfig(f: WarehouseForm): Built<Record<string, unk
     need(f.database, "Give the database name.");
     need(f.user, "Give the database user.");
     const port = whole(f.port, "The port", 1, 65535, problems);
-    connection = { host: f.host.trim(), ...(port !== undefined ? { port } : {}), database: f.database.trim(), user: f.user.trim(), ssl_mode: f.sslMode };
+    connection = { host: f.host.trim(), ...(port !== undefined ? { port } : {}), database: f.database.trim(), user: f.user.trim(), ssl_mode: f.sslMode, ...(f.sslCa.trim() ? { ssl_ca: f.sslCa.trim() } : {}) };
   } else if (w === "snowflake") {
     if (!ACCOUNT.test(f.account.trim())) problems.push("Give the account identifier, such as myorg-myaccount or xy12345.eu-west-1.");
     need(f.user, "Give the Snowflake user.");
@@ -151,6 +154,9 @@ export function buildWarehouseConfig(f: WarehouseForm): Built<Record<string, unk
     };
   }
 
+  if (w === "postgres" && f.sslCa.trim() && !/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(f.sslCa)) {
+    problems.push("The CA certificate must be PEM text, including the BEGIN CERTIFICATE and END CERTIFICATE lines.");
+  }
   if (!f.query.trim()) problems.push("Write the query.");
   if (!COLUMN.test(f.cursorColumn.trim())) problems.push("The position column must be a plain column name (letters, numbers and underscores).");
   const interval = whole(f.intervalMinutes, "Run every (minutes)", 5, 1440, problems);
@@ -245,6 +251,7 @@ export function warehouseFormFromConfig(config: Record<string, unknown>): Wareho
     database: str(config.database),
     user: str(config.user),
     sslMode: config.ssl_mode === "no-verify" || config.ssl_mode === "disable" ? config.ssl_mode : "verify",
+    sslCa: str(config.ssl_ca),
     account: str(config.account),
     sfWarehouse: str(config.snowflake_warehouse),
     role: str(config.role),

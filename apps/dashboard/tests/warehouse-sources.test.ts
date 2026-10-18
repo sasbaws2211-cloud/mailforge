@@ -49,6 +49,16 @@ describe("buildWarehouseConfig", () => {
     expect(bq).toMatchObject({ warehouse: "bigquery", project_id: "my-project-123", location: "EU", max_bytes_billed: 2_500_000_000 });
   });
 
+  it("passes a CA certificate through for Postgres, and refuses text that is not one", () => {
+    const pem = ["-----BEGIN CERTIFICATE-----", "MIIB", "-----END CERTIFICATE-----"].join("\n");
+    expect(built(pg({ sslCa: `  ${pem}\n` }))).toMatchObject({ ssl_ca: pem });
+    expect(built(pg())).not.toHaveProperty("ssl_ca");
+    expect(problems(pg({ sslCa: "just some text" }))[0]).toMatch(/CA certificate must be PEM/);
+    expect(warehouseFormFromConfig(built(pg({ sslCa: pem })) as Record<string, unknown>).sslCa).toBe(pem);
+    // not sent for other warehouses, even if the field still holds text
+    expect(built({ ...emptyWarehouseForm("snowflake"), account: "a-b", user: "U", eventValue: "e", sslCa: pem })).not.toHaveProperty("ssl_ca");
+  });
+
   it("reads the event name from a column, or sets only traits", () => {
     expect(built(pg({ eventMode: "column", eventValue: "kind" }))).toMatchObject({ event_name_column: "kind" });
     expect(built(pg({ eventMode: "column", eventValue: "kind" }))).not.toHaveProperty("event_name");
