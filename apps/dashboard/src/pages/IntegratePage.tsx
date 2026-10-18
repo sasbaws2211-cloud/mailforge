@@ -34,6 +34,8 @@ import { PageHeader } from "../components/page-header.js";
 import { InboundSourcesCard } from "../components/inbound-sources-card.js";
 import { WarehouseSourcesCard } from "../components/warehouse-sources-card.js";
 import { SampleEventButton } from "../components/sample-event.js";
+import { CodeBlock, useCopy } from "../components/code-block.js";
+import { FrameworkGuide } from "../components/framework-guide.js";
 import {
   Table,
   TableHeader,
@@ -47,17 +49,6 @@ import { useMe } from "../auth.js";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function useCopy(): { copied: string | null; copy: (id: string, text: string) => void } {
-  const [copied, setCopied] = useState<string | null>(null);
-  function copy(id: string, text: string) {
-    void navigator.clipboard?.writeText(text).then(() => {
-      setCopied(id);
-      window.setTimeout(() => setCopied((c) => (c === id ? null : c)), 1500);
-    });
-  }
-  return { copied, copy };
-}
 
 function formatTimestamp(iso: string | null): string {
   if (!iso) return "never";
@@ -154,26 +145,6 @@ function FirstEventCard() {
 // Browser snippet
 // ---------------------------------------------------------------------------
 
-function buildSnippet(origin: string, rawKey: string | null): string {
-  const k = rawKey ?? "PASTE_YOUR_PUBLISHABLE_KEY";
-  return [
-    "<script>",
-    "  window.loomail = window.loomail || function () {",
-    "    (window.loomail.q = window.loomail.q || []).push(arguments);",
-    "  };",
-    "</script>",
-    `<script async src="${origin}/loomail.js"></script>`,
-    "<script>",
-    `  loomail("init", "${k}", { endpoint: "${origin}", autoPage: true });`,
-    "  // When someone signs up or logs in (events from before this are kept and sent with it):",
-    '  loomail("identify", "user_123", { email: "user@example.com" });',
-    '  loomail("track", "signed_up");',
-    "  // When they log out:",
-    '  // loomail("reset");',
-    "</script>",
-  ].join("\n");
-}
-
 function buildCurl(origin: string): string {
   return [
     `curl -X POST ${origin}/v1/track \\`,
@@ -181,30 +152,6 @@ function buildCurl(origin: string): string {
     '  -H "Content-Type: application/json" \\',
     `  -d '{"userId": "user_123", "event": "signed_up"}'`,
   ].join("\n");
-}
-
-function CodeBlock({ id, code }: { id: string; code: string }) {
-  const { copied, copy } = useCopy();
-  return (
-    <div className="relative">
-      <pre className="overflow-x-auto rounded-md bg-sunken p-4 font-mono text-[13px] leading-5 text-foreground">
-        {code}
-      </pre>
-      <Button
-        variant="secondary"
-        size="sm"
-        className="absolute right-3 top-3"
-        onClick={() => copy(id, code)}
-      >
-        {copied === id ? (
-          <Check size={16} strokeWidth={1.5} />
-        ) : (
-          <Copy size={16} strokeWidth={1.5} />
-        )}
-        {copied === id ? "Copied" : "Copy"}
-      </Button>
-    </div>
-  );
 }
 
 function SnippetCard({ publishableKey, rawKey, onCreateKey, creating }: {
@@ -215,15 +162,14 @@ function SnippetCard({ publishableKey, rawKey, onCreateKey, creating }: {
   creating: boolean;
 }) {
   const origin = window.location.origin;
-  const snippet = useMemo(() => buildSnippet(origin, rawKey), [origin, rawKey]);
   const curl = useMemo(() => buildCurl(origin), [origin]);
 
   return (
     <section className="rounded-lg border border-border bg-card p-6">
-      <SectionHeading icon={Code2} title="Browser snippet" />
+      <SectionHeading icon={Code2} title="Add Loomail to your app" />
       <p className="mt-1 text-[14px] text-muted-foreground">
-        Paste this into your site's HTML, before the closing body tag. It
-        identifies a user and tracks an event.
+        Pick your framework. Each guide has your address and key filled in, identifies a
+        person when they sign in, and tracks an event.
       </p>
 
       {publishableKey === null ? (
@@ -240,18 +186,18 @@ function SnippetCard({ publishableKey, rawKey, onCreateKey, creating }: {
       ) : (
         <>
           <div className="mt-4">
-            <CodeBlock id="snippet" code={snippet} />
+            <FrameworkGuide origin={origin} rawKey={rawKey} />
           </div>
-          <p className="mt-3 text-[14px] text-muted-foreground">
-            The snippet sends events without a CORS preflight and survives
-            page unloads. It can only write events, never read your data.
+          <p className="mt-4 text-[14px] text-muted-foreground">
+            Everything here sends events without a CORS preflight and survives page
+            unloads. A publishable key can only write events, never read your data.
           </p>
           {!rawKey && publishableKey && (
             <p className="mt-2 text-[14px] text-muted-foreground">
               Paste the publishable key you saved at creation (
               <span className="font-mono text-[13px]">{publishableKey.prefix}...</span>
-              ) into the init line, or create a new publishable key below to
-              get a snippet with the key already in it.
+              ) where the code says PASTE_YOUR_PUBLISHABLE_KEY, or create a new publishable
+              key below to get guides with the key already in them.
             </p>
           )}
           <p className="mt-5 text-[14px] font-medium text-foreground">

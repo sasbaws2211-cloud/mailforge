@@ -146,6 +146,28 @@ with no CORS headers, so the request fails closed. Leave the list empty to
 allow any origin - still safe in the write-only sense; the allowlist is
 abuse friction, not the trust boundary.
 
+## 2b. React, Next.js, Vue and other frameworks
+
+For an app built with a bundler, use the `@loomail/browser` package instead of the script tag. It does what the snippet does (anonymous visitors, `identify`, `reset`, the same storage, a publishable key) and adds:
+
+- **Page views on route changes.** A single-page app never reloads, so `autoPage` in the snippet records only the first page. The package follows the History API, which every client-side router uses (React Router, Next.js, Vue Router, Nuxt, SvelteKit, Angular), and records one page view per new address with the page title set after the route has rendered.
+- **A React provider and hook**, a **Vue plugin**, and a plain `createLoomail()` for everything else. Next.js is supported in the app and pages routers; rendering on the server does nothing.
+- **Consent:** `startOptedOut` and `optIn()` / `optOut()` for cookie banners.
+- **A guard:** a secret key (`mf_live_...`) is refused, with a console error.
+
+The **Integrate** page has a tab for each framework (HTML, React, Next.js, Vue, Nuxt, SvelteKit, Angular, plain JavaScript, Tag Manager) with your address and key already in the code. The package README ([packages/sdk-browser](../packages/sdk-browser/README.md)) has the full option and call reference.
+
+```tsx
+import { LoomailProvider } from "@loomail/browser/react";
+
+<LoomailProvider publishableKey={process.env.NEXT_PUBLIC_LOOMAIL_KEY!} endpoint="https://YOUR_LOOMAIL_HOST" autoPage
+  user={user ? { id: user.id, traits: { email: user.email } } : null}>
+  {children}
+</LoomailProvider>
+```
+
+Pass the signed-in person as `user` and Loomail identifies them; pass `null` and it resets on logout. Use the key in your framework's public environment variables (`NEXT_PUBLIC_`, `VITE_`, `PUBLIC_`, `NUXT_PUBLIC_`), not in the source. A site on a different origin needs that origin in the key's allowlist if you set one (see below).
+
 ## 3. Server-side
 
 ### Official SDKs
