@@ -269,6 +269,14 @@ export const TOOL_PRESETS: readonly ToolPreset[] = [
     sample: { id: 25, email: "john.doe@example.com", first_name: "John", last_name: "Doe", role: "customer", username: "john.doe", date_created: "2024-01-01T10:00:00" },
     expect: { email: "john.doe@example.com", event: "customer.created" },
   },
+];
+
+/**
+ * Presets that are built and tested but not offered in the Type menu yet. Segment is here while it is tested further
+ * against a real account. They still run through the same tests as the visible ones. To offer one again, move it back
+ * into TOOL_PRESETS and add its group to PRESET_GROUPS.
+ */
+export const PAUSED_PRESETS: readonly ToolPreset[] = [
   {
     id: "segment",
     label: "Segment",
@@ -304,6 +312,7 @@ export const TOOL_PRESETS: readonly ToolPreset[] = [
   },
 ];
 
-export const PRESET_GROUPS: ReadonlyArray<ToolPreset["group"]> = ["Forms and waitlists", "Booking", "Selling", "Data pipelines"];
+/** The groups shown in the Type menu, in order. (Stripe, which is not a preset, has its own group beside them.) */
+export const PRESET_GROUPS: ReadonlyArray<ToolPreset["group"]> = ["Forms and waitlists", "Booking", "Selling"];
 
 export const presetById = (id: string): ToolPreset | undefined => TOOL_PRESETS.find((p) => p.id === id);

@@ -13,7 +13,7 @@ import { sql } from "drizzle-orm";
 import { buildApp } from "../src/index.js";
 import { tenants, users, sessions } from "@loomail/db/schema";
 import { getPath } from "../src/inbound/mapping.js";
-import { TOOL_PRESETS } from "../../../apps/dashboard/src/inbound-presets.js";
+import { PAUSED_PRESETS, TOOL_PRESETS } from "../../../apps/dashboard/src/inbound-presets.js";
 import { buildGenericConfig, emptyGenericForm } from "../../../apps/dashboard/src/inbound-sources.js";
 
 process.env.ENCRYPTION_KEY = randomBytes(32).toString("base64");
@@ -51,7 +51,7 @@ afterAll(async () => {
   await pool?.end();
 });
 
-describe.each(TOOL_PRESETS.map((p) => [p.label, p] as const))("preset: %s", (_label, preset) => {
+describe.each([...TOOL_PRESETS, ...PAUSED_PRESETS].map((p) => [p.label, p] as const))("preset: %s", (_label, preset) => {
   let sourceId = "";
   let token = "";
 

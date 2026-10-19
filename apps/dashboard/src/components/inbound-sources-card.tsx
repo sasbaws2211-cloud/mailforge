@@ -73,7 +73,8 @@ interface FormProps {
   onSaved: (result: { source: InboundSource; token?: string; form?: GenericForm }) => void;
 }
 
-function SourceForm({ initial, onCancel, onSaved }: FormProps) {
+/** Exported for tests. */
+export function SourceForm({ initial, onCancel, onSaved }: FormProps) {
   const qc = useQueryClient();
   const editing = initial !== undefined;
   const [kind, setKind] = useState<InboundSource["kind"]>(initial?.kind ?? "generic");
@@ -175,7 +176,9 @@ function SourceForm({ initial, onCancel, onSaved }: FormProps) {
                 ))}
               </optgroup>
             ))}
-            <option value="stripe">Stripe</option>
+            <optgroup label="Payments and subscriptions">
+              <option value="stripe">Stripe</option>
+            </optgroup>
             {/* Paystack and Flutterwave are hidden from new sources for now. Existing ones still work and can be edited
                 (this dropdown only shows when adding). To bring them back, add:
                 <option value="paystack">Paystack</option>
