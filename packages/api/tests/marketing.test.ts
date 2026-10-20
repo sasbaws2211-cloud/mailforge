@@ -180,6 +180,15 @@ describe("signup page", () => {
   });
 });
 
+describe("Google Search Console verification file", () => {
+  it("answers with exactly the text Google expects, and only on the public site", async () => {
+    const res = await get("/googlea90127fae7ed02bd.html");
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe("google-site-verification: googlea90127fae7ed02bd.html");
+    expect((await off.inject({ method: "GET", url: "/googlea90127fae7ed02bd.html" })).statusCode).toBe(404);
+  });
+});
+
 describe("robots.txt and sitemap.xml", () => {
   it("robots.txt hides app and API paths and points at the sitemap", async () => {
     const res = await get("/robots.txt");

@@ -208,6 +208,14 @@ const marketingRoutes: FastifyPluginAsync<MarketingRouteOptions> = async (app, o
       ),
   );
 
+  // Google Search Console ownership check: the file must answer with exactly this text.
+  app.get("/googlea90127fae7ed02bd.html", async (_req, reply) =>
+    reply
+      .header("Content-Type", "text/html; charset=utf-8")
+      .header("Cache-Control", "public, max-age=3600")
+      .send("google-site-verification: googlea90127fae7ed02bd.html"),
+  );
+
   app.get("/sitemap.xml", async (_req, reply) => {
     // Fixed pages have no date (nothing tracks when their text last changed); articles carry the date they were last updated.
     const fixed: Array<[string, string | null]> = ["/", "/pricing", "/signup", "/terms", "/privacy", "/blog", "/alternatives"].map((p) => [p, null]);
