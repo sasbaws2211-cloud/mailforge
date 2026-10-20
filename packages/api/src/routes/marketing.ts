@@ -24,6 +24,8 @@ import { SESSION_COOKIE_NAME } from "./auth.js";
 import { SITE_NAME, type SiteContext } from "../marketing/layout.js";
 import { homePage, pricingPage, signupPage, signupSentPage } from "../marketing/pages.js";
 import { privacyPage, termsPage } from "../marketing/legal.js";
+import { articlePage, contentIndexPage } from "../marketing/content-pages.js";
+import { contentPath, entries, getEntry } from "../marketing/content/index.js";
 import {
   createLimiter,
   isPlausibleEmail,
@@ -175,6 +177,18 @@ const marketingRoutes: FastifyPluginAsync<MarketingRouteOptions> = async (app, o
   app.get("/terms", async (_req, reply) => html(reply, 200, termsPage(ctx), "public, max-age=300"));
   app.get("/privacy", async (_req, reply) => html(reply, 200, privacyPage(ctx), "public, max-age=300"));
 
+  // --- Blog and comparison pages (marketing/content) ---------------------------
+  app.get("/blog", async (_req, reply) => html(reply, 200, contentIndexPage(ctx, "blog"), "public, max-age=300"));
+  app.get("/alternatives", async (_req, reply) => html(reply, 200, contentIndexPage(ctx, "alternative"), "public, max-age=300"));
+  app.get<{ Params: { slug: string } }>("/blog/:slug", async (request, reply) => {
+    const entry = getEntry("blog", request.params.slug);
+    return entry ? html(reply, 200, articlePage(ctx, entry), "public, max-age=300") : reply.callNotFound();
+  });
+  app.get<{ Params: { slug: string } }>("/alternatives/:slug", async (request, reply) => {
+    const entry = getEntry("alternative", request.params.slug);
+    return entry ? html(reply, 200, articlePage(ctx, entry), "public, max-age=300") : reply.callNotFound();
+  });
+
   // --- robots + sitemap --------------------------------------------------------
   app.get("/robots.txt", async (_req, reply) =>
     reply
@@ -195,10 +209,14 @@ const marketingRoutes: FastifyPluginAsync<MarketingRouteOptions> = async (app, o
   );
 
   app.get("/sitemap.xml", async (_req, reply) => {
-    const paths = ["/", "/pricing", "/signup", "/terms", "/privacy"];
+    // Fixed pages have no date (nothing tracks when their text last changed); articles carry the date they were last updated.
+    const fixed: Array<[string, string | null]> = ["/", "/pricing", "/signup", "/terms", "/privacy", "/blog", "/alternatives"].map((p) => [p, null]);
+    const articles: Array<[string, string | null]> = [...entries("blog"), ...entries("alternative")].map((e) => [contentPath(e), e.updated]);
     const xml =
       `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
-      paths.map((p) => `  <url><loc>${ctx.siteUrl}${p === "/" ? "/" : p}</loc></url>`).join("\n") +
+      [...fixed, ...articles]
+        .map(([p, mod]) => `  <url><loc>${ctx.siteUrl}${p === "/" ? "/" : p}</loc>${mod ? `<lastmod>${mod}</lastmod>` : ""}</url>`)
+        .join("\n") +
       `\n</urlset>\n`;
     return reply.header("Content-Type", "application/xml; charset=utf-8").header("Cache-Control", "public, max-age=3600").send(xml);
   });

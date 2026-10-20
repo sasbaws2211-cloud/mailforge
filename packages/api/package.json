@@ -14,7 +14,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "assistant:docs": "tsx scripts/build-assistant-docs.ts",
-    "assistant:docs:check": "tsx scripts/build-assistant-docs.ts --check"
+    "assistant:docs:check": "tsx scripts/build-assistant-docs.ts --check",
+    "content:freshness": "tsx scripts/content-freshness.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^9.4.0",

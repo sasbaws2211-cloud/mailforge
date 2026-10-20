@@ -58,6 +58,8 @@ export interface PageOptions {
   noindex?: boolean;
   /** Share image for this page, as a path on this site (default: OG_IMAGE_PATH). */
   image?: string;
+  /** Open Graph type: "article" for a blog post or a comparison page, "website" (the default) for everything else. */
+  ogType?: "website" | "article";
 }
 
 const CSS = `
@@ -192,6 +194,26 @@ input[type=text],input[type=email]{width:100%;font:inherit;color:var(--ink);back
 .legal h1{font-size:2.2rem}.legal h2{font-size:1.25rem;margin:32px 0 8px;letter-spacing:-.01em}
 .legal p,.legal li{color:var(--muted)}
 .legal .upd{font-size:.9rem;color:var(--muted);margin:10px 0 24px}
+.article{max-width:760px;margin:0 auto;padding:48px 0 28px;line-height:1.75;font-size:1.04rem}
+.article h1{font-size:clamp(1.8rem,3.6vw,2.6rem);margin:6px 0 10px;line-height:1.15}
+.article h2{font-size:1.4rem;margin:38px 0 8px;letter-spacing:-.01em}
+.article h3{font-size:1.1rem;margin:24px 0 4px}
+.article p,.article li{color:var(--ink)}
+.article ul,.article ol{padding-left:1.3em}.article li{margin:4px 0}
+.article .crumb{font-size:.9rem;margin:0}.article .crumb a{color:var(--muted)}
+.article .meta{color:var(--muted);font-size:.9rem;margin:0 0 22px}
+.article .lead{font-size:1.15rem;color:var(--muted);max-width:none;margin:0 0 6px}
+.article .note{border-left:4px solid var(--accent);background:var(--accent-soft);padding:14px 18px;border-radius:8px;margin:22px 0}
+.article .disclosure{border:1px solid var(--line);background:var(--surface);padding:12px 16px;border-radius:10px;font-size:.92rem;color:var(--muted);margin:16px 0 24px}
+.article table.cmp{width:100%;border-collapse:collapse;margin:18px 0;font-size:.95rem;line-height:1.5}
+.article table.cmp th,.article table.cmp td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+.article table.cmp thead th{background:var(--surface)}
+.article table.cmp tbody th{width:24%;font-weight:700}
+.article .cta{border:1px solid var(--line);background:var(--accent-soft);padding:20px 22px;border-radius:14px;margin:38px 0 10px}
+.article .cta p{margin:0 0 12px}
+.article .more{margin-top:30px}
+.article code{background:var(--accent-soft);color:var(--accent);border-radius:6px;padding:1px 6px;font-size:.9em}
+@media (max-width:640px){.article table.cmp{display:block;overflow-x:auto}}
 /* footer */
 footer{border-top:1px solid var(--line);padding:40px 0;color:var(--muted);font-size:.92rem}
 footer .cols{display:flex;flex-wrap:wrap;gap:24px 48px;justify-content:space-between}
@@ -224,7 +246,7 @@ function footer(ctx: SiteContext): string {
   const year = new Date().getUTCFullYear();
   return `<footer><div class="wrap cols">
 <div><a class="logo" href="/" style="margin-bottom:8px">${MARK_SVG}<b>${SITE_NAME.toLowerCase()}</b></a><br>Lifecycle email for software products.<br>&copy; ${year} ${esc(ctx.legalName)}</div>
-<div class="fl"><a href="/pricing">Pricing</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="mailto:${esc(ctx.supportEmail)}">${esc(ctx.supportEmail)}</a></div>
+<div class="fl"><a href="/pricing">Pricing</a><a href="/blog">Blog</a><a href="/alternatives">Alternatives</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="mailto:${esc(ctx.supportEmail)}">${esc(ctx.supportEmail)}</a></div>
 </div></footer>`;
 }
 
@@ -247,7 +269,7 @@ export function renderPage(ctx: SiteContext, opts: PageOptions, body: string): s
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#b8541a">
-<meta property="og:type" content="website">
+<meta property="og:type" content="${opts.ogType ?? "website"}">
 <meta property="og:site_name" content="${SITE_NAME}">
 <meta property="og:title" content="${esc(opts.title)}">
 <meta property="og:description" content="${esc(opts.description)}">
