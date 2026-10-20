@@ -40,6 +40,11 @@ export interface SiteContext {
   legalName: string;
 }
 
+/** The default social-share image: a file in apps/dashboard/public, so it is served from the site root. 1200x630, what every major platform shows. */
+export const OG_IMAGE_PATH = "/og-default.png";
+export const OG_IMAGE_SIZE = { width: 1200, height: 630 } as const;
+const OG_IMAGE_ALT = "Loomail: describe the email flow, Loomail runs it";
+
 export interface PageOptions {
   title: string;
   description: string;
@@ -51,6 +56,8 @@ export interface PageOptions {
   minimalNav?: boolean;
   /** Mark a page as not for search engines. */
   noindex?: boolean;
+  /** Share image for this page, as a path on this site (default: OG_IMAGE_PATH). */
+  image?: string;
 }
 
 const CSS = `
@@ -224,7 +231,11 @@ function footer(ctx: SiteContext): string {
 /** Render a full HTML document around a page body. */
 export function renderPage(ctx: SiteContext, opts: PageOptions, body: string): string {
   const canonical = `${ctx.siteUrl}${opts.path === "/" ? "/" : opts.path}`;
-  const robots = opts.noindex ? '<meta name="robots" content="noindex,nofollow">' : "";
+  // Said out loud either way: a page that is meant to be found also allows large image previews in results.
+  const robots = opts.noindex
+    ? '<meta name="robots" content="noindex,nofollow">'
+    : '<meta name="robots" content="index,follow,max-image-preview:large">';
+  const image = `${ctx.siteUrl}${opts.image ?? OG_IMAGE_PATH}`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -241,7 +252,15 @@ export function renderPage(ctx: SiteContext, opts: PageOptions, body: string): s
 <meta property="og:title" content="${esc(opts.title)}">
 <meta property="og:description" content="${esc(opts.description)}">
 <meta property="og:url" content="${esc(canonical)}">
-<meta name="twitter:card" content="summary">
+<meta property="og:locale" content="en_US">
+<meta property="og:image" content="${esc(image)}">
+<meta property="og:image:width" content="${OG_IMAGE_SIZE.width}">
+<meta property="og:image:height" content="${OG_IMAGE_SIZE.height}">
+<meta property="og:image:alt" content="${esc(OG_IMAGE_ALT)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(opts.title)}">
+<meta name="twitter:description" content="${esc(opts.description)}">
+<meta name="twitter:image" content="${esc(image)}">
 ${robots}
 <style>${CSS}</style>
 ${opts.headExtra ?? ""}

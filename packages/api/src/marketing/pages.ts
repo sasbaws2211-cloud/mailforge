@@ -8,7 +8,7 @@
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
 import { ADDONS, ADDON_KINDS, GOAL_INFO, ONBOARDING_GOALS, PLANS, TRIAL_DAYS, TRIAL_PLAN, chargeAmountMinor, type OnboardingGoal, type PlanId, managedSendingConfigFromEnv } from "@loomail/core";
-import { esc, renderPage, SITE_NAME, type SiteContext } from "./layout.js";
+import { esc, OG_IMAGE_PATH, renderPage, SITE_NAME, type SiteContext } from "./layout.js";
 
 const TRIAL_NOTE = `${TRIAL_DAYS} days of ${PLANS[TRIAL_PLAN].name}. No credit card.`;
 
@@ -197,20 +197,26 @@ export function homePage(ctx: SiteContext): string {
   return renderPage(
     ctx,
     {
-      title: `${SITE_NAME}: lifecycle email for software products`,
+      title: `${SITE_NAME}: Lifecycle Email Platform for SaaS`,
       description:
-        `Describe an email flow in plain language and Loomail runs it. Follow every user from signup to churn and ${managedOffered() ? "send from one place" : "send through your own email provider"}.`,
+        `Lifecycle email for software products: describe a flow in plain language, follow every user from signup to churn, and ${managedOffered() ? "send from one place" : "send through your own email provider"}.`,
       path: "/",
-      headExtra: jsonLd({
-        "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        name: SITE_NAME,
-        applicationCategory: "BusinessApplication",
-        operatingSystem: "Web",
-        description:
-          "Lifecycle email engine: describe flows in plain language, track users from signup to churn, send through your own provider.",
-        url: `${ctx.siteUrl}/`,
-      }),
+      headExtra:
+        jsonLd({
+          "@context": "https://schema.org",
+          "@type": "SoftwareApplication",
+          name: SITE_NAME,
+          applicationCategory: "BusinessApplication",
+          operatingSystem: "Web",
+          description:
+            "Lifecycle email engine: describe flows in plain language, track users from signup to churn, send through your own provider.",
+          url: `${ctx.siteUrl}/`,
+          image: `${ctx.siteUrl}${OG_IMAGE_PATH}`,
+          featureList: FEATURES.map((f) => f.title),
+          offers: { "@type": "Offer", name: PLANS.essential.name, price: String(PLANS.essential.priceMonthlyUsd), priceCurrency: "USD" },
+        }) +
+        jsonLd({ "@context": "https://schema.org", "@type": "Organization", name: SITE_NAME, url: `${ctx.siteUrl}/`, logo: `${ctx.siteUrl}/apple-touch-icon.png` }) +
+        jsonLd({ "@context": "https://schema.org", "@type": "WebSite", name: SITE_NAME, url: `${ctx.siteUrl}/` }),
     },
     body,
   );
@@ -323,16 +329,25 @@ ${cta}
   return renderPage(
     ctx,
     {
-      title: `Pricing: ${SITE_NAME}`,
-      description: `${SITE_NAME} Essential: every feature for ${usd(PLANS.essential.priceMonthlyUsd)} a month. ${TRIAL_NOTE}`,
+      title: `${SITE_NAME} Pricing: Every Feature for ${usd(PLANS.essential.priceMonthlyUsd)} a Month`,
+      description: `One plan, every feature: plain-language flows, lifecycle tracking and the retention grid. ${usd(PLANS.essential.priceMonthlyUsd)} a month. ${TRIAL_NOTE}`,
       path: "/pricing",
-      headExtra: jsonLd({
-        "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        name: SITE_NAME,
-        applicationCategory: "BusinessApplication",
-        offers,
-      }),
+      headExtra:
+        jsonLd({
+          "@context": "https://schema.org",
+          "@type": "SoftwareApplication",
+          name: SITE_NAME,
+          applicationCategory: "BusinessApplication",
+          offers,
+        }) +
+        jsonLd({
+          "@context": "https://schema.org",
+          "@type": "BreadcrumbList",
+          itemListElement: [
+            { "@type": "ListItem", position: 1, name: SITE_NAME, item: `${ctx.siteUrl}/` },
+            { "@type": "ListItem", position: 2, name: "Pricing", item: `${ctx.siteUrl}/pricing` },
+          ],
+        }),
     },
     body,
   );
@@ -396,7 +411,7 @@ export function signupPage(ctx: SiteContext, state: SignupFormState = {}): strin
     ctx,
     {
       title: `Sign up: ${SITE_NAME}`,
-      description: `Create your ${SITE_NAME} workspace. ${TRIAL_NOTE}`,
+      description: `Create your ${SITE_NAME} workspace and describe your first email flow. ${TRIAL_NOTE}`,
       path: "/signup",
       minimalNav: true,
     },

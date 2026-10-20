@@ -40,7 +40,7 @@ describe("when the service offers managed sending", () => {
     expect(home).toMatch(/can send the email for you, so there is no email provider to sign up for/);
     expect(home).toMatch(/connect your own provider \(Resend, or any SMTP server\) if you prefer/);
     expect(home).not.toMatch(/through your own email provider\./); // the hero no longer claims you must bring one
-    expect(await page("/")).toMatch(/Follow every user from signup to churn and send from one place/);
+    expect(await page("/")).toMatch(/follow every user from signup to churn, and send from one place/); // the page description says so too
   });
 
   it("the pricing answer says sending is included up to the plan's email allowance, with your own provider as the alternative", async () => {

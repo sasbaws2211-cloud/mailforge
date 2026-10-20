@@ -68,10 +68,9 @@ describe("landing page", () => {
     expect(body).toContain('href="/#use-cases"');
   });
 
-  it("emits valid JSON-LD", async () => {
-    const blocks = jsonLd((await get("/")).body);
-    expect(blocks).toHaveLength(1);
-    expect((blocks[0] as { "@type": string })["@type"]).toBe("SoftwareApplication");
+  it("emits valid JSON-LD: the product first, then the company and the site", async () => {
+    const blocks = jsonLd((await get("/")).body) as Array<{ "@type": string }>;
+    expect(blocks.map((b) => b["@type"])).toEqual(["SoftwareApplication", "Organization", "WebSite"]);
   });
 
   it("carries no leftover upstream brand and no fabricated social proof", async () => {
@@ -232,5 +231,126 @@ describe("signup form: goal picker", () => {
   it("does not make the question required", async () => {
     const res = await get("/signup");
     expect(res.body).not.toMatch(/name="goal"[^>]*required/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Search and social metadata
+// ---------------------------------------------------------------------------------------------
+const INDEXED_PAGES = ["/", "/pricing", "/terms", "/privacy", "/signup"] as const;
+
+function meta(html: string, attr: "name" | "property", key: string): string[] {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\:]/g, "\\$&");
+  return [...html.matchAll(new RegExp(`<meta ${attr}="${escaped}" content="([^"]*)"`, "g"))].map((m) => m[1]!);
+}
+const titleOf = (html: string) => /<title>([^<]*)<\/title>/.exec(html)![1]!.replace(/&amp;/g, "&").replace(/&#39;/g, "'");
+
+describe("search and social metadata", () => {
+  it.each(INDEXED_PAGES)("%s has a title, description and canonical that fit a search result", async (path) => {
+    const html = (await get(path)).body;
+    const title = titleOf(html);
+    expect(title.length, title).toBeGreaterThanOrEqual(15);
+    expect(title.length, title).toBeLessThanOrEqual(60);
+    expect(title).toContain("Loomail");
+    const [description] = meta(html, "name", "description");
+    expect(description!.length, description).toBeGreaterThanOrEqual(70);
+    expect(description!.length, description).toBeLessThanOrEqual(160);
+    expect(html.match(/<link rel="canonical"/g)).toHaveLength(1);
+    expect(meta(html, "name", "description")).toHaveLength(1);
+    expect(html).toContain(`<link rel="canonical" href="https://loomail.test${path === "/" ? "/" : path}">`);
+  });
+
+  it("every page has a different title and a different description", async () => {
+    const pages = await Promise.all(INDEXED_PAGES.map(async (p) => (await get(p)).body));
+    expect(new Set(pages.map(titleOf)).size).toBe(INDEXED_PAGES.length);
+    expect(new Set(pages.map((h) => meta(h, "name", "description")[0])).size).toBe(INDEXED_PAGES.length);
+  });
+
+  it.each(INDEXED_PAGES)("%s shows a large image when shared, on Open Graph and on Twitter", async (path) => {
+    const html = (await get(path)).body;
+    expect(meta(html, "property", "og:image")).toEqual(["https://loomail.test/og-default.png"]);
+    expect(meta(html, "property", "og:image:width")).toEqual(["1200"]);
+    expect(meta(html, "property", "og:image:height")).toEqual(["630"]);
+    expect(meta(html, "property", "og:image:alt")[0]).toMatch(/Loomail/);
+    expect(meta(html, "name", "twitter:card")).toEqual(["summary_large_image"]);
+    expect(meta(html, "name", "twitter:image")).toEqual(["https://loomail.test/og-default.png"]);
+    expect(meta(html, "name", "twitter:title")).toEqual(meta(html, "property", "og:title"));
+    expect(meta(html, "name", "twitter:description")).toEqual(meta(html, "property", "og:description"));
+    expect(meta(html, "property", "og:url")).toEqual([`https://loomail.test${path}`]);
+  });
+
+  it("the share image is a real 1200x630 PNG in the folder the site serves static files from", async () => {
+    const { readFileSync } = await import("node:fs");
+    const file = readFileSync(new URL("../../../apps/dashboard/public/og-default.png", import.meta.url));
+    expect(file.subarray(1, 4).toString("ascii")).toBe("PNG");
+    expect(file.readUInt32BE(16)).toBe(1200); // IHDR: width
+    expect(file.readUInt32BE(20)).toBe(630); // IHDR: height
+    expect(file.length).toBeLessThan(400_000); // small enough for every platform to accept
+  });
+
+  it.each(INDEXED_PAGES)("%s tells search engines it may be indexed and shown with a large image", async (path) => {
+    expect(meta((await get(path)).body, "name", "robots")).toEqual(["index,follow,max-image-preview:large"]);
+  });
+
+  it("a page that must stay out of search says so and does not allow indexing", async () => {
+    const { renderPage } = await import("../src/marketing/layout.js");
+    const html = renderPage({ siteUrl: "https://loomail.test", supportEmail: "a@b.c", legalName: "X" }, { title: "T", description: "D", path: "/x", noindex: true }, "<p>x</p>");
+    expect(meta(html, "name", "robots")).toEqual(["noindex,nofollow"]);
+  });
+
+  it("the homepage's structured data describes the product, its price and the company", async () => {
+    const [app, org, site] = jsonLd((await get("/")).body) as Array<Record<string, any>>;
+    expect(app).toMatchObject({ "@type": "SoftwareApplication", name: "Loomail", applicationCategory: "BusinessApplication", image: "https://loomail.test/og-default.png" });
+    expect(app!.offers).toEqual({ "@type": "Offer", name: PLANS.essential.name, price: String(PLANS.essential.priceMonthlyUsd), priceCurrency: "USD" });
+    expect(app!.featureList.length).toBeGreaterThanOrEqual(6);
+    expect(org).toMatchObject({ "@type": "Organization", name: "Loomail", url: "https://loomail.test/", logo: "https://loomail.test/apple-touch-icon.png" });
+    expect(site).toMatchObject({ "@type": "WebSite", name: "Loomail", url: "https://loomail.test/" });
+  });
+
+  it("the home page and the pricing page agree on the price", async () => {
+    const [home] = jsonLd((await get("/")).body) as Array<{ offers: { price: string } }>;
+    const [pricing] = jsonLd((await get("/pricing")).body) as Array<{ offers: Array<{ price: string }> }>;
+    expect(home!.offers.price).toBe(pricing!.offers[0]!.price);
+    expect((await get("/pricing")).body).toContain(`$${PLANS.essential.priceMonthlyUsd}`);
+  });
+
+  it("the pricing page says its place in the site", async () => {
+    const blocks = jsonLd((await get("/pricing")).body) as Array<{ "@type": string; itemListElement?: Array<{ position: number; item: string }> }>;
+    const crumbs = blocks.find((b) => b["@type"] === "BreadcrumbList")!;
+    expect(crumbs.itemListElement!.map((c) => [c.position, c.item])).toEqual([[1, "https://loomail.test/"], [2, "https://loomail.test/pricing"]]);
+  });
+
+  it("the price in the pricing page's title and description is the real price", async () => {
+    const html = (await get("/pricing")).body;
+    expect(titleOf(html)).toContain(`$${PLANS.essential.priceMonthlyUsd}`);
+    expect(meta(html, "name", "description")[0]).toContain(`$${PLANS.essential.priceMonthlyUsd}`);
+  });
+
+  it("the legal pages say what they cover instead of repeating their title", async () => {
+    for (const path of ["/terms", "/privacy"]) {
+      const [d] = meta((await get(path)).body, "name", "description");
+      expect(d!.length, path).toBeGreaterThanOrEqual(70);
+      expect(d, path).not.toMatch(/^(Terms of Service|Privacy Policy) for /);
+    }
+  });
+
+  it("every page in the sitemap can be indexed, and exists", async () => {
+    const xml = (await get("/sitemap.xml")).body;
+    const paths = [...xml.matchAll(/<loc>https:\/\/loomail\.test([^<]*)<\/loc>/g)].map((m) => m[1]!);
+    expect(paths.length).toBeGreaterThanOrEqual(5);
+    for (const path of paths) {
+      const res = await get(path);
+      expect(res.statusCode, path).toBe(200);
+      expect(meta(res.body, "name", "robots")[0], path).toMatch(/^index,follow/);
+    }
+  });
+
+  it("JSON-LD text can never close its own script tag", async () => {
+    for (const path of INDEXED_PAGES) {
+      for (const [, block] of (await get(path)).body.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)) {
+        expect(block, path).not.toContain("<");
+        expect(() => JSON.parse(block!)).not.toThrow();
+      }
+    }
   });
 });

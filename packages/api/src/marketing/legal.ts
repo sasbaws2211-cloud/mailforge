@@ -16,7 +16,7 @@ import { esc, renderPage, SITE_NAME, type SiteContext } from "./layout.js";
 /** Bump when the text changes in substance. */
 export const LEGAL_UPDATED = "4 October 2026";
 
-function legalPage(ctx: SiteContext, path: string, title: string, intro: string, sections: Array<[string, string]>): string {
+function legalPage(ctx: SiteContext, path: string, title: string, description: string, intro: string, sections: Array<[string, string]>): string {
   const body = `
 <div class="wrap"><article class="legal">
   <h1>${esc(title)}</h1>
@@ -26,7 +26,7 @@ function legalPage(ctx: SiteContext, path: string, title: string, intro: string,
 </article></div>`;
   return renderPage(
     ctx,
-    { title: `${title}: ${SITE_NAME}`, description: `${title} for ${SITE_NAME}.`, path },
+    { title: `${title}: ${SITE_NAME}`, description, path },
     body,
   );
 }
@@ -38,6 +38,7 @@ export function termsPage(ctx: SiteContext): string {
     ctx,
     "/terms",
     "Terms of Service",
+    `The terms for using ${SITE_NAME}: your account, acceptable use, your data, plans and payment, availability, ending the relationship and liability.`,
     `These terms govern your use of ${SITE_NAME}, operated by ${who} (&ldquo;we&rdquo;, &ldquo;us&rdquo;). By creating a workspace or using the service you agree to them.`,
     [
       [
@@ -88,6 +89,7 @@ export function privacyPage(ctx: SiteContext): string {
     ctx,
     "/privacy",
     "Privacy Policy",
+    `What ${SITE_NAME} collects, why, who it is shared with, how long it is kept, and the choices you have over your data.`,
     `This policy explains what ${who} collects when you use ${SITE_NAME}, why, and the choices you have.`,
     [
       [
