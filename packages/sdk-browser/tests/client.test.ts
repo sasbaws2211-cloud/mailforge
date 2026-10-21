@@ -11,9 +11,14 @@ const memoryStorage = (): StorageLike & { map: Map<string, string> } => {
   return { map, getItem: (k) => map.get(k) ?? null, setItem: (k, v) => void map.set(k, v), removeItem: (k) => void map.delete(k) };
 };
 const base = { key: "mf_pub_abc", endpoint: "https://loomail.test/", transport };
-const make = (over: Record<string, unknown> = {}) => createLoomail({ ...base, storage: memoryStorage(), routeSettleMs: 1, ...over });
+// Every client a test makes is stopped afterwards, newest first, even when an assertion fails before the test's own stop():
+// a client left running keeps its timer and its history patch, and one failure then breaks every test after it.
+const clients: Array<{ stop(): void }> = [];
+const own = <T extends { stop(): void }>(c: T): T => (clients.push(c), c);
+const make = (over: Record<string, unknown> = {}) => own(createLoomail({ ...base, storage: memoryStorage(), routeSettleMs: 1, ...over }));
 const paths = () => calls.map((c) => c.url.replace("https://loomail.test", ""));
-const tick = (ms = 5) => new Promise((r) => setTimeout(r, ms));
+// Time is faked in the tests that wait, so a slow machine cannot make a settle window miss.
+const tick = (ms = 5) => vi.advanceTimersByTimeAsync(ms);
 
 beforeEach(() => {
   calls = [];
@@ -21,7 +26,10 @@ beforeEach(() => {
   window.history.replaceState(null, "", "/");
   document.title = "Home";
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  for (const c of clients.splice(0).reverse()) c.stop();
+  vi.useRealTimers();
+});
 
 describe("identify and track", () => {
   it("sends identify then tracks under the identified user, with the key in the body and no trailing slash in the url", () => {
@@ -136,9 +144,13 @@ describe("storage", () => {
 });
 
 describe("consent", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
   it("sends and stores nothing until opted in", async () => {
     const storage = memoryStorage();
-    const l = createLoomail({ ...base, storage, startOptedOut: true, autoPage: true, anonymousTracking: true });
+    const l = own(createLoomail({ ...base, storage, startOptedOut: true, autoPage: true, anonymousTracking: true }));
     l.identify("u1");
     l.track("e");
     l.page();
@@ -172,6 +184,10 @@ describe("consent", () => {
 });
 
 describe("page views and route changes", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
   it("records a page view on start with the page details, only when autoPage is on", async () => {
     document.title = "Pricing";
     window.history.replaceState(null, "", "/pricing?ref=nav");
@@ -193,18 +209,18 @@ describe("page views and route changes", () => {
     expect(calls).toHaveLength(1);
     window.history.pushState(null, "", "/features");
     document.title = "Features";
-    await tick();
+    await tick(5);
     expect(calls).toHaveLength(2);
     expect(calls[1]!.body.properties).toMatchObject({ path: "/features", title: "Features" });
     expect(calls[1]!.body.properties.referrer).toBe(calls[0]!.body.properties.url);
     // the same address again (or only a hash) is not a new page
     window.history.pushState(null, "", "/features");
     window.history.replaceState(null, "", "/features#top");
-    await tick();
+    await tick(5);
     expect(calls).toHaveLength(2);
     // forward, then back
     window.history.pushState(null, "", "/pricing");
-    await tick();
+    await tick(5);
     window.history.back();
     await tick(40);
     expect(calls.map((c) => c.body.properties.path)).toEqual(["/", "/features", "/pricing", "/features"]);
@@ -213,17 +229,33 @@ describe("page views and route changes", () => {
 
   it("waits for the title to stop changing, so the page view carries the new page's title, and records a redirect chain once", async () => {
     const l = make({ autoPage: true, anonymousTracking: true, routeSettleMs: 30 });
-    await tick(80);
+    await vi.advanceTimersByTimeAsync(80);
     calls = [];
     window.history.pushState(null, "", "/old");
     window.history.replaceState(null, "", "/redirected");
     window.history.replaceState(null, "", "/final");
-    await tick(5);
+    await vi.advanceTimersByTimeAsync(5);
     expect(calls).toHaveLength(0); // still settling
     document.title = "Final page"; // the app sets it after rendering
-    await tick(90);
+    await vi.advanceTimersByTimeAsync(90);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.body.properties).toMatchObject({ path: "/final", title: "Final page" });
+    expect(vi.getTimerCount()).toBe(0); // the three waits of the redirect chain left nothing running behind them
+    l.stop();
+  });
+
+  it("starts its wait again every time the title changes, and records the page once the title has stopped", async () => {
+    const l = make({ autoPage: true, anonymousTracking: true, routeSettleMs: 60 });
+    await vi.advanceTimersByTimeAsync(200);
+    calls = [];
+    window.history.pushState(null, "", "/next");
+    setTimeout(() => (document.title = "First"), 30);
+    setTimeout(() => (document.title = "Second"), 80);
+    await vi.advanceTimersByTimeAsync(140); // 60ms of quiet has not passed since the last change yet
+    expect(calls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(260);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body.properties).toMatchObject({ path: "/next", title: "Second" });
     l.stop();
   });
 
@@ -241,12 +273,12 @@ describe("page views and route changes", () => {
     document.title = "Pricing";
     window.history.replaceState(null, "", "/pricing");
     const l = make({ autoPage: true, anonymousTracking: true, routeSettleMs: 40 });
-    await tick(100);
+    await vi.advanceTimersByTimeAsync(100);
     calls = [];
     window.history.pushState(null, "", "/");
     document.title = ""; // the framework clears it...
     setTimeout(() => (document.title = "Home"), 60); // ...and fills it in again later
-    await tick(180);
+    await vi.advanceTimersByTimeAsync(180);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.body.properties).toMatchObject({ path: "/", title: "Home" });
     l.stop();
@@ -256,17 +288,16 @@ describe("page views and route changes", () => {
     document.title = "Pricing";
     window.history.replaceState(null, "", "/pricing");
     const l = make({ autoPage: true, anonymousTracking: true, routeSettleMs: 30 });
-    await tick(100);
+    await vi.advanceTimersByTimeAsync(100);
     calls = [];
     window.history.pushState(null, "", "/");
     document.title = ""; // empty for much longer than the settle time
     setTimeout(() => (document.title = "Home"), 200);
-    await tick(320);
+    await vi.advanceTimersByTimeAsync(320);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.body.properties).toMatchObject({ path: "/", title: "Home" });
     l.stop();
 
-    vi.useFakeTimers();
     document.title = "";
     window.history.replaceState(null, "", "/untitled");
     calls = [];
@@ -294,14 +325,14 @@ describe("page views and route changes", () => {
     const a = make({ autoPage: true, anonymousTracking: true, trackRouteChanges: false });
     await tick(10);
     window.history.pushState(null, "", "/a");
-    await tick();
+    await tick(5);
     expect(calls).toHaveLength(1);
     a.stop();
     const b = make({ autoPage: true, anonymousTracking: true });
     b.stop();
     calls = [];
     window.history.pushState(null, "", "/b");
-    await tick();
+    await tick(5);
     expect(calls).toHaveLength(0);
   });
 
