@@ -49,6 +49,7 @@ import { loadOnboardingFunnel, parseFunnelWindow, FUNNEL_WINDOWS } from "../admi
 import { loadNoticeContext, notifyDeletionCancelled, notifyDeletionScheduled, notifyWorkspaceErased } from "../account/notify.js";
 import type { PlatformTransport } from "../platform-mailer.js";
 import { cancelDeletion, deletionGraceDays, scheduleDeletion } from "../account/deletion.js";
+import adminLifetimeRoutes from "./admin-lifetime.js";
 import adminAiRoutes from "./admin-ai.js";
 import adminSupportRoutes from "./admin-support.js";
 import { loadSendingRow } from "../sending/context.js";
@@ -201,6 +202,9 @@ const adminRoutes: FastifyPluginAsync<AdminRouteOptions> = async (app, opts) => 
 
   // The operator's own AI provider (Loomail AI): same gate, same audit log.
   await app.register(adminAiRoutes);
+
+  // AppSumo lifetime deals: the billing mode, codes and licences. Same gate, same audit log.
+  await app.register(adminLifetimeRoutes);
 
   // Support requests from every workspace: same gate, same audit log.
   await app.register(adminSupportRoutes, { dashboardUrl: opts.dashboardUrl ?? process.env.DASHBOARD_URL ?? "", noticeTransports: opts.noticeTransports });

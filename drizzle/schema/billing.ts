@@ -144,6 +144,53 @@ export const addonPurchases = pgTable(
 );
 
 /**
+ * AppSumo lifetime licences: one row per licence key.
+ *
+ * AppSumo tells us what happened by signed webhook (purchase, activate, upgrade, downgrade, deactivate),
+ * and the ledger only ever changes in reaction to those, or to a buyer redeeming a key. A licence is never
+ * created, upgraded or refunded by hand (AppSumo forbids it). A workspace is on lifetime tier N while the
+ * licences it holds add up to N (capped at the top tier): see appsumo/lifetime.ts.
+ *
+ * source: "api" = AppSumo's own licence key, reported by webhook; "code" = one of the codes Loomail
+ *         generated and gave AppSumo as a CSV. A code only counts as sold once a workspace redeems it.
+ * status: inactive (bought or generated, not yet activated) | active | deactivated (refunded) | superseded
+ *         (replaced by an upgrade or downgrade).
+ */
+export const lifetimeLicenses = pgTable(
+  "lifetime_licenses",
+  {
+    licenseKey: text("license_key").primaryKey(),
+    tier: integer("tier").notNull().default(1),
+    planCode: text("plan_code").notNull().default("lifetime_1"),
+    status: text("status").notNull().default("inactive"),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "set null" }),
+    prevLicenseKey: text("prev_license_key"),
+    lastEvent: text("last_event").notNull().default(""),
+    source: text("source").notNull().default("api"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("idx_lifetime_licenses_tenant").on(t.tenantId), index("idx_lifetime_licenses_status").on(t.source, t.status)],
+);
+
+/** Every AppSumo webhook, as received, with what we did about it, so any dispute can be traced. Not tenant data. */
+export const appsumoEvents = pgTable(
+  "appsumo_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    licenseKey: text("license_key").notNull().default(""),
+    event: text("event").notNull().default(""),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    outcome: text("outcome").notNull().default(""),
+    receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("idx_appsumo_events_key").on(t.licenseKey, t.receivedAt)],
+);
+
+/**
  * A top-up that renews itself each month (the customer ticked "repeat every month").
  *
  * The provider's reusable card authorization is stored encrypted (AES-256-GCM, same key and

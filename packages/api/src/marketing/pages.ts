@@ -7,10 +7,22 @@
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
-import { ADDONS, ADDON_KINDS, GOAL_INFO, ONBOARDING_GOALS, PLANS, TRIAL_DAYS, TRIAL_PLAN, chargeAmountMinor, type OnboardingGoal, type PlanId, managedSendingConfigFromEnv } from "@loomail/core";
-import { esc, OG_IMAGE_PATH, renderPage, SITE_NAME, type SiteContext } from "./layout.js";
+import { ADDONS, ADDON_KINDS, GOAL_INFO, LIFETIME_PLAN_IDS, ONBOARDING_GOALS, PLANS, TRIAL_DAYS, TRIAL_PLAN, chargeAmountMinor, type OnboardingGoal, type PlanId, managedSendingConfigFromEnv } from "@loomail/core";
+import { esc, isLifetimeOnly, OG_IMAGE_PATH, renderPage, SITE_NAME, type SiteContext } from "./layout.js";
 
 const TRIAL_NOTE = `${TRIAL_DAYS} days of ${PLANS[TRIAL_PLAN].name}. No credit card.`;
+
+/** What to say instead of the trial note when only the lifetime deal is sold. */
+const LIFETIME_NOTE = "Pay once, use it forever. 60-day money-back guarantee on AppSumo.";
+
+/** The line under a call to action: the trial, or the lifetime deal when that is all that is sold. */
+const noteFor = (ctx: SiteContext): string => (isLifetimeOnly(ctx) ? LIFETIME_NOTE : TRIAL_NOTE);
+
+/** Where a "get started" button goes and what it says. */
+function ctaFor(ctx: SiteContext): { href: string; label: string } {
+  if (isLifetimeOnly(ctx)) return { href: ctx.lifetime?.buyUrl || "/pricing", label: "Get the lifetime deal" };
+  return { href: "/signup", label: "Start free trial" };
+}
 
 // ---------------------------------------------------------------------------
 // Landing
@@ -95,7 +107,7 @@ const STEPS: Array<{ title: string; body: string }> = [
 /** Is Loomail Sending (we send the email for you) offered on this service? The marketing copy follows. */
 const managedOffered = (): boolean => managedSendingConfigFromEnv().enabled;
 
-const homeFaq = (): Array<{ q: string; a: string }> => [
+const homeFaq = (ctx: SiteContext): Array<{ q: string; a: string }> => [
   {
     q: "Does Loomail send the emails?",
     a: managedOffered()
@@ -106,10 +118,15 @@ const homeFaq = (): Array<{ q: string; a: string }> => [
     q: "Do I need an AI key?",
     a: "The lifecycle engine and the ready-made flows work without one. Writing new flows in plain language uses an AI provider key that you supply, so you control the model and the cost.",
   },
-  {
-    q: "What happens after the trial?",
-    a: `You get ${TRIAL_NOTE.toLowerCase()} When it ends your workspace is paused unless you subscribe to Essential. Your data stays in your workspace.`,
-  },
+  isLifetimeOnly(ctx)
+    ? {
+        q: "Is there a free trial?",
+        a: "There is no free trial. The lifetime deal comes with a 60-day money-back guarantee on AppSumo, so you can try Loomail with your own product and get a full refund if it is not for you. Bought it already? Create an account and redeem your code under Settings, Plan.",
+      }
+    : {
+        q: "What happens after the trial?",
+        a: `You get ${TRIAL_NOTE.toLowerCase()} When it ends your workspace is paused unless you subscribe to Essential. Your data stays in your workspace.`,
+      },
   {
     q: "Who owns the contact data?",
     a: "You do. Your contacts and events belong to your workspace and are used only to run your flows and show you your own reports.",
@@ -129,7 +146,7 @@ export function homePage(ctx: SiteContext): string {
   const steps = STEPS.map(
     (s) => `<div class="step"><h3>${esc(s.title)}</h3><p>${esc(s.body)}</p></div>`,
   ).join("");
-  const faq = homeFaq().map(
+  const faq = homeFaq(ctx).map(
     (f) => `<details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`,
   ).join("");
 
@@ -139,8 +156,8 @@ export function homePage(ctx: SiteContext): string {
     <p class="eyebrow">Lifecycle email for software products</p>
     <h1>Describe the email flow. <span class="hl">${SITE_NAME} runs it.</span></h1>
     <p class="lead">Send us your product events, say what should happen in plain language, and ${SITE_NAME} follows every user from signup to churn and emails them at the right moment${managedOffered() ? "" : ", through your own email provider"}.</p>
-    <div class="cta"><a class="btn" href="/signup">Start free trial</a><a class="btn ghost" href="/pricing">See pricing</a></div>
-    <p class="fine">${esc(TRIAL_NOTE)}</p>
+    <div class="cta"><a class="btn" href="${esc(ctaFor(ctx).href)}">${esc(ctaFor(ctx).label)}</a><a class="btn ghost" href="/pricing">See pricing</a></div>
+    <p class="fine">${esc(noteFor(ctx))}</p>
   </div>
   <div class="mock" aria-label="Example of a flow">
     <div class="row"><span class="tag">You write</span>
@@ -189,9 +206,9 @@ export function homePage(ctx: SiteContext): string {
 </div></section>
 
 <section><div class="wrap"><div class="cta-band">
-  <h2>Start with the free trial</h2>
-  <p>${esc(TRIAL_NOTE)} Set up your first flow today.</p>
-  <a class="btn" href="/signup">Start free trial</a>
+  <h2>${isLifetimeOnly(ctx) ? "Get the lifetime deal" : "Start with the free trial"}</h2>
+  <p>${esc(noteFor(ctx))} Set up your first flow today.</p>
+  <a class="btn" href="${esc(ctaFor(ctx).href)}">${esc(ctaFor(ctx).label)}</a>
 </div></div></section>`;
 
   return renderPage(
@@ -226,7 +243,7 @@ export function homePage(ctx: SiteContext): string {
 // Pricing
 // ---------------------------------------------------------------------------
 
-const pricingFaq = (): Array<{ q: string; a: string }> => [
+const pricingFaq = (ctx: SiteContext): Array<{ q: string; a: string }> => [
   {
     q: "How is usage counted?",
     a: "Essential includes up to 6,000 customer profiles, the people your product tells Loomail about. The monthly email allowance is a guardrail against runaway sends, not something you should hit in normal use.",
@@ -238,12 +255,14 @@ const pricingFaq = (): Array<{ q: string; a: string }> => [
       : "You send through your own email provider, so you pay them directly at their rates. Loomail only charges for the engine that decides who gets what.",
   },
   {
-    q: "What if I need more than Essential includes?",
+    q: isLifetimeOnly(ctx) ? "What if I need more than my plan includes?" : "What if I need more than Essential includes?",
     a: "Buy extra usage for the month in a few clicks: more customer profiles, more emails or more AI credits, at the rates above. It is prepaid, so nothing is ever charged unless you choose it.",
   },
   {
     q: "What happens after the trial?",
-    a: `${TRIAL_NOTE} The clock restarts once, when your first event arrives (up to 14 days in total), so setup time does not eat your trial. We email you two days before it ends. When it ends your workspace is paused until you subscribe to Essential. Nothing is deleted.`,
+    a: isLifetimeOnly(ctx)
+      ? "There is no free trial: the lifetime deal has a 60-day money-back guarantee on AppSumo instead. If you do not buy, nothing is charged and nothing is created."
+      : `${TRIAL_NOTE} The clock restarts once, when your first event arrives (up to 14 days in total), so setup time does not eat your trial. We email you two days before it ends. When it ends your workspace is paused until you subscribe to Essential. Nothing is deleted.`,
   },
   {
     q: "Can I change or cancel my plan?",
@@ -272,6 +291,20 @@ export function pricingPage(ctx: SiteContext): string {
   // What a checkout really charges, when that is not US dollars: the same rounding the server uses.
   const local = (usdPrice: number): string | null =>
     ctx.chargeCurrency && ctx.usdRate ? localMoney(chargeAmountMinor(usdPrice, ctx.chargeCurrency, ctx.usdRate) / 100, ctx.chargeCurrency) : null;
+  const lifetimeCards = LIFETIME_PLAN_IDS.map((id, i) => {
+    const p = PLANS[id];
+    const left = ctx.lifetime?.spots.cap ? ctx.lifetime.spots.left : null;
+    const soldOut = left !== null && left <= 0;
+    const buy = ctx.lifetime?.buyUrl || "/redeem";
+    return `<div class="plan-card${i === 0 ? " rec" : ""}">
+<h3>${esc(p.name)}</h3><p class="muted" style="margin:6px 0 0">${esc(p.tagline)}</p>
+<div class="price"><span class="amt">One-time</span></div>
+<div class="billed">Lifetime access${left !== null ? ` &middot; ${left} left` : ""}</div>
+<ul>${p.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
+<a class="btn block${i === 0 ? "" : " ghost"}" href="${esc(buy)}"${ctx.lifetime?.buyUrl ? ' rel="noopener"' : ""}>${soldOut ? "Sold out" : "Get the lifetime deal"}</a>
+</div>`;
+  }).join("");
+
   const cards = (["essential"] as const).map((id) => {
     const p = PLANS[id];
     const localMonthly = local(p.priceMonthlyUsd);
@@ -290,28 +323,37 @@ ${cta}
 </div>`;
   }).join("");
 
-  const faq = pricingFaq().map(
+  const faq = pricingFaq(ctx).map(
     (f) => `<details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`,
   ).join("");
+
+  const lifetimeOnly = isLifetimeOnly(ctx);
+  const offerStrip =
+    !lifetimeOnly && ctx.lifetime && ctx.lifetime.mode === "both" && ctx.lifetime.buyUrl
+      ? `<div class="note" style="margin-top:28px;text-align:center"><b>Prefer to pay once?</b> Get the lifetime deal on AppSumo${
+          ctx.lifetime.spots.cap ? ` &middot; ${ctx.lifetime.spots.left} of ${ctx.lifetime.spots.cap} left` : ""
+        } &middot; 60-day money-back guarantee. <a href="${esc(ctx.lifetime.buyUrl)}" rel="noopener">See the deal</a></div>`
+      : "";
 
   const body = `
 <section><div class="wrap">
   <div class="center">
     <p class="eyebrow">Pricing</p>
-    <h1 style="font-size:clamp(2rem,4.4vw,3rem)">One plan. Everything included.</h1>
-    <p class="lead">One simple price, every feature. ${esc(TRIAL_NOTE)}</p>
+    <h1 style="font-size:clamp(2rem,4.4vw,3rem)">${lifetimeOnly ? "Pay once. Use it forever." : "One plan. Everything included."}</h1>
+    <p class="lead">${lifetimeOnly ? "Three lifetime tiers on AppSumo: buy a second or third code to stack them. " : "One simple price, every feature. "}${esc(noteFor(ctx))}</p>
   </div>
-  <div class="plans single">${cards}</div>
+  <div class="${lifetimeOnly ? "plans" : "plans single"}"${lifetimeOnly ? ' style="grid-template-columns:repeat(3,1fr)"' : ""}>${lifetimeOnly ? lifetimeCards : cards}</div>
+  ${offerStrip}
   <div class="center" style="margin-top:56px">
     <h2>Extra usage</h2>
-    <p class="lead">Need more than Essential includes in a month? Add it when you need it. Nothing is charged unless you choose to buy.</p>
+    <p class="lead">${isLifetimeOnly(ctx) ? "Need more than your lifetime plan includes in a month?" : "Need more than Essential includes in a month?"} Add it when you need it. Nothing is charged unless you choose to buy.</p>
   </div>
   <div class="faq" style="max-width:640px">
     ${ADDON_KINDS.map((k) => `<details open><summary>${esc(ADDONS[k].label)}: ${esc(ADDONS[k].rateLabel)}</summary><p>${esc(
       `Buy in packs of ${ADDONS[k].packUnits.toLocaleString("en-US")} for ${usd(ADDONS[k].packPriceCents / 100)}. A top-up raises this month's limit.`,
     )}</p></details>`).join("")}
   </div>
-  <p class="note">${ctx.chargeCurrency && ctx.usdRate ? `Prices are listed in US dollars and charged in your local currency at a fixed exchange rate, shown under the price.` : "Prices are in US dollars."} Need more than 6,000 customer profiles, a security review or an invoice? <a href="mailto:${esc(ctx.supportEmail)}">Talk to us</a>.</p>
+  <p class="note">${ctx.chargeCurrency && ctx.usdRate ? `Prices are listed in US dollars and charged in your local currency at a fixed exchange rate, shown under the price.` : "Prices are in US dollars."} ${isLifetimeOnly(ctx) ? "Need a bigger plan, a security review or an invoice?" : "Need more than 6,000 customer profiles, a security review or an invoice?"} <a href="mailto:${esc(ctx.supportEmail)}">Talk to us</a>.</p>
 </div></section>
 <section class="band"><div class="wrap">
   <div class="center"><h2>Pricing questions</h2></div>
@@ -330,7 +372,9 @@ ${cta}
     ctx,
     {
       title: `${SITE_NAME} Pricing: Every Feature for ${usd(PLANS.essential.priceMonthlyUsd)} a Month`,
-      description: `One plan, every feature: plain-language flows, lifecycle tracking and the retention grid. ${usd(PLANS.essential.priceMonthlyUsd)} a month. ${TRIAL_NOTE}`,
+      description: isLifetimeOnly(ctx)
+        ? `Pay once, use it forever: plain-language flows, lifecycle tracking and the retention grid. ${LIFETIME_NOTE}`
+        : `One plan, every feature: plain-language flows, lifecycle tracking and the retention grid. ${usd(PLANS.essential.priceMonthlyUsd)} a month. ${TRIAL_NOTE}`,
       path: "/pricing",
       headExtra:
         jsonLd({
@@ -358,6 +402,8 @@ ${cta}
 // ---------------------------------------------------------------------------
 
 export interface SignupFormState {
+  /** An AppSumo code is waiting in this browser (the buyer came from /redeem or the activation link). */
+  codeWaiting?: boolean;
   error?: string;
   workspace?: string;
   email?: string;
@@ -368,11 +414,11 @@ export interface SignupFormState {
 export function signupPage(ctx: SiteContext, state: SignupFormState = {}): string {
   const plan = state.plan ?? TRIAL_PLAN;
   const planName = PLANS[plan].name;
-  const heading =
-    `Start your ${TRIAL_DAYS}-day free trial`;
+  const lifetimeOnly = isLifetimeOnly(ctx);
+  const heading = lifetimeOnly ? "Create your account" : `Start your ${TRIAL_DAYS}-day free trial`;
   const err = state.error ? `<div class="err" role="alert">${esc(state.error)}</div>` : "";
   const perks = [
-    `${TRIAL_NOTE}`,
+    ...(lifetimeOnly ? ["Redeem your AppSumo code once you are in"] : [`${TRIAL_NOTE}`]),
     managedOffered() ? "We can send your email for you, or use your own provider" : "Send through your own email provider",
     "Ready-made onboarding flow to start from",
     "Unsubscribe and compliance handled for you",
@@ -381,9 +427,10 @@ export function signupPage(ctx: SiteContext, state: SignupFormState = {}): strin
   const body = `
 <div class="wrap signup">
   <div>
-    <p class="eyebrow">${esc(planName)} trial</p>
+    <p class="eyebrow">${lifetimeOnly ? "Lifetime deal" : `${esc(planName)} trial`}</p>
     <h1 style="font-size:clamp(2rem,4vw,2.8rem)">${esc(heading)}</h1>
     <p class="lead">Create a workspace in under a minute. We will email you a link to open it. There is no password to remember.</p>
+    ${state.codeWaiting ? '<p class="note" role="status">Your AppSumo code is saved for the next hour. Create your account, open the link we email you, and your code will be waiting under Settings, Plan.</p>' : ""}
     <ul class="perks">${perks.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>
   </div>
   <form class="form-card" method="POST" action="/signup" novalidate>
@@ -402,7 +449,7 @@ export function signupPage(ctx: SiteContext, state: SignupFormState = {}): strin
     </fieldset>
     <label class="check" for="terms"><input type="checkbox" id="terms" name="terms" value="yes" required>
       <span>I agree to the <a href="/terms" target="_blank" rel="noopener">Terms</a> and the <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
-    <button class="btn block" type="submit">Start free trial</button>
+    <button class="btn block" type="submit">${lifetimeOnly ? "Create account" : "Start free trial"}</button>
     <p class="muted" style="font-size:.88rem;margin:14px 0 0;text-align:center">Already have a workspace? <a href="/login">Sign in</a></p>
   </form>
 </div>`;
@@ -411,10 +458,38 @@ export function signupPage(ctx: SiteContext, state: SignupFormState = {}): strin
     ctx,
     {
       title: `Sign up: ${SITE_NAME}`,
-      description: `Create your ${SITE_NAME} workspace and describe your first email flow. ${TRIAL_NOTE}`,
+      description: `Create your ${SITE_NAME} workspace and describe your first email flow. ${noteFor(ctx)}`,
       path: "/signup",
       minimalNav: true,
     },
+    body,
+  );
+}
+
+/** The page given to AppSumo: a box for the licence code. */
+export function redeemPage(ctx: SiteContext, state: { error?: string; code?: string } = {}): string {
+  const err = state.error ? `<div class="err" role="alert">${esc(state.error)}</div>` : "";
+  const body = `
+<div class="wrap" style="max-width:560px;padding:64px 20px">
+  <p class="eyebrow">AppSumo</p>
+  <h1 style="font-size:clamp(1.9rem,4vw,2.6rem)">Redeem your code</h1>
+  <p class="lead">Bought the ${SITE_NAME} lifetime deal on AppSumo? Enter your code to unlock it on your workspace.</p>
+  <form class="form-card" method="POST" action="/redeem" novalidate style="margin-top:24px">
+    ${err}
+    <label for="code">Your code</label>
+    <input type="text" id="code" name="code" required maxlength="80" autocomplete="off" spellcheck="false" autocapitalize="characters" placeholder="LM-XXXX-XXXX-XXXX" value="${esc(state.code ?? "")}">
+    <button class="btn block" type="submit">Redeem</button>
+  </form>
+  <ol class="muted" style="margin-top:28px;padding-left:20px">
+    <li>Create a ${SITE_NAME} account, or sign in.</li>
+    <li>Enter your code here, or paste it under <b>Settings, Plan</b> in the app.</li>
+    <li>Have a second code? Redeem it the same way on the same workspace to stack it, up to ${LIFETIME_PLAN_IDS.length} tiers.</li>
+  </ol>
+  <p class="muted" style="margin-top:20px">Already have an account? <a href="/login">Sign in</a>. Need help? <a href="mailto:${esc(ctx.supportEmail)}">${esc(ctx.supportEmail)}</a></p>
+</div>`;
+  return renderPage(
+    ctx,
+    { title: `Redeem your code: ${SITE_NAME}`, description: `Redeem your ${SITE_NAME} AppSumo lifetime code.`, path: "/redeem", minimalNav: true, noindex: true },
     body,
   );
 }

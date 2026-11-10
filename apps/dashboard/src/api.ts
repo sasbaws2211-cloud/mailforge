@@ -1754,7 +1754,30 @@ export interface AutoRenewal {
   last_error: string | null;
 }
 
+/** The AppSumo lifetime deal, as this workspace sees it. */
+export interface LifetimeInfo {
+  mode: "subscriptions" | "lifetime" | "both";
+  buy_url: string | null;
+  spots: { cap: number; sold: number; left: number };
+  tiers: Array<{
+    tier: number;
+    id: string;
+    name: string;
+    features: string[];
+    limits: { contacts: number | null; emails_per_month: number | null; seats: number | null; ai_tokens_per_month: number | null };
+  }>;
+  /** The licence this workspace holds, or null. `codes` is how many tiers' worth it has. */
+  license: { tier: number; status: string; key_hint: string; codes: number } | null;
+  max_tier: number;
+  on_lifetime_plan: boolean;
+  /** Whether a code can be redeemed here now (not on a paid subscription, not already at the top tier). */
+  can_redeem: boolean;
+  /** A code left waiting in this browser from /redeem or the AppSumo activation link. */
+  pending_code: boolean;
+}
+
 export interface PlanInfo {
+  lifetime: LifetimeInfo;
   /** Prepaid top-ups a workspace can buy for the current month. */
   addons: AddonCatalogEntry[];
   /** Top-ups bought this calendar month (units) and when they stop counting. */
@@ -2184,3 +2207,23 @@ export const syncWarehouseSource = (id: string) => warehouseFetch<{ outcome: War
 export const testWarehouseQuery = (input: { id?: string; config?: unknown; secret?: unknown }) => warehouseFetch<WarehousePreview>("/test", jsonInit("POST", input));
 /** GET /v1/warehouse-sources/:id/log */
 export const fetchWarehouseLog = (id: string) => warehouseFetch<{ log: InboundLogLine[] }>(`/${id}/log`);
+
+export interface LifetimeRedeemResult {
+  ok: true;
+  license_key: string;
+  tier: number;
+  plan_code: string;
+  codes: number;
+}
+
+/** POST /v1/lifetime/redeem - redeem an AppSumo code (blank: the code left waiting in this browser). */
+export async function redeemLifetimeCode(licenseKey?: string): Promise<LifetimeRedeemResult> {
+  const res = await apiFetch("/v1/lifetime/redeem", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(licenseKey ? { license_key: licenseKey } : {}),
+  });
+  const body = (await res.json().catch(() => ({}))) as { error?: string } & Partial<LifetimeRedeemResult>;
+  if (!res.ok) throw new Error(body.error ?? `That did not work (${res.status}).`);
+  return body as LifetimeRedeemResult;
+}

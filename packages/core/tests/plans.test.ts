@@ -33,7 +33,8 @@ describe("PLANS", () => {
   });
 
   it("sells exactly one plan: Essential, at $100 a month", () => {
-    expect([...PLAN_IDS]).toEqual(["free", "essential"]);
+    // Essential is the only plan sold by subscription; the lifetime tiers are redeemed with a code (see below).
+    expect([...PLAN_IDS].filter((id) => !id.startsWith("lifetime_"))).toEqual(["free", "essential"]);
     expect(PLANS.essential.priceMonthlyUsd).toBe(100);
     expect(PLANS.essential.features.length).toBeGreaterThan(0);
     expect(PLANS.essential.showsPoweredBy).toBeFalsy();
@@ -181,5 +182,58 @@ describe("rebasedTrialEnd", () => {
     const now = new Date("2026-10-10T00:00:00Z");
     const out = rebasedTrialEnd(created, new Date("2026-10-08T00:00:00Z"), now);
     expect(out.getTime()).toBe(created.getTime() + TRIAL_MAX_DAYS * DAY);
+  });
+});
+
+describe("lifetime plans", () => {
+  it("map the licences a workspace holds to a tier, capped at the top", async () => {
+    const { lifetimePlanForTotal, lifetimeTier, isLifetimePlanId, MAX_LIFETIME_TIER } = await import("../src/index.js");
+    expect(lifetimePlanForTotal(0)).toBeNull();
+    expect(lifetimePlanForTotal(-1)).toBeNull();
+    expect(lifetimePlanForTotal(1)).toBe("lifetime_1");
+    expect(lifetimePlanForTotal(2)).toBe("lifetime_2");
+    expect(lifetimePlanForTotal(3)).toBe("lifetime_3");
+    expect(lifetimePlanForTotal(9)).toBe("lifetime_3");
+    expect(MAX_LIFETIME_TIER).toBe(3);
+    expect(lifetimeTier("lifetime_2")).toBe(2);
+    expect(lifetimeTier("essential")).toBeNull();
+    expect(isLifetimePlanId("lifetime_1")).toBe(true);
+    expect(isLifetimePlanId("lifetime_4")).toBe(false);
+  });
+
+  it("are never something you can buy, and never expire", async () => {
+    const { isPaidPlanId, effectivePlan } = await import("../src/index.js");
+    expect(isPaidPlanId("essential")).toBe(true);
+    for (const id of ["lifetime_1", "lifetime_2", "lifetime_3", "free"]) expect(isPaidPlanId(id), id).toBe(false);
+    const now = new Date("2030-01-01T00:00:00Z");
+    expect(effectivePlan("lifetime_2", null, now, null)).toBe("lifetime_2");
+    // Even a stale paid-through date (there should never be one) cannot lapse a lifetime plan.
+    expect(effectivePlan("lifetime_3", null, now, new Date("2020-01-01T00:00:00Z"))).toBe("lifetime_3");
+  });
+
+  it("get bigger with each tier, never unlimited for anything that costs money, and send through the customer's own provider", () => {
+    const ids = ["lifetime_1", "lifetime_2", "lifetime_3"] as const;
+    for (let i = 0; i < ids.length; i++) {
+      const p = PLANS[ids[i]!];
+      expect(p.lifetime).toBe(true);
+      expect(p.managedSending).toBe(false);
+      expect(p.priceMonthlyUsd).toBe(0);
+      for (const k of ["contacts", "emailsPerMonth", "seats", "aiTokensPerMonth"] as const) expect(p.limits[k], `${ids[i]} ${k}`).not.toBeNull();
+      if (i > 0) {
+        const prev = PLANS[ids[i - 1]!];
+        expect(p.limits.contacts!).toBeGreaterThan(prev.limits.contacts!);
+        expect(p.limits.emailsPerMonth!).toBeGreaterThan(prev.limits.emailsPerMonth!);
+        expect(p.limits.aiTokensPerMonth!).toBeGreaterThan(prev.limits.aiTokensPerMonth!);
+      }
+    }
+    // The top lifetime tier stays below the monthly plan it would otherwise cannibalise.
+    expect(PLANS.lifetime_3.limits.contacts!).toBeLessThan(PLANS.essential.limits.contacts!);
+  });
+
+  it("do not allow Loomail Sending on a hosted workspace, but never restrict a self-hosted one", async () => {
+    const { entitlementsFor } = await import("../src/index.js");
+    expect(entitlementsFor({ plan: "lifetime_1", trialEndsAt: null, enforced: true }).managedSendingAllowed).toBe(false);
+    expect(entitlementsFor({ plan: "essential", trialEndsAt: null, enforced: true }).managedSendingAllowed).toBe(true);
+    expect(entitlementsFor({ plan: "lifetime_1", trialEndsAt: null, enforced: false }).managedSendingAllowed).toBe(true);
   });
 });

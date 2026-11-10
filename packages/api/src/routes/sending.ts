@@ -16,6 +16,7 @@
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */
+import { loadEntitlements } from "../plan/usage.js";
 import type { FastifyPluginAsync } from "fastify";
 import { sql, eq } from "drizzle-orm";
 import {
@@ -74,13 +75,15 @@ const routes: FastifyPluginAsync = async (app) => {
   /** Everything the dashboard needs, in one answer. */
   async function view(db: Db, tenantId: string) {
     const cfg = managedSendingConfigFromEnv(env);
+    // Lifetime plans send through the customer's own provider, so Loomail Sending is not offered to them.
+    const allowed = (await loadEntitlements(db, tenantId)).managedSendingAllowed;
     const row = await loadSendingRow(db, tenantId);
     const own = await hasOwnTransport(db, tenantId);
     const sender = row ? senderFor(row, cfg) : null;
     const active = cfg.enabled && row !== null && row.enabled && row.pausedAt === null && sender?.ok === true;
     return {
-      // Is managed sending offered on this service at all?
-      available: cfg.enabled,
+      // Is managed sending offered on this service at all, and on this workspace's plan?
+      available: cfg.enabled && allowed,
       // What mail goes out through: the workspace's own transport wins, then managed sending.
       uses: own ? "own_transport" : active ? "managed" : "nothing",
       shared: { offered: cfg.sharedFrom !== null, daily_limit: cfg.sharedFrom ? cfg.sharedDailyLimit : null },
@@ -121,6 +124,12 @@ const routes: FastifyPluginAsync = async (app) => {
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
     if (!managedSendingConfigFromEnv(env).enabled) return reply.status(503).send(NOT_OFFERED);
+    if (!(await loadEntitlements(db, tenantId)).managedSendingAllowed) {
+      return reply.status(403).send({
+        error: "Your lifetime plan sends through your own email provider. Connect one under Settings, Email sending.",
+        code: "own_sender_required",
+      });
+    }
     await db
       .insert(managedSending)
       .values({ tenantId })

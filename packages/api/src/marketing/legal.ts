@@ -62,6 +62,12 @@ export function termsPage(ctx: SiteContext): string {
         `<p>A new workspace starts with a free trial of a paid plan, with no card required. When the trial ends the workspace is paused until you subscribe to the Essential plan. The plan is billed in advance, monthly, at the price shown on our pricing page when you subscribe. We will tell you before we change prices, and a change applies from your next billing period. You can cancel at any time and your plan stays active until the end of the period you paid for.</p>`,
       ],
       [
+        "Lifetime licences",
+        `<p>As well as the plan above, ${SITE_NAME} may be sold as a one-time lifetime licence through AppSumo. A licence unlocks one lifetime plan for one workspace. You redeem it with the code AppSumo gives you, on our redeem page or under Settings, Plan. A second code redeemed in the same workspace moves it up a tier, to a maximum of three.</p>
+         <p>&ldquo;Lifetime&rdquo; means for as long as we operate the ${SITE_NAME} service. It does not mean the lifetime of any person or company, or of a third-party service we depend on. A lifetime plan has fixed monthly limits, and sends through the email provider you connect. If we ever plan to close the service we will give reasonable notice.</p>
+         <p>A licence bought on AppSumo can be refunded within AppSumo&rsquo;s money-back window (60 days from purchase). A refunded licence is deactivated: the workspace drops a tier, or onto no plan if it was the last licence, and nothing is deleted. A lifetime licence cannot be combined with a paid subscription in the same workspace.</p>`,
+      ],
+      [
         "Availability and changes",
         `<p>We work to keep ${SITE_NAME} available but do not promise uninterrupted service. We may improve, change or remove features, and we will give reasonable notice of changes that significantly affect you.</p>`,
       ],
@@ -114,7 +120,7 @@ export function privacyPage(ctx: SiteContext): string {
       ],
       [
         "Who we share it with",
-        `<p>Only with providers that help us run the service, under contract: hosting and database providers, an email provider for account emails, and a payment provider when you subscribe. Emails to your contacts are sent through the email provider that you connect, so that provider also handles those messages under your own agreement with them.</p>`,
+        `<p>Only with providers that help us run the service, under contract: hosting and database providers, an email provider for account emails, and a payment provider when you subscribe. If you buy a lifetime licence, AppSumo sells it and tells us when a code is bought, upgraded or refunded: we receive your licence code, its tier and its status, and your AppSumo payment details stay with AppSumo. Emails to your contacts are sent through the email provider that you connect, so that provider also handles those messages under your own agreement with them.</p>`,
       ],
       [
         "How long we keep it",

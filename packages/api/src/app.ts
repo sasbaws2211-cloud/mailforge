@@ -48,6 +48,8 @@ import messagesRoutes from "./routes/messages.js";
 import unsubscribeRoutes from "./routes/unsubscribe.js";
 import marketingRoutes from "./routes/marketing.js";
 import planRoutes from "./routes/plan.js";
+import lifetimeRoutes from "./routes/lifetime.js";
+import appsumoRoutes from "./routes/appsumo.js";
 import onboardingRoutes from "./routes/onboarding.js";
 import billingRoutes from "./routes/billing.js";
 import adminRoutes from "./routes/admin.js";
@@ -314,6 +316,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     await app.register(billingPublicRoutes, { runtime: billingRuntime, dashboardUrl });
   }
 
+  // AppSumo lifetime deals: the signed webhook, the activation redirect and the /redeem page. Needs only the
+  // database; each endpoint refuses politely when AppSumo is not configured.
+  if (opts.db) {
+    await app.register(appsumoRoutes, { siteUrl: baseUrl, dashboardUrl });
+  }
+
   // /webhooks/resend/:tenantId: Resend provider webhook (bounces, opens, clicks, complaints).
   // Public, unauthenticated by session. Signature-verified via Svix/HMAC using
   // the per-tenant webhook secret stored in transport_configs. The tenant UUID
@@ -386,6 +394,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       // plan: workspace plan, trial status and usage against limits
       if (opts.db) {
         await v1.register(planRoutes, { prefix: "/plan", billing: billingRuntime });
+        await v1.register(lifetimeRoutes, { prefix: "/lifetime" });
       }
 
       // onboarding: where the workspace stands on the way to its first delivered email

@@ -24,10 +24,11 @@ import { adminTabFor } from "../../admin.js";
 import { cn } from "../../lib/utils.js";
 import type { MeResponse } from "../../api.js";
 
-const TABS: Array<{ id: "overview" | "support" | "ai" | "audit" | "security"; to: string; label: string }> = [
+const TABS: Array<{ id: "overview" | "support" | "ai" | "lifetime" | "audit" | "security"; to: string; label: string }> = [
   { id: "overview", to: "/admin", label: "Overview" },
   { id: "support", to: "/admin/support", label: "Support" },
   { id: "ai", to: "/admin/ai", label: "AI providers" },
+  { id: "lifetime", to: "/admin/lifetime", label: "Lifetime deals" },
   { id: "audit", to: "/admin/audit", label: "Audit log" },
   { id: "security", to: "/admin/security", label: "Security" },
 ];

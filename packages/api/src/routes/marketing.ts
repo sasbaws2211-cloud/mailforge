@@ -21,7 +21,8 @@ import { managedSending, tenants, users } from "@loomail/db/schema";
 import { TRIAL_PLAN_VALUE, trialEndDate, managedSendingConfigFromEnv, parseGoal, parseUsdRate } from "@loomail/core";
 import type { Db } from "../plugins/db.js";
 import { SESSION_COOKIE_NAME } from "./auth.js";
-import { SITE_NAME, type SiteContext } from "../marketing/layout.js";
+import { SITE_NAME, isLifetimeOnly, type SiteContext } from "../marketing/layout.js";
+import { buyUrl, getMode, spots } from "../appsumo/lifetime.js";
 import { homePage, pricingPage, signupPage, signupSentPage } from "../marketing/pages.js";
 import { privacyPage, termsPage } from "../marketing/legal.js";
 import { articlePage, contentIndexPage } from "../marketing/content-pages.js";
@@ -90,14 +91,15 @@ function autoEnableSending(env: NodeJS.ProcessEnv = process.env): boolean {
  * one. Returns true when a new workspace was created. Serialised per email with
  * an advisory lock so a double-submitted form cannot create two workspaces.
  */
-async function createWorkspace(db: Db, input: SignupInput): Promise<{ created: boolean; tenantId?: string }> {
+async function createWorkspace(db: Db, input: SignupInput, opts: { trial: boolean } = { trial: true }): Promise<{ created: boolean; tenantId?: string }> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${"signup:" + input.email}))`);
 
     const existing = await tx.select({ id: users.id }).from(users).where(eq(users.email, input.email)).limit(1);
     if (existing.length > 0) return { created: false };
 
-    const trial = input.plan !== "free";
+    // Only the lifetime deal is sold: no trial, the workspace waits for a licence.
+    const trial = input.plan !== "free" && opts.trial;
     let slug = slugify(input.workspace);
     for (let attempt = 0; attempt < 6; attempt++) {
       const taken = await tx.select({ id: tenants.id }).from(tenants).where(eq(tenants.slug, slug)).limit(1);
@@ -142,7 +144,22 @@ async function sendSignInLink(app: FastifyInstance, email: string): Promise<void
 }
 
 const marketingRoutes: FastifyPluginAsync<MarketingRouteOptions> = async (app, opts) => {
-  const ctx = siteContext(opts.siteUrl);
+  const baseCtx = siteContext(opts.siteUrl);
+  /**
+   * The site context for one request: the base context plus the lifetime-deal setup, so the pricing, signup and
+   * landing pages follow the operator's chosen mode. Falls back to the plain context when the database is not there.
+   */
+  async function pageCtx(request: { server: { db?: Db } }): Promise<SiteContext> {
+    const db = request.server.db;
+    if (!db) return baseCtx;
+    try {
+      const [mode, sp] = await Promise.all([getMode(db), spots(db)]);
+      return { ...baseCtx, lifetime: { mode, buyUrl: buyUrl(), spots: sp } };
+    } catch {
+      return baseCtx;
+    }
+  }
+  const ctx = baseCtx;
   const ipLimiter = createLimiter({ windowMs: 3_600_000, max: IP_PER_HOUR });
   const emailLimiter = createLimiter({ windowMs: 3_600_000, max: EMAIL_PER_HOUR });
   // Resending the sign-in link: one every 30 seconds and five an hour per address, and a cap per IP.
@@ -170,10 +187,10 @@ const marketingRoutes: FastifyPluginAsync<MarketingRouteOptions> = async (app, o
     }
     // The response depends on the cookie, so caches must key on it.
     reply.header("Vary", "Cookie");
-    return html(reply, 200, homePage(ctx), "public, max-age=300");
+    return html(reply, 200, homePage(await pageCtx(request)), "public, max-age=60");
   });
 
-  app.get("/pricing", async (_req, reply) => html(reply, 200, pricingPage(ctx), "public, max-age=300"));
+  app.get("/pricing", async (request, reply) => html(reply, 200, pricingPage(await pageCtx(request)), "public, max-age=60"));
   app.get("/terms", async (_req, reply) => html(reply, 200, termsPage(ctx), "public, max-age=300"));
   app.get("/privacy", async (_req, reply) => html(reply, 200, privacyPage(ctx), "public, max-age=300"));
 
@@ -230,11 +247,11 @@ const marketingRoutes: FastifyPluginAsync<MarketingRouteOptions> = async (app, o
   });
 
   // --- Signup ------------------------------------------------------------------
-  app.get<{ Querystring: { plan?: string; goal?: string } }>("/signup", async (request, reply) => {
+  app.get<{ Querystring: { plan?: string; goal?: string; code?: string } }>("/signup", async (request, reply) => {
     const plan = request.query.plan === "essential"
       ? ("essential" as const)
       : undefined;
-    return html(reply, 200, signupPage(ctx, { plan, goal: parseGoal(request.query.goal) }));
+    return html(reply, 200, signupPage(await pageCtx(request), { plan, goal: parseGoal(request.query.goal), codeWaiting: request.query.code === "waiting" }));
   });
 
   // Send the sign-in link again, for someone sitting on the "check your email" page. It only ever
@@ -266,6 +283,7 @@ const marketingRoutes: FastifyPluginAsync<MarketingRouteOptions> = async (app, o
   });
 
   app.post("/signup", async (request, reply) => {
+    const ctx = await pageCtx(request);
     const db: Db | undefined = request.server.db;
     const wantsJson = (request.headers["content-type"] ?? "").includes("application/json");
     const json = (status: number, payload: Record<string, unknown>) => reply.status(status).send(payload);
@@ -309,7 +327,7 @@ const marketingRoutes: FastifyPluginAsync<MarketingRouteOptions> = async (app, o
     }
 
     try {
-      const result = await createWorkspace(db, input);
+      const result = await createWorkspace(db, input, { trial: !isLifetimeOnly(ctx) });
       if (result.created) request.log.info({ tenantId: result.tenantId, plan: input.plan }, "workspace created via signup");
     } catch (err) {
       request.log.error({ err: err instanceof Error ? err.message : String(err) }, "signup: workspace creation failed");

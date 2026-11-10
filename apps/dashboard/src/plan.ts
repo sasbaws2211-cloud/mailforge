@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cancelBillingSubscription,
   fetchBillingPayments,
+  redeemLifetimeCode,
   stopAutoRenewal,
   fetchCheckoutStatus,
   fetchPlan,
@@ -163,6 +164,18 @@ export function useCancelSubscription() {
   });
 }
 
+/** Redeem an AppSumo code (blank: the code waiting in this browser), then refresh everything the plan changes. */
+export function useRedeemLifetime() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (key?: string) => redeemLifetimeCode(key),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: PLAN_QUERY_KEY });
+      void qc.invalidateQueries({ queryKey: ["billing-payments"] });
+    },
+  });
+}
+
 /** Stop a repeating top-up, then refresh the plan so the list updates. */
 export function useStopAutoRenewal() {
   const qc = useQueryClient();
@@ -246,6 +259,8 @@ export type NoticeKind = MeterKind | "ai";
 /** What the banner's button does. */
 export type PlanNoticeAction =
   | { kind: "subscribe" }
+  /** Take the customer to the box where an AppSumo code is redeemed. */
+  | { kind: "redeem" }
   /** Buy one pack of extra usage right from the banner. */
   | { kind: "addon"; addon: "profiles" | "emails" | "ai"; label: string }
   | { kind: "plans" };
@@ -350,9 +365,32 @@ function addonAction(plan: PlanInfo, kind: NoticeKind): PlanNoticeAction | null 
 export function planNotice(plan: PlanInfo | undefined): PlanNotice | null {
   if (!plan || !plan.enforced) return null;
 
+  // A code is waiting in this browser (the buyer came from AppSumo): one click finishes it.
+  if (plan.lifetime?.pending_code && plan.lifetime.can_redeem) {
+    return {
+      id: "lifetime-code-waiting",
+      tone: "info",
+      message: "Your AppSumo code is ready to redeem.",
+      dismissible: false,
+      action: { kind: "redeem" },
+    };
+  }
+
   // 0. No plan. The allowance is zero, so the limit wording would read as nonsense; say what happened
   //    and what to do, once.
   if (plan.plan.id === "free") {
+    // Only the lifetime deal is sold: there is nothing to subscribe to, so point at the code box.
+    if (plan.lifetime?.mode === "lifetime") {
+      return {
+        id: "no-plan",
+        tone: "danger",
+        message: plan.lifetime.license
+          ? "Your lifetime licence is no longer active (it was refunded or replaced). Sending and new customer profiles are paused. Your data is safe."
+          : "Redeem your AppSumo code to start. Sending and new customer profiles are paused until you do. Your data is safe.",
+        dismissible: false,
+        action: { kind: "redeem" },
+      };
+    }
     const why = plan.trial.expired ? "Your free trial has ended." : "Your subscription has ended.";
     return {
       id: "no-plan",

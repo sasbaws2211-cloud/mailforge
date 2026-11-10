@@ -24,6 +24,7 @@ import {
   type AdminAuditEntry,
   type AdminListStatus,
   type AdminWorkspace,
+  fetchAdminLifetime,
 } from "./admin-api.js";
 import type { BadgeVariant } from "./components/ui/badge.js";
 
@@ -227,9 +228,10 @@ export function auditWorkspaceName(e: AdminAuditEntry): string | null {
 }
 
 /** Which admin header tab a path belongs to: workspace pages count as Overview. */
-export function adminTabFor(pathname: string): "overview" | "support" | "ai" | "audit" | "security" {
+export function adminTabFor(pathname: string): "overview" | "support" | "ai" | "lifetime" | "audit" | "security" {
   if (pathname === "/admin/support" || pathname.startsWith("/admin/support/")) return "support";
   if (pathname === "/admin/ai" || pathname.startsWith("/admin/ai/")) return "ai";
+  if (pathname === "/admin/lifetime" || pathname.startsWith("/admin/lifetime/")) return "lifetime";
   if (pathname === "/admin/audit" || pathname.startsWith("/admin/audit/")) return "audit";
   if (pathname === "/admin/security" || pathname.startsWith("/admin/security/")) return "security";
   return "overview";
@@ -283,4 +285,9 @@ export function goalsSentence(goals: Record<string, number>): string | null {
     .sort((a, b) => b[1] - a[1])
     .map(([k, n]) => `${GOAL_LABEL[k] ?? k} ${n}`);
   return parts.length === 0 ? null : parts.join(", ");
+}
+
+/** The AppSumo lifetime-deal panel's data. */
+export function useAdminLifetime() {
+  return useQuery({ queryKey: ["admin", "lifetime"], queryFn: fetchAdminLifetime, staleTime: 15_000 });
 }
