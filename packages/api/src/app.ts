@@ -63,12 +63,8 @@ import billingPublicRoutes from "./routes/billing-public.js";
 import { resolveBillingRuntime, type BillingRuntime } from "./billing/config.js";
 import ingestionRoutes from "./routes/ingestion.js";
 import webhookSecretRoutes from "./routes/webhook-secret.js";
-import inboundSourcesRoutes from "./routes/inbound-sources.js";
-import warehouseSourcesRoutes from "./routes/warehouse-sources.js";
-import type { ClientFactory as WarehouseClientFactory } from "./warehouse/sync.js";
 import resendWebhookRoute from "./routes/webhooks/resend.js";
 import resendPlatformWebhookRoute from "./routes/webhooks/resend-platform.js";
-import inboundWebhookRoute from "./routes/webhooks/inbound.js";
 import sendingRoutes from "./routes/sending.js";
 import settingsRoutes from "./routes/settings.js";
 import libraryRoutes from "./routes/library.js";
@@ -133,10 +129,6 @@ export interface BuildAppOptions {
    * When absent (tests without pg-boss), routes that require enqueue return 503.
    */
   enqueue?: (queue: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<string | null>;
-  /** Tests only: replaces the real Postgres / MySQL / SQL Server / Snowflake / BigQuery clients behind warehouse sources. */
-  warehouseClientFor?: WarehouseClientFactory;
-  /** Tests only: raise the rate limits on the warehouse "test query" and "sync now" routes. */
-  warehouseLimitsPerMinute?: { test?: number; sync?: number };
   /** Tests only: a stand-in for the operator's AI provider behind the in-app assistant. */
   assistantProvider?: LlmProvider;
   /** Tests only: override the assistant's limits, which otherwise come from the environment. */
@@ -330,9 +322,6 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     await app.register(resendWebhookRoute, { prefix: "/webhooks/resend" });
     // Managed sending: one webhook for the operator's own Resend account (one signing secret).
     await app.register(resendPlatformWebhookRoute, { prefix: "/webhooks/resend-platform" });
-    // Inbound sources: other systems (Stripe, any JSON sender) posting events to a URL of the customer's own.
-    // Authenticated per source (a token, or Stripe's signature), not by session.
-    await app.register(inboundWebhookRoute, { prefix: "/webhooks/in" });
   }
 
   // --- Authenticated scope (dashboard) ----------------------------------------
@@ -470,13 +459,6 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       // Integrate screen (dashboard operators only)
       if (opts.db) {
         await v1.register(ingestionRoutes, { prefix: "/ingestion" });
-      }
-
-      // inbound-sources: places other systems (Stripe, any JSON sender) send events to
-      if (opts.db) {
-        await v1.register(inboundSourcesRoutes, { prefix: "/inbound-sources" });
-        // warehouse-sources: Loomail reads rows from the customer's Postgres, MySQL, SQL Server, Snowflake or BigQuery on a schedule
-        await v1.register(warehouseSourcesRoutes, { prefix: "/warehouse-sources", ...(opts.warehouseClientFor ? { clientFor: opts.warehouseClientFor } : {}), ...(opts.warehouseLimitsPerMinute ? { limitsPerMinute: opts.warehouseLimitsPerMinute } : {}) });
       }
 
       // webhook-secret: the secret flow webhooks are signed with (owners only)

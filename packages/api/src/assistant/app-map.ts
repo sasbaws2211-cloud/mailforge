@@ -1,6 +1,6 @@
 /**
  * A map of the dashboard for the in-app assistant: what each page is for and what a person does there. Written by hand because no
- * guide describes the screens, and an assistant that cannot say "open Integrate, then Connect other tools" is not much help.
+ * guide describes the screens, and an assistant that cannot say "open Integrate, then API keys" is not much help.
  *
  * Keep it true. It is searched like the guides, and a test checks that every path here is a real dashboard route. When a page is
  * added or changes, change it here and run `pnpm assistant:docs`.
@@ -30,17 +30,7 @@ export const APP_MAP: readonly Page[] = [
   {
     path: "/integrate",
     title: "Integrate: getting data into Loomail",
-    text: `Integrate is where data comes in. From top to bottom: "Your first event" and a "Send me a sample event" button to see it work with no setup; "Add Loomail to your app" with the website snippet and code for your framework; "API keys" (a publishable key for the browser snippet, secret keys for your servers); "Send a test event"; "Connect other tools"; and "Data warehouse". Use the snippet or an SDK or the API for events from your own product. Use Connect other tools for forms, bookings, stores and payments that can send a webhook. Use Data warehouse to read customer data you already keep in a database on a schedule; it is switched on by our team on request.`,
-  },
-  {
-    path: "/integrate",
-    title: "Integrate: Connect other tools (webhook sources)",
-    text: `In Integrate, under Connect other tools, click Add a source and choose a Type. "Any JSON webhook" works with Zapier, Make, n8n or your own app: you say where the person, the event name and the traits are in the JSON. Ready-made choices fill that in for you: Typeform, Tally and Webflow forms, Cal.com bookings, Gumroad, Shopify, WooCommerce customers and Segment, and Stripe for payments. After saving, Loomail shows an address to give the other tool, and (for most tools) a token. Each source has a log of what it received and what Loomail did with it, which is the first place to look when nothing arrives.`,
-  },
-  {
-    path: "/integrate",
-    title: "Integrate: Data warehouse (read from your database)",
-    text: `Data warehouse is not on by default, because it can mean a lot of data. If you see "Request access" under Data warehouse in Integrate, click it and tell us which database you use, roughly how much data, and how often it should refresh. Our team replies by email and switches it on with you. Once it is on: in Integrate, under Data warehouse, click Connect a warehouse and choose Postgres, MySQL or SQL Server. You enter the host, port, database, user and password, then write one SELECT query and say which column marks new or changed rows. Loomail reads it on a schedule (about hourly) and turns each row into a contact, traits and an event. If the database is not reachable from the internet, tick "My database is not reachable from the internet" and connect through an SSH server. Use "Test the query" before saving: it shows the first rows and what each would become, or a plain reason it failed. "Sync now" runs it immediately.`,
+    text: `Integrate is where data comes in. From top to bottom: "Your first event" and a "Send me a sample event" button to see it work with no setup; "Add Loomail to your app" with the website snippet and code for your framework; "API keys" (a publishable key for the browser snippet, secret keys for your servers); and "Send a test event". Use the snippet or an SDK or the API for events from your own product.`,
   },
   {
     path: "/flows",

@@ -71,10 +71,19 @@ async function exchangeWithAppSumo(code: string): Promise<string> {
   }
 }
 
+/** The host of the site address, or "localhost" when the address is not a full URL (a relative one in a test, say). */
+function hostOf(siteUrl: string): string {
+  try {
+    return new URL(siteUrl).hostname;
+  } catch {
+    return "localhost";
+  }
+}
+
 const routes: FastifyPluginAsync<AppsumoRouteOptions> = async (app, opts) => {
   const ctx: SiteContext = {
     siteUrl: opts.siteUrl,
-    supportEmail: (process.env.LOOMAIL_SUPPORT_EMAIL ?? "").trim() || `support@${new URL(opts.siteUrl).hostname}`,
+    supportEmail: (process.env.LOOMAIL_SUPPORT_EMAIL ?? "").trim() || `support@${hostOf(opts.siteUrl)}`,
     legalName: (process.env.LOOMAIL_LEGAL_NAME ?? "").trim() || SITE_NAME,
   };
   const exchange = opts.exchange ?? exchangeWithAppSumo;

@@ -38,7 +38,6 @@ export const GUIDES: readonly GuideConfig[] = [
   { file: "CONCEPTS.md", source: "Concepts guide" },
   { file: "FLOW-PROMPTS.md", source: "Flow prompt library" },
   { file: "INGESTION.md", source: "Ingestion guide" },
-  { file: "WAREHOUSES.md", source: "Data warehouse guide", exclude: /for the operator/i },
   { file: "DATA.md", source: "Data export and deletion guide", include: /for customers|what erasure|known limits/i, exclude: /platform admins|by hand/i },
   { file: "FAQ.md", source: "FAQ", include: /sending problems/i },
   { file: "SENDING.md", source: "Managed sending guide", include: /how it works|what customers do/i },

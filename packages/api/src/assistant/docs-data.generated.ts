@@ -24,157 +24,143 @@ export const DOC_CHUNKS: readonly DocChunk[] = [
     "id": "app#2",
     "source": "Dashboard map",
     "heading": "Integrate: getting data into Loomail",
-    "text": "Integrate is where data comes in. From top to bottom: \"Your first event\" and a \"Send me a sample event\" button to see it work with no setup; \"Add Loomail to your app\" with the website snippet and code for your framework; \"API keys\" (a publishable key for the browser snippet, secret keys for your servers); \"Send a test event\"; \"Connect other tools\"; and \"Data warehouse\". Use the snippet or an SDK or the API for events from your own product. Use Connect other tools for forms, bookings, stores and payments that can send a webhook. Use Data warehouse to read customer data you already keep in a database on a schedule; it is switched on by our team on request.",
+    "text": "Integrate is where data comes in. From top to bottom: \"Your first event\" and a \"Send me a sample event\" button to see it work with no setup; \"Add Loomail to your app\" with the website snippet and code for your framework; \"API keys\" (a publishable key for the browser snippet, secret keys for your servers); and \"Send a test event\". Use the snippet or an SDK or the API for events from your own product.",
     "path": "/integrate"
   },
   {
     "id": "app#3",
-    "source": "Dashboard map",
-    "heading": "Integrate: Connect other tools (webhook sources)",
-    "text": "In Integrate, under Connect other tools, click Add a source and choose a Type. \"Any JSON webhook\" works with Zapier, Make, n8n or your own app: you say where the person, the event name and the traits are in the JSON. Ready-made choices fill that in for you: Typeform, Tally and Webflow forms, Cal.com bookings, Gumroad, Shopify, WooCommerce customers and Segment, and Stripe for payments. After saving, Loomail shows an address to give the other tool, and (for most tools) a token. Each source has a log of what it received and what Loomail did with it, which is the first place to look when nothing arrives.",
-    "path": "/integrate"
-  },
-  {
-    "id": "app#4",
-    "source": "Dashboard map",
-    "heading": "Integrate: Data warehouse (read from your database)",
-    "text": "Data warehouse is not on by default, because it can mean a lot of data. If you see \"Request access\" under Data warehouse in Integrate, click it and tell us which database you use, roughly how much data, and how often it should refresh. Our team replies by email and switches it on with you. Once it is on: in Integrate, under Data warehouse, click Connect a warehouse and choose Postgres, MySQL or SQL Server. You enter the host, port, database, user and password, then write one SELECT query and say which column marks new or changed rows. Loomail reads it on a schedule (about hourly) and turns each row into a contact, traits and an event. If the database is not reachable from the internet, tick \"My database is not reachable from the internet\" and connect through an SSH server. Use \"Test the query\" before saving: it shows the first rows and what each would become, or a plain reason it failed. \"Sync now\" runs it immediately.",
-    "path": "/integrate"
-  },
-  {
-    "id": "app#5",
     "source": "Dashboard map",
     "heading": "Flows: your automations",
     "text": "Flows lists your automations and is where you create them. A flow is a trigger (an event, or a person entering a segment), a plan of steps with delays, and settings such as who approves. You can start from the library of ready-made flows and the starter packs, or click to create a new flow and describe it in plain language. In the flow editor you write the prompt, Loomail compiles it into a plan you can read, you can send a test email to yourself, and when you are happy you turn the flow on. A flow does nothing until it is active and compiled.",
     "path": "/flows"
   },
   {
-    "id": "app#6",
+    "id": "app#4",
     "source": "Dashboard map",
     "heading": "Lifecycle",
     "text": "Lifecycle shows where your contacts are in their journey: how many are signed up, activated, engaged, at risk, dormant, churned or resurrected, and how people moved between those states over time. Each contact's state is worked out from the events they send.",
     "path": "/lifecycle"
   },
   {
-    "id": "app#7",
+    "id": "app#5",
     "source": "Dashboard map",
     "heading": "People: your contacts",
     "text": "People lists your contacts and lets you search them. Open a person to see their traits, their events, the flows they are in and the emails they received. Use the import button to bring in a CSV of contacts. A contact needs an email address before Loomail can email them; one with only a user id can still have events and be in flows, but no message can be sent.",
     "path": "/people"
   },
   {
-    "id": "app#8",
+    "id": "app#6",
     "source": "Dashboard map",
     "heading": "Segments",
     "text": "Segments are saved groups of people, described by rules rather than picked by hand (for example, people on a trial who have not sent an event in a week). Create one, describe who belongs, and the preview shows who matches right now. You can look at exactly those people, or start a flow from a segment so that people entering it are enrolled.",
     "path": "/segments"
   },
   {
-    "id": "app#9",
+    "id": "app#7",
     "source": "Dashboard map",
     "heading": "Approvals: review emails before they send",
     "text": "Approvals is the queue of emails waiting for a person to review them. Each shows who it is for and the drafted copy; you approve or reject it, one at a time or in bulk. Emails leave only after approval, unless the flow is set to send automatically, in which case they skip this queue. If nothing is arriving here, check that a flow is active and that its approval mode is not automatic.",
     "path": "/approvals"
   },
   {
-    "id": "app#10",
+    "id": "app#8",
     "source": "Dashboard map",
     "heading": "Sent Mail and suppressions",
     "text": "Sent Mail lists every message that left the pipeline: who received it, when, and its status. A message's status moves forward as things happen: sent (it left), opened (the person opened it), clicked (they clicked a link), or bounced (the address could not receive it). Click one to see it in full. The Suppressions page lists addresses that will never receive mail: hard bounces, complaints, unsubscribes and addresses you blocked by hand. You can add or import addresses to block.",
     "path": "/sent"
   },
   {
-    "id": "app#11",
+    "id": "app#9",
     "source": "Dashboard map",
     "heading": "Knowledge Base",
     "text": "The Knowledge Base holds short entries about your product (what it does, how to do common things, your tone). When Loomail's AI drafts an email, it can use these entries so the copy is accurate and sounds like you. Add entries here, open one to edit it.",
     "path": "/kb"
   },
   {
-    "id": "app#12",
+    "id": "app#10",
     "source": "Dashboard map",
     "heading": "Analytics",
     "text": "Analytics shows how your sending is performing over the last several days: how many emails were sent, opened and clicked, and how that is trending. You can change the period shown.",
     "path": "/analytics"
   },
   {
-    "id": "app#13",
+    "id": "app#11",
     "source": "Dashboard map",
     "heading": "Settings: Plan and usage",
     "text": "Settings, then Plan and usage, shows your plan, whether you are in a trial and how many days are left, and your usage this month (contacts, emails, and AI). It is also where you upgrade or manage a subscription. This page only appears when plans are enforced on the install.",
     "path": "/settings/plan"
   },
   {
-    "id": "app#14",
+    "id": "app#12",
     "source": "Dashboard map",
     "heading": "Settings: Team",
     "text": "Settings, then Team, lists the people in your workspace. Owners can create an invite for a teammate (you give them the invite link), choose whether they join as a member or an owner, change a person's role later, and remove people. Everyone in a workspace sees the same data.",
     "path": "/settings/team"
   },
   {
-    "id": "app#15",
+    "id": "app#13",
     "source": "Dashboard map",
     "heading": "Settings: Profile",
     "text": "Settings, then Profile, is where you change your own name and your sign-in email. Changing the email sends a confirmation link to the new address first.",
     "path": "/settings/profile"
   },
   {
-    "id": "app#16",
+    "id": "app#14",
     "source": "Dashboard map",
     "heading": "Settings: Data and deletion",
     "text": "Settings, then Data and deletion, lets the workspace owner download all of the workspace's data as a file, or schedule the workspace for permanent deletion. Deletion has a grace period during which it can be cancelled; after it, everything is erased for good.",
     "path": "/settings/data"
   },
   {
-    "id": "app#17",
+    "id": "app#15",
     "source": "Dashboard map",
     "heading": "Settings: AI provider",
     "text": "Settings, then AI provider, shows where the AI that compiles flows and drafts emails comes from: Loomail's own AI (within your plan's monthly allowance) or an AI provider key you add yourself. If a flow will not compile or drafts will not generate, check this page first.",
     "path": "/settings/llm"
   },
   {
-    "id": "app#18",
+    "id": "app#16",
     "source": "Dashboard map",
     "heading": "Settings: Email sending",
     "text": "Settings, then Email sending, is where you set up how email leaves: connect your own email provider (Resend, or any SMTP server) with a from address, or use managed sending where it is offered. Nothing can be emailed until sending is set up, and the page shows a warning until it is. Send yourself a test to check it works.",
     "path": "/settings/transport"
   },
   {
-    "id": "app#19",
+    "id": "app#17",
     "source": "Dashboard map",
     "heading": "Settings: Sending pace",
     "text": "Settings, then Sending pace, controls how fast and when email goes out: a maximum number of emails per contact per day and per week, a minimum gap between emails to the same person, a batch size, and a send window of days and hours. If emails seem to be held back, a window or a limit here may be the reason.",
     "path": "/settings/pace"
   },
   {
-    "id": "app#20",
+    "id": "app#18",
     "source": "Dashboard map",
     "heading": "Settings: Branding",
     "text": "Settings, then Branding, sets how your emails look: your brand name, a logo (by its web address), an accent colour and footer text, which wrap every message. You can send yourself a test email to see the result.",
     "path": "/settings/branding"
   },
   {
-    "id": "app#21",
+    "id": "app#19",
     "source": "Dashboard map",
     "heading": "Settings: Postal address",
     "text": "Settings, then Postal address, is where you enter your business's postal address. Email law requires it in the footer of marketing email, so Loomail will not send until it is set. A warning shows on the settings menu while it is missing.",
     "path": "/settings/postal"
   },
   {
-    "id": "app#22",
+    "id": "app#20",
     "source": "Dashboard map",
     "heading": "Support",
     "text": "Support, in the sidebar, is how you reach the people who run Loomail. Choose what it is about, write a subject and a message, and send it. Replies arrive by email and in the conversation on the same page, where you can also reply or mark it resolved. Use it for anything the assistant cannot answer, or for a problem with your account.",
     "path": "/support"
   },
   {
-    "id": "app#23",
+    "id": "app#21",
     "source": "Dashboard map",
     "heading": "Why are my emails not sending? A checklist",
     "text": "Work through these in order. 1) Is a flow active and compiled? 2) Did an event arrive that matches its trigger (Integrate shows incoming events; People shows a person's events)? 3) Does the person have an email address? 4) Is the email waiting in Approvals? 5) Is email sending set up in Settings, Email sending, and the postal address filled in under Settings, Postal address? 6) Is the address on the Suppressions list? 7) Is a sending window or frequency limit in Sending pace holding it back? 8) Look in Sent Mail for the message and its status. If everything looks right, send a Support request with the flow and the person's id."
   },
   {
-    "id": "app#24",
+    "id": "app#22",
     "source": "Dashboard map",
     "heading": "What the assistant can and cannot do",
     "text": "The assistant explains how Loomail works and points you to the right page. It cannot change anything in your workspace, send email, or see your contacts' data. It does not know your passwords or keys, and you should never paste them. For problems it cannot solve, it can send your question to Support."
@@ -632,260 +618,20 @@ export const DOC_CHUNKS: readonly DocChunk[] = [
   {
     "id": "INGESTION#17",
     "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier)",
-    "text": "When a tool can post a webhook but you do not want to write code against `/v1/track`, add a **source** on the\n**Integrate** page (**Connect other tools**). Each source has its own address, `https://YOUR_LOOMAIL_HOST/webhooks/in/<id>`,\nand a log of what it received (kept 30 days). Up to 20 sources per workspace."
-  },
-  {
-    "id": "INGESTION#18",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Any JSON webhook",
-    "text": "Choose **Any JSON webhook** and say where things are in the payload, using dotted paths such as `data.user.email` or\n`answers.0.text`:"
-  },
-  {
-    "id": "INGESTION#19",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Any JSON webhook",
-    "text": "- **The person**: a user id field, an email field, or both. With only an email, the person is matched to an existing\n  contact with that email, or created keyed by it (like the CSV import).\n- **The event**: a fixed name, a name read from a field, or none (the request then only sets traits).\n- **Traits**: any number of `trait name` from `field` pairs (up to 20). Empty or missing fields are skipped, so a request\n  never clears a trait. `company`, `name`, `email`, `plan` and `payment_status` set the built-in fields, as in `identify`.\n- **Payload**: by default the whole JSON body is kept on the event, so flows and segments can use any of it.\n- **The sender's own id for the event** (optional): a path such as `event_id`, or a request header such as `X-Shopify-Event-Id`. If\n  the sender retries a delivery, the same id is recorded once. Senders that can set a header can send `X-Loomail-Event-Id` instead,\n  which wins over both and is used exactly as sent. When the event's name also comes from the request (a path or a header), the name is\n  part of the id, so one booking id on a \"created\" and a \"cancelled\" event are two events, not a repeat.\n- **The event name from a header** (optional): for senders that keep the topic out of the body (Shopify's `X-Shopify-Topic`, WooCommerce's\n  `X-WC-Webhook-Topic`). One source then records every topic, each under its own name."
-  },
-  {
-    "id": "INGESTION#20",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Any JSON webhook",
-    "text": "**Picking from a list.** A path can step into a list by position (`answers.1.email`) or search it by what an item is\n(`answers[type=email].email`: the `email` of the first item whose `type` is `email`). The key can be dotted\n(`answers[field.ref=work_email].email`), and searches can follow each other. Prefer a search when the list can change length:\na position moves when an optional question is skipped, a search does not. Values are compared as text, so `[number=5]` matches 5.\n\nThe body can be JSON, or form-encoded (`application/x-www-form-urlencoded`, which some tools send by default). A form body is read\nas a flat object of text values; a field sent twice becomes a list. Numbers arrive as text (`\"5\"`), so a trait from a form body is\ntext. Stripe, Paystack and Flutterwave sources need JSON.\n\n**How calls are checked.** Choose when you add the source (it cannot be changed afterwards):"
-  },
-  {
-    "id": "INGESTION#21",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Any JSON webhook",
-    "text": "- **A token** (the default), described next.\n- **The sender's own signature.** Some tools sign every call: an HMAC-SHA256 of the exact request body, made with a secret you and the\n  tool share, sent in a header (Shopify `X-Shopify-Hmac-Sha256`, WooCommerce `X-WC-Webhook-Signature`, Tally `Tally-Signature`, Cal.com\n  `X-Cal-Signature-256`). Give Loomail the header name, how the signature is written (hex, base64, or either), any text before it such\n  as `sha256=`, and the shared secret. Loomail stores the secret encrypted, makes no token, and accepts a call only when its signature\n  matches. The address can then be shared with the tool as it is. A new secret can be saved later; the old signature stops working at once.\n  This proves who sent the call, not when: a signed call that is captured and replayed still verifies, and the sender's event id\n  (above) is what keeps a replay from being recorded twice.\n\nThe source gives you a token, shown once. Send it as `Authorization: Bearer <token>`, as `X-Loomail-Token: <token>`, or\nas `?token=<token>` on the address for tools that cannot set headers (the address then is a secret; do not share it).\nAn optional `X-Loomail-Event-Id` header makes a repeat of the same request harmless."
-  },
-  {
-    "id": "INGESTION#22",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Any JSON webhook",
-    "text": "```bash\ncurl -X POST 'https://YOUR_LOOMAIL_HOST/webhooks/in/SOURCE_ID' \\\n  -H 'Authorization: Bearer mf_in_YOUR_TOKEN' -H 'Content-Type: application/json' \\\n  -d '{\"event_type\":\"form_response\",\"user\":{\"id\":\"u_1\",\"email\":\"ada@example.com\"}}'\n```\n\nAnswers: `200` when handled, or deliberately ignored (nothing to record); `400` for a body that is not a JSON object (or form) or has no\nperson at the configured paths; `401` for a wrong token, a disabled source or an unknown address (all the same answer, so\nthe address cannot be used to find out which sources exist); `402` when your plan's contact limit stopped a new person;\n`429` past 600 requests a minute for one source."
-  },
-  {
-    "id": "INGESTION#23",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Ready-made tools",
-    "text": "On the Integrate page, **Connect other tools**, the **Type** list has ready-made settings for the tools below. Pick one, follow the\nsteps it shows, save, and give the tool the address Loomail shows (for tools that cannot send a header, the address includes the\ntoken: keep it private). Each is a generic source with the fields filled in, so you can change any of them afterwards."
-  },
-  {
-    "id": "INGESTION#24",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Ready-made tools",
-    "text": "| Tool | Becomes | Person | Retries | Checked against the tool's docs |\n|---|---|---|---|---|\n| Typeform | `typeform_submitted` | hidden field `user_id`, else the email answer | once, by `event_id` | official example payload |\n| Tally | `tally_form_submitted` | the email question | once, by `eventId` | official page; signature check available; Tally can also send an `Authorization` header |\n| Webflow form | `webflow_form_submitted` | `payload.data.email` (rename to your field) | once, by `payload.id` | field list only: send a test and read the log |\n| Cal.com | the trigger, such as `BOOKING_CREATED` | first attendee's email | once per booking and trigger, by `payload.uid` | official example payload; signature check available |\n| Gumroad | `gumroad_sale` | `email` (form fields, price in US cents) | not deduplicated | Ping field list; no full example found |\n| Shopify | the topic header, such as `customers/create` or `orders/paid` | `email` | once, by `X-Shopify-Event-Id` | topic, event-id and signature headers confirmed; payload fields: check the first delivery |\n| WooCommerce customers | the topic header, such as `customer.created` | `email` | once, by the delivery id header | topic and signature headers confirmed; customer fields: check the first delivery |"
-  },
-  {
-    "id": "INGESTION#25",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Ready-made tools",
-    "text": "| Segment | the track call's event name | `userId`, email from `context.traits.email` | once, by `messageId` | official track spec |"
-  },
-  {
-    "id": "INGESTION#26",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Ready-made tools",
-    "text": "Where the payload shape is only partly documented, the form says so. Send one real or test delivery and open the source's log: a request\nthe settings cannot read is logged as rejected with the reason, and you can fix the path and send again.\n\nTally, Cal.com, Shopify and WooCommerce sign their calls, and their presets offer the signature check (see \"How calls are checked\"\nabove) as well as a token: you paste the secret that tool signs with. For Shopify and WooCommerce the signature is the better choice,\nbecause neither can send a token header. Webflow, Typeform, Segment and Gumroad: Loomail checks the token only. A WooCommerce order\ncarries its email under `billing`, so order webhooks are logged as rejected: this preset is for customers.\n\nTools without a ready-made preset (Fillout, Formspree, PostHog, Getwaitlist and others) work through **Any JSON webhook** when they can\nPOST JSON or form fields to a URL: send a test, open the log and set the paths from what arrives. Jotform (it wraps the answers in a\nmultipart body) and Google Forms (no webhook) need Zapier or Make in between."
-  },
-  {
-    "id": "INGESTION#27",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Typeform",
-    "text": "Typeform cannot set headers, so put the token in the address: add the source, then give Typeform\n`https://YOUR_LOOMAIL_HOST/webhooks/in/SOURCE_ID?token=mf_in_YOUR_TOKEN` as the webhook URL (keep it private). Typeform sends\n`form_response` events like this (trimmed):\n\n```json\n{ \"event_id\": \"LtWXD3crgy\", \"event_type\": \"form_response\",\n  \"form_response\": { \"hidden\": { \"user_id\": \"abc123456\" }, \"calculated\": { \"score\": 9 },\n    \"answers\": [ { \"type\": \"email\", \"email\": \"laura@example.com\", \"field\": { \"id\": \"SMEUb7VJz92Q\", \"type\": \"email\" } },\n                 { \"type\": \"text\", \"text\": \"Laura\", \"field\": { \"id\": \"JwWggjAKtOkA\", \"type\": \"short_text\" } } ] } }\n```\n\nSettings that work for it:\n\n| Setting | Value |\n|---|---|\n| Event | named by `event_type`, or always `typeform_submitted` |\n| User id | `form_response.hidden.user_id` (pass your own id to the form as a Typeform hidden field) |\n| Email | `form_response.answers[type=email].email` |\n| Event id | `event_id`, so a retry of the same submission is recorded once |\n| A trait from a short answer | `form_response.answers[field.ref=YOUR_QUESTION_REF].text`, or `[field.type=short_text].text` for the first |"
-  },
-  {
-    "id": "INGESTION#28",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Typeform",
-    "text": "Use a search (`[type=email]`) rather than a position (`answers.1.email`): Typeform leaves skipped questions out of `answers`, so every\nlater answer moves up by one. Loomail checks the token in the address; it does not check Typeform's optional `Typeform-Signature`."
-  },
-  {
-    "id": "INGESTION#29",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Zapier, Make, n8n and other no-code tools",
-    "text": "Use their **Webhooks** (HTTP request) action and set the method to POST. Zapier's *Webhooks by Zapier, POST* can set a header:\nadd `Authorization: Bearer mf_in_YOUR_TOKEN`, or use `?token=` in the URL. Choose **JSON** as the payload type if offered; a form payload\nworks too. Send flat fields (`id`, `email`, `event`, `company`) and point the paths at them. Give each Zap its own source if the\npayloads differ, and send an `X-Loomail-Event-Id` header (or an id field plus the event id path) when a step can run twice."
-  },
-  {
-    "id": "INGESTION#30",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Stripe",
-    "text": "Choose **Stripe**, then in Stripe (Developers, Webhooks) create an event destination of type **Webhook endpoint** at the address\nshown. Set its payload to **Snapshot**, not Thin: thin events carry only ids, and Loomail needs the details. A thin event is\nacknowledged (so Stripe stops retrying) and noted in the log with this instruction. Select these events, and paste the\nendpoint's signing secret (`whsec_...`) into Loomail. Test mode and live mode have different secrets, so add one source for\neach mode you use.\n\n| Stripe event | What Loomail records |\n|---|---|\n| `checkout.session.completed` | event `checkout_completed`; the Stripe customer id is remembered on the person |\n| `customer.subscription.created` | event `subscription_started`; payment status and plan |\n| `customer.subscription.updated` | event `subscription_updated`; payment status and plan |\n| `customer.subscription.deleted` | event `subscription_cancelled`; payment status `cancelled` |\n| `invoice.paid` | event `payment_succeeded`; payment status `paid` (not for a zero-amount invoice) |\n| `invoice.payment_failed` | event `payment_failed`; payment status `past_due` |"
-  },
-  {
-    "id": "INGESTION#31",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Stripe",
-    "text": "Payment status comes from the subscription: `trialing` is `trial`, `active` is `paid`, `past_due` and `unpaid` are `past_due`,\n`canceled` is `cancelled`; an incomplete or paused subscription leaves it alone. The plan is the price's nickname, else its\nlookup key, else its id. Other event types are acknowledged and ignored.\n\n**Matching people.** Loomail uses, in order: your own user id in a Stripe metadata field (the key is configurable, default\n`user_id`; set it on customers, subscriptions or checkout sessions), the checkout's `client_reference_id`, a person who already\ncarries this Stripe customer id, a person with this email, and otherwise creates one keyed by the email. Subscription events carry\nno email, which is why the customer id is remembered the first time Loomail sees it (usually at checkout). Events Loomail cannot\nmatch to anyone are acknowledged and noted in the log, not retried. A person's own email is never overwritten."
-  },
-  {
-    "id": "INGESTION#32",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Paystack",
-    "text": "Choose **Paystack** on the Integrate page, save, and paste the address it shows into Paystack (Settings, API Keys &\nWebhooks, webhook URL). Paystack has a separate webhook URL for test mode and for live mode, so add one source for each.\n\n**How calls are checked.** Choose one when you add the source (it cannot be changed afterwards):\n\n- **A secret in the address** (the default). Loomail makes a token and puts it in the address you give Paystack\n  (`...?token=mf_in_...`). Loomail holds no Paystack key. Anyone who has the address can send events, so keep it private. You can\n  also turn on **only accept Paystack's published addresses** (52.31.139.75, 52.49.173.169, 52.214.14.220), but only if Loomail sees\n  the real sender address: behind a proxy that hides it, every call would be refused.\n- **Paystack's signature.** Paystack signs each call (`x-paystack-signature`, HMAC-SHA512 of the body) **with your secret key**,\n  so checking it means giving Loomail that key (`sk_test_...` or `sk_live_...`). It is stored encrypted and never shown again, but it\n  is the key that can move money, so choose this only if you are comfortable with that."
-  },
-  {
-    "id": "INGESTION#33",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Paystack",
-    "text": "| Paystack event | What Loomail records |\n|---|---|\n| `charge.success` | event `payment_succeeded`; payment status `paid` (not for a zero amount); the plan name if the charge is for a plan |\n| `subscription.create` | event `subscription_started`; `paid`, plan |\n| `subscription.not_renew` | event `subscription_not_renewing`; the status is left alone (still paid until the period ends) |\n| `subscription.disable` | event `subscription_cancelled`; status `cancelled` |\n| `invoice.payment_failed` | event `payment_failed`; status `past_due` |\n| `invoice.update` | when paid: event `invoice_paid`; status `paid` |\n\nOther events (refunds, transfers, disputes, `invoice.create`) are acknowledged and ignored. A renewal sends both a\n`charge.success` and an `invoice.update`, so it records both a `payment_succeeded` and an `invoice_paid` event: use whichever suits\nyour flow. Amounts are in the smallest unit (kobo for NGN), as Paystack sends them.\n\n**Matching people.** Your own user id if you pass one in the payment's metadata (key configurable, default `user_id`), otherwise a\nperson who already carries this Paystack customer code, otherwise the customer's email, otherwise a new person keyed by the email.\nPaystack puts the email and customer code on every event Loomail uses."
-  },
-  {
-    "id": "INGESTION#34",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Paystack",
-    "text": "**Order and repeats.** Paystack events carry no id and no dependable event time, and retries (every 3 minutes four times, then\nhourly for 72 hours) can arrive late. So: an identical redelivery is recorded once and never re-applies the status; a late event that\ncarries its own time (a payment's paid time, an invoice's created time) cannot overwrite a newer payment status; and events with no\ntime of their own (a subscription starting or being disabled) count from when they arrive. A subscription disabled, re-enabled and\ndisabled again is recorded as two cancellations. A one-off purchase also sets `paid`: Paystack does not say whether a charge belongs\nto a subscription."
-  },
-  {
-    "id": "INGESTION#35",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Flutterwave",
-    "text": "Choose **Flutterwave**, save, and Loomail shows an address and a **secret hash**. In Flutterwave (Settings, Webhooks) paste the address as\nthe URL and the secret hash as the secret hash, and turn on webhook retries. Flutterwave sends the hash back unchanged in the\n`verif-hash` header of every call, and Loomail refuses any call whose header does not match. (Flutterwave offers no payload\nsignature, so this shared secret is the whole check; Loomail makes it random and keeps only its hash.)\n\n| Flutterwave event | What Loomail records |\n|---|---|\n| `charge.completed`, `status: successful` | event `payment_succeeded`; payment status `paid` (not for a zero amount) |\n| `charge.completed`, `status: failed` | event `payment_failed`; the status is **not** changed |\n| `subscription.cancelled` | event `subscription_cancelled`; status `cancelled` |\n\nFlutterwave does not send an event when a subscription starts or renews, and a charge carries nothing that names its plan, so there is\nno plan name and no `past_due` status from Flutterwave. A failed charge is an event only because it could equally be a stranger's\nabandoned checkout or a declined renewal. Other events (transfers, bill payments, refunds) are acknowledged and ignored. Amounts are\nin whole units (100 means 100 NGN), unlike Stripe and Paystack."
-  },
-  {
-    "id": "INGESTION#36",
-    "source": "Ingestion guide",
-    "heading": "Ingestion: Sending Events to Loomail > 7a. Receiving events from other tools (Stripe, forms, Zapier) > Flutterwave",
-    "text": "**Matching people.** Your own user id if you put one in the charge's `meta` (key configurable, default `user_id`), otherwise a person\nwho already carries this Flutterwave customer id, otherwise the customer's email, otherwise a new person keyed by the email. A\ncancellation carries only the email. A charge is recorded once per Flutterwave transaction and status, however many times it is sent\n(Flutterwave may send the same event more than once), and, as with Stripe, a late event cannot overwrite a newer payment status."
-  },
-  {
-    "id": "INGESTION#37",
-    "source": "Ingestion guide",
     "heading": "Ingestion: Sending Events to Loomail > What the AI sees of the data you send",
     "text": "AI-drafted emails use only a few of the things you send, so it pays to send them in the right fields:\n\n- `identify` with `traits.email`, `traits.name` (the full name), and `traits.company`. These are stored on the contact and shown to the AI. A trait called `first_name` is kept on the contact but the AI does not see it.\n- `traits.plan` is the **name of the plan**, for example `\"Growth\"`. It is stored on the contact and shown to the AI as the contact's plan. The five payment-status words are the exception: `plan: \"paid\"` (or `free`, `trial`, `past_due`, `cancelled`) sets the contact's payment status, as `traits.payment_status` does, and is not kept as a plan name. To set both, send both: `{ \"payment_status\": \"paid\", \"plan\": \"Growth\" }`. Send `plan: null` to remove the plan name (the payment status is left as it is).\n- `traits.payment_status` is only ever a **status**, one of `free`, `trial`, `paid`, `past_due`, `cancelled`. Any other value (a plan name, say) is refused and recorded as a conflict, and the status is left unchanged.\n- Every other trait is stored on the contact, but only used by your own fixed templates.\n- **Event properties are not shown to the AI**, only the event name. Use properties for your own analytics and for fixed templates.\n\nHow to write prompts around this is in FLOW-PROMPTS.md."
   },
   {
-    "id": "INGESTION#38",
+    "id": "INGESTION#18",
     "source": "Ingestion guide",
     "heading": "Ingestion: Sending Events to Loomail > 7. Verifying your integration",
     "text": "Open **Integrate** in the dashboard. The \"Your first event\" panel polls\nevery few seconds: it shows a waiting state until the first event lands,\nthen flips to the event type, event name, user, and receipt time, plus a\ncount of the last 24 hours. If it does not flip within a few seconds of\nsending, check (in order): the key is not revoked, the origin is allowlisted\n(if you set one), you are within the rate limit, and the host URL is\nreachable from where the event was sent."
   },
   {
-    "id": "INGESTION#39",
+    "id": "INGESTION#19",
     "source": "Ingestion guide",
     "heading": "Ingestion: Sending Events to Loomail > Rate limits and error responses",
     "text": "| Limit | Value |\n|---|---|\n| Publishable key | 300 requests/minute |\n| Secret key | 3000 requests/minute |\n| Batch size | 100 items / 512 KB |\n\nOver-limit requests get `429` with a `Retry-After` (seconds) header. The\nlimiter is a fixed one-minute window per key, enforced per API process; in\nthe default single-container community install that is the whole system."
-  },
-  {
-    "id": "WAREHOUSES#0",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources",
-    "text": "If your customer data already lives in **Postgres**, **MySQL**, **SQL Server**, **Snowflake** or **BigQuery**, Loomail can read it on a schedule and turn each row into traits and events. Flows and segments then work on that data with no code on your side.\n\n**Warehouse sources are switched on by the Loomail team, not automatically.** A warehouse can mean a lot of data, so on **Integrate**, under **Data warehouse**, click **Request access** and tell us which database, roughly how much data, and how often it should refresh. We reply by email and set it up with you. Once it is on, the same card lets you connect a warehouse.\n\nFind it on the **Integrate** page, under **Data warehouse**. Redshift, Supabase, Neon, RDS, Aurora and AlloyDB all speak the Postgres protocol, so use the Postgres connector for them. MariaDB, Aurora MySQL, PlanetScale and TiDB speak the MySQL protocol, and Azure SQL Database speaks SQL Server's, so use those connectors for them.\n\nThis is the opposite of inbound webhooks: there, another system pushes to Loomail; here, Loomail pulls."
-  },
-  {
-    "id": "WAREHOUSES#1",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > How it works",
-    "text": "1. You write **one SELECT**.\n2. Every N minutes Loomail runs it, asking only for rows at or after where the last run got to.\n3. Each row becomes an `identify` (traits) and, if you named one, a `track` (an event), through the same code as the HTTP API. Plan limits, email-conflict handling and lifecycle rules all apply.\n4. Loomail remembers the highest value of your **position column** and starts there next time.\n\nLoomail wraps your query like this, so you do not write `ORDER BY` or `LIMIT`:\n\n```sql\nSELECT * FROM (<your query>) AS loomail_q ORDER BY <position column> ASC LIMIT <batch size>\n```"
-  },
-  {
-    "id": "WAREHOUSES#2",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > How it works > The one parameter: :cursor",
-    "text": "`:cursor` is the saved position, always passed as a bound value (never pasted into the text). It arrives as text, so cast it:\n\n| Warehouse | Example |\n|---|---|\n| Postgres | `WHERE updated_at >= :cursor::timestamptz` |\n| MySQL | `WHERE updated_at >= CAST(:cursor AS DATETIME)` |\n| SQL Server | `WHERE updated_at >= CAST(:cursor AS DATETIME2)` |\n| Snowflake | `WHERE updated_at >= TO_TIMESTAMP_TZ(:cursor)` |\n| BigQuery | `WHERE updated_at >= TIMESTAMP(:cursor)` |\n\nUse `>=`, not `>`. Rows that share the last position value would otherwise be lost. The repeat is harmless: Loomail remembers a fingerprint of the rows at the saved position and skips them when nothing about them changed, and an event's message id is a fingerprint of its row, so a repeat is never recorded twice."
-  },
-  {
-    "id": "WAREHOUSES#3",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > How it works > What the query may and may not do",
-    "text": "- One statement, starting with `SELECT` or `WITH`. A trailing semicolon is fine.\n- No `$1`, `?` or `@name` parameters, and no dollar-quoted strings. `:cursor` is the only parameter.\n- **SQL Server:** a query that starts with `WITH` (a common table expression) is refused, because SQL Server cannot nest one inside the wrapper Loomail adds for ordering and the row cap. Put the `WITH` part in a view, or write it as a subquery in `FROM`. **MySQL:** `/*! ... */` comments are refused, since MySQL runs their contents as SQL.\n- The **position column** must be in the query's output, named as a plain column (letters, numbers, underscores). Name it with `AS` if needed.\n- Column names in your settings are matched without regard to case. Snowflake upper-cases unquoted names; that is fine.\n\nThis check is a guard rail, not the security boundary. **The boundary is the credential**: connect with a user that can only `SELECT`. Postgres and MySQL sources additionally run inside a `READ ONLY` transaction with a statement time limit. SQL Server has no read-only transaction, so for SQL Server the login is the whole guarantee: give it `db_datareader` and nothing else."
-  },
-  {
-    "id": "WAREHOUSES#4",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > Postgres",
-    "text": "```sql\nCREATE USER loomail_reader WITH PASSWORD '...';\nGRANT CONNECT ON DATABASE crm TO loomail_reader;\nGRANT USAGE ON SCHEMA public TO loomail_reader;\nGRANT SELECT ON users TO loomail_reader;\n```\n\nGive Loomail the host, port, database, user and password. Encryption defaults to *encrypted, verify the certificate*. Your database must be reachable from wherever Loomail runs; allow its address in your firewall or security group."
-  },
-  {
-    "id": "WAREHOUSES#5",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > Postgres > Managed Postgres services",
-    "text": "The Postgres connector speaks the ordinary Postgres protocol, so it works with the services built on it. What differs is the address, the certificate and the pooler:"
-  },
-  {
-    "id": "WAREHOUSES#6",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > Postgres > Managed Postgres services",
-    "text": "| Service | Host and port | Certificate | Notes |\n|---|---|---|---|\n| **Neon** | `ep-....neon.tech`, 5432. A `-pooler` host is PgBouncer in transaction mode. | Public CA: leave **CA certificate** empty. | Use either host. A scaled-to-zero database takes a few seconds to wake, so the first run after a quiet spell can take longer (it is retried). |\n| **Supabase** | The **session pooler** host from *Connect* (port 5432, user `postgres.<project-ref>`) works from any server. The *direct* host `db.<ref>.supabase.co` is **IPv6 only** unless you buy the IPv4 add-on, and many servers have no IPv6. The transaction pooler (port 6543) also works. | Supabase signs with its own CA: paste the **CA certificate** from *Database Settings* into **CA certificate**, keep encryption on *verify*. | Create a read-only role and use that, not `postgres`. |\n| **Amazon RDS / Aurora** | The instance or cluster endpoint, port 5432. | Amazon's own CA: paste the RDS certificate bundle (the whole file) into **CA certificate**, keep *verify*. | Allow Loomail's outgoing address in the security group. The database must be reachable from the internet, or through a VPN or tunnel you provide. IAM authentication is not supported: use a database user. |"
-  },
-  {
-    "id": "WAREHOUSES#7",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > Postgres > Managed Postgres services",
-    "text": "| **Amazon Redshift** (provisioned or Serverless) | The cluster or workgroup endpoint, port **5439**. | Issued by AWS Certificate Manager, publicly trusted: leave **CA certificate** empty. | Redshift must be publicly accessible, with Loomail's address allowed. Use a read-only user. If a query starting with `WITH` is refused, put it in a view and select from the view. |"
-  },
-  {
-    "id": "WAREHOUSES#8",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > Postgres > Managed Postgres services",
-    "text": "How the connector behaves with them:\n\n- It opens a read-only transaction (`BEGIN READ ONLY`, supported by Redshift too) and sets a statement timeout for it. If a service refuses the timeout setting, the query still runs, still read-only, and the client's own time limit applies.\n- The certificate is always checked against the host name exactly as you typed it, including when it is an IP address, and the name is sent for SNI (Neon routes on it).\n- Poolers in transaction mode are fine: nothing is kept between transactions.\n- \"Verify\" with a CA you pasted still checks the host name and rejects a certificate that CA did not sign. \"Encrypted, do not verify\" encrypts but accepts any certificate; use it only to get unstuck."
-  },
-  {
-    "id": "WAREHOUSES#9",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > Postgres > A database that is not on the internet (SSH tunnel)",
-    "text": "This works the same for **Postgres, MySQL and SQL Server**: the examples say `5432`, so use `3306` for MySQL and `1433` for SQL Server.\n\nMost production databases sit on a private network. If you have an SSH server that can reach yours (a bastion or jump host), Loomail can connect to *that* and reach the database through it. Only the SSH server has to be reachable from the internet.\n\n```\nLoomail  ->  your SSH server (public)  ->  your database (private)\n```\n\nIn the form, tick **My database is not reachable from the internet** and fill in:\n\n| Field | What to give |\n|---|---|\n| Database host and port | The database's address **as the SSH server sees it**, such as `db.internal:5432` or `10.0.3.7:5432`. Loomail never resolves or connects to this itself, so a private name is fine. |\n| SSH server, port, user | The bastion's address and the account Loomail signs in as. |\n| Host key fingerprint | `SHA256:...`, so Loomail only talks to your server and nobody can pose as it. Get it from a machine you trust: `ssh-keyscan -t ed25519 bastion.example.com \\| ssh-keygen -lf -` |\n| SSH private key (and passphrase) | The private half of a key pair made for Loomail. Stored encrypted, never shown again. |\n\nSet up the SSH side:\n\n```bash\nssh-keygen -t ed25519 -N \"\" -C \"loomail\" -f loomail_tunnel\n```"
-  },
-  {
-    "id": "WAREHOUSES#10",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > Postgres > A database that is not on the internet (SSH tunnel)",
-    "text": "Add the **public** half (`loomail_tunnel.pub`) to the SSH user's `~/.ssh/authorized_keys`, with restrictions in front so that the key can do nothing except open a connection to your database:\n\n```\nrestrict,port-forwarding,permitopen=\"db.internal:5432\" ssh-ed25519 AAAA... loomail\n```\n\nThen paste the contents of `loomail_tunnel` (the private half) into Loomail and delete the local copy.\n\nWhat the SSH server needs:\n\n- `AllowTcpForwarding yes` (or `local`) in `sshd_config`. Some distributions turn it off by default (Alpine does), and when it is off the key cannot override it: you will see *\"it could not reach db.internal:5432\"* even though the address is right. Remember that OpenSSH uses the **first** value it finds.\n- A firewall rule letting Loomail's outgoing address reach the SSH port. A hosted Loomail refuses an SSH server on a private or local address (it must be reachable from the internet); the database behind it may be private.\n- Key authentication. Loomail never offers a password over SSH.\n\nHow it stays safe:"
-  },
-  {
-    "id": "WAREHOUSES#11",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > Postgres > A database that is not on the internet (SSH tunnel)",
-    "text": "- The SSH server's host key is **pinned**: a server with any other key is refused, and the message tells you the fingerprint it saw.\n- Each query opens its own tunnel, uses it for exactly one connection on `127.0.0.1`, and closes it afterwards, also when the query fails.\n- The database credential is checked and used exactly as without a tunnel: read-only transaction, time limit, row cap. The database's own TLS certificate is still verified against the host name you typed.\n- Editing a source keeps what you do not retype: changing the password keeps the SSH key, and changing the key keeps the password. Turning the tunnel off deletes the saved key."
-  },
-  {
-    "id": "WAREHOUSES#12",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > Postgres > A database that is not on the internet (SSH tunnel)",
-    "text": "| Message | Cause |\n|---|---|\n| *The SSH server's host key is not the one you pinned. It is SHA256:...* | The server was rebuilt or replaced, or someone is intercepting the connection. If you expected the change, paste the new fingerprint. |\n| *The SSH server refused the key for user ...* | Wrong user, the public key is not in that user's `authorized_keys`, or the passphrase is wrong. |\n| *The SSH private key could not be read* | Not the whole key (include the BEGIN and END lines), or the passphrase is missing or wrong. |\n| *Connected to the SSH server, but it could not reach db.internal:5432* | The database host or port is wrong as the SSH server sees it, forwarding is disabled in `sshd_config`, or `permitopen` in `authorized_keys` does not list that exact host and port. |\n| *Could not connect to the SSH server* / *did not answer in time* | The SSH server's address or port, or a firewall. These are retried on the next run. |\n| *Could not connect to the database: password authentication failed* | The tunnel is fine; the database user or password is wrong. |\n\nSSH tunnels are for the connectors that dial a host and port: Postgres, MySQL and SQL Server (including RDS and Aurora in a private subnet). Snowflake and BigQuery are cloud services reached over HTTPS and need none.\n\nTunnel notes for MySQL and SQL Server:"
-  },
-  {
-    "id": "WAREHOUSES#13",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > Postgres > A database that is not on the internet (SSH tunnel)",
-    "text": "- The database host name you give is used for certificate checking even though the traffic goes through the tunnel, so a private name such as `db.internal` needs a certificate for that name, or the CA pasted in, or *do not verify*.\n- **Azure SQL** may redirect a client to a different gateway address; behind a tunnel that redirect cannot be followed. Use the *Proxy* connection policy for the server, or the *Redirect* policy only without a tunnel.\n- Messages are the same as above; a wrong host or port as the SSH server sees it reads *it could not reach db.internal:3306* (or `:1433`)."
-  },
-  {
-    "id": "WAREHOUSES#14",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > MySQL",
-    "text": "Works with MySQL 5.7+ and 8.x, MariaDB, Amazon Aurora MySQL, PlanetScale and TiDB.\n\n```sql\nCREATE USER 'loomail_reader'@'%' IDENTIFIED BY '...';\nGRANT SELECT ON crm.users TO 'loomail_reader'@'%';\n```\n\nGive Loomail the host, port (3306), database, user and password. Encryption defaults to *encrypted, verify the certificate*; for Amazon RDS / Aurora paste the RDS certificate bundle as the CA certificate.\n\n- Each run is one prepared statement inside a `START TRANSACTION READ ONLY`, with `max_execution_time` (MySQL) or `max_statement_time` (MariaDB) set to the time limit when the server has them.\n- `DATETIME` columns carry no time zone; Loomail reads them as UTC. Keep the position column in UTC, or convert it in the query (`CONVERT_TZ(updated_at, 'Europe/London', '+00:00') AS updated_at`).\n- `DECIMAL` values arrive as numbers, `JSON` columns as text, and binary columns as base64 text.\n- With the *verify* setting, the server certificate is checked against the host name you typed."
-  },
-  {
-    "id": "WAREHOUSES#15",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > SQL Server",
-    "text": "Works with SQL Server 2016+ and Azure SQL Database / Managed Instance.\n\n```sql\nCREATE LOGIN loomail_reader WITH PASSWORD = '...';\nUSE crm;\nCREATE USER loomail_reader FOR LOGIN loomail_reader;\nALTER ROLE db_datareader ADD MEMBER loomail_reader;\n```\n\nGive Loomail the host, **port** (1433 unless you changed it), database, user and password (SQL Server authentication; Windows/Entra sign-in is not supported). Use a port, not an instance name: named instances are found over UDP, which cannot go through a tunnel or most firewalls. For a named instance, find its fixed TCP port in SQL Server Configuration Manager and give that.\n\n- Loomail declares read-only intent and applies the time limit, but SQL Server cannot enforce a read-only transaction. **Use a login that can only read.**\n- Encryption is on by default and the certificate is verified. A self-hosted SQL Server often has a self-signed certificate: either paste its CA as the CA certificate, or choose *encrypted, do not verify*. Azure SQL uses a public CA and needs nothing.\n- Timestamps (`datetime2`, `datetime`) are read as UTC. `decimal`/`money` values arrive as numbers and `uniqueidentifier` as text.\n- Cast `:cursor` explicitly: `CAST(:cursor AS DATETIME2)`."
-  },
-  {
-    "id": "WAREHOUSES#16",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > Snowflake",
-    "text": "Loomail uses Snowflake's SQL API with **key-pair sign-in** (no password is stored).\n\n```bash\nopenssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out loomail_key.p8 -nocrypt\nopenssl rsa -in loomail_key.p8 -pubout -out loomail_key.pub\n```\n\n```sql\nCREATE ROLE loomail_reader;\nGRANT USAGE ON WAREHOUSE compute_wh TO ROLE loomail_reader;\nGRANT USAGE ON DATABASE analytics TO ROLE loomail_reader;\nGRANT USAGE ON SCHEMA analytics.public TO ROLE loomail_reader;\nGRANT SELECT ON TABLE analytics.public.users TO ROLE loomail_reader;\nCREATE USER loomail_svc DEFAULT_ROLE = loomail_reader RSA_PUBLIC_KEY = '<contents of loomail_key.pub without the BEGIN/END lines>';\nGRANT ROLE loomail_reader TO USER loomail_svc;\n```\n\nIn Loomail enter the **account identifier** (`myorg-myaccount`, or a locator such as `xy12345.eu-west-1`), the user, the compute warehouse and role, and paste the contents of `loomail_key.p8`. If your key is encrypted, add its passphrase. If Snowflake answers 401, the public key on the user does not match the private key you pasted, or the account identifier is wrong. Check with `DESC USER loomail_svc` (the `RSA_PUBLIC_KEY_FP` field).\n\nIf your account uses a network policy, allow your Loomail server's outgoing address."
-  },
-  {
-    "id": "WAREHOUSES#17",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Setting up each warehouse > BigQuery",
-    "text": "1. Create a **service account** in your Google Cloud project.\n2. Give it **BigQuery Job User** on the project and **BigQuery Data Viewer** on the dataset.\n3. Create a JSON key for it and paste the whole file into Loomail.\n\nSet the **location** if your dataset is not in the default US/EU multi-region (for example `europe-west2`), and the **data limit per query**: every query carries `maximumBytesBilled`, so a mistake fails instead of running up a bill (default 10 GB)."
-  },
-  {
-    "id": "WAREHOUSES#18",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > The settings",
-    "text": "| Setting | Meaning |\n|---|---|\n| Position column / type | The column that rises when a row is added or changed (`updated_at`), and whether it holds a date and time, a number or text. |\n| Start from | Optional first position. Empty reads everything the first time. |\n| Run every | 5 to 1440 minutes. After a failure the next try comes sooner (at most 15 minutes). |\n| SSH tunnel | Optional, Postgres, MySQL and SQL Server: reach a private database through an SSH server. See above. |\n| Rows per batch | 10 to 5000. A run reads up to 5 batches, then carries on next time. |\n| User id / email column | Who the row is about. One is enough; with only an email, people are matched by it. A row with neither is skipped, not an error. |\n| Event | A fixed name, a name read from a column, or none (traits only). |\n| Time column | Optional. Events more than 3 days from the present are recorded at sync time (the same rule as the HTTP API). |\n| Traits | Trait name to column. A `null` value is skipped, never used to clear a trait. |\n| Keep the row's values on the event | The row's non-null columns become the event's properties. |\n\n**Test the query** shows the first rows and what each would become, and records nothing. Use it before saving.\n\n**Sync now** runs a source at once and shows the result. **Read everything again** resets the position; nothing already recorded is doubled."
-  },
-  {
-    "id": "WAREHOUSES#19",
-    "source": "Data warehouse guide",
-    "heading": "Data warehouse sources > Troubleshooting",
-    "text": "| Message | Cause |\n|---|---|\n| *The query does not return these columns: ...* | A column named in the settings is not in the query's output. The message lists what it does return. |\n| *Could not connect to the database* | Host, port, firewall, or password. Postgres errors show the driver's reason. |\n| *Snowflake refused the sign-in (401)* | Public key not set on the user, wrong account identifier, or the wrong key pasted. |\n| *Google refused the service account* | Key file wrong or revoked. |\n| *Query exceeded limit for bytes billed* | The query would read more than the data limit. Narrow the query (filter on a partition column) or raise the limit. |\n| *The query took too long* | A batch has 60 seconds. Make the query faster: filter on an indexed or partitioned column. |\n| *More than N rows share the same ... value* | Raise the batch size. |\n| *Your plan's contact limit is reached* | New people cannot be created until there is room. |"
   },
   {
     "id": "DATA#0",
