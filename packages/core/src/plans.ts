@@ -16,15 +16,15 @@
  */
 
 /**
- * Lifetime plans are bought once (on AppSumo) and redeemed with a code. They are never offered on the
- * pricing page or at checkout, never expire and are never billed: see appsumo/service.ts. Redeeming more
- * codes in the same workspace ("stacking") moves it up a tier, to MAX_LIFETIME_CODES.
+ * The lifetime plan is bought once (on AppSumo) and redeemed with a code. It is never offered on the
+ * pricing page or at checkout, never expires and is never billed: see appsumo/lifetime.ts. There is a
+ * single lifetime tier, so a workspace holds at most one licence.
  */
-export const LIFETIME_PLAN_IDS = ["lifetime_1", "lifetime_2", "lifetime_3"] as const;
+export const LIFETIME_PLAN_IDS = ["lifetime_1"] as const;
 export type LifetimePlanId = (typeof LIFETIME_PLAN_IDS)[number];
 
-/** The highest lifetime tier. Licences held by one workspace add up (a tier-2 licence counts as 2) to this at most. */
-export const MAX_LIFETIME_TIER = 3;
+/** The highest (and only) lifetime tier. */
+export const MAX_LIFETIME_TIER = 1;
 
 export const PLAN_IDS = ["free", "essential", ...LIFETIME_PLAN_IDS] as const;
 export type PlanId = (typeof PLAN_IDS)[number];
@@ -129,12 +129,12 @@ export const PLANS: Readonly<Record<PlanId, PlanDef>> = {
       "Priority support",
     ],
   },
-  // Lifetime tiers. The limits are deliberately modest: a one-time payment cannot carry a monthly
-  // cost, so these assume the customer sends through their own email provider (managedSending: false)
-  // and may add their own AI key. Review them before a deal launches.
+  // The lifetime deal. The limits are deliberately modest: a one-time payment cannot carry a monthly
+  // cost, so this assumes the customer sends through their own email provider (managedSending: false)
+  // and may add their own AI key. Review them before the deal launches.
   lifetime_1: {
     id: "lifetime_1",
-    name: "Lifetime Tier 1",
+    name: "Lifetime",
     tagline: "One code. Yours for life.",
     priceMonthlyUsd: 0,
     priceAnnualUsd: 0,
@@ -143,30 +143,6 @@ export const PLANS: Readonly<Record<PlanId, PlanDef>> = {
     lifetime: true,
     managedSending: false,
     features: ["1,000 customer profiles", "10,000 emails per month", "AI flow builder", "2 team members", "Send through your own email provider"],
-  },
-  lifetime_2: {
-    id: "lifetime_2",
-    name: "Lifetime Tier 2",
-    tagline: "Two codes stacked. Yours for life.",
-    priceMonthlyUsd: 0,
-    priceAnnualUsd: 0,
-    priceAnnualMonthlyUsd: 0,
-    limits: { contacts: 2_500, emailsPerMonth: 25_000, seats: 5, aiTokensPerMonth: 900_000 },
-    lifetime: true,
-    managedSending: false,
-    features: ["2,500 customer profiles", "25,000 emails per month", "AI flow builder", "5 team members", "Send through your own email provider"],
-  },
-  lifetime_3: {
-    id: "lifetime_3",
-    name: "Lifetime Tier 3",
-    tagline: "Three codes stacked. Yours for life.",
-    priceMonthlyUsd: 0,
-    priceAnnualUsd: 0,
-    priceAnnualMonthlyUsd: 0,
-    limits: { contacts: 5_000, emailsPerMonth: 60_000, seats: 10, aiTokensPerMonth: 2_000_000 },
-    lifetime: true,
-    managedSending: false,
-    features: ["5,000 customer profiles", "60,000 emails per month", "AI flow builder", "10 team members", "Send through your own email provider"],
   },
 };
 
@@ -258,7 +234,7 @@ export function parseAddonCheckoutPlan(plan: string | null | undefined): AddonKi
   return isAddonKind(kind) ? kind : null;
 }
 
-/** The lifetime plan for licences adding up to `total` tiers, or null for none. More than the maximum counts as the maximum. */
+/** The lifetime plan for a workspace holding `total` tiers of licence, or null for none. With one tier, any licence is that tier. */
 export function lifetimePlanForTotal(total: number): LifetimePlanId | null {
   if (!Number.isFinite(total) || total < 1) return null;
   return LIFETIME_PLAN_IDS[Math.min(Math.floor(total), MAX_LIFETIME_TIER) - 1]!;

@@ -8,8 +8,8 @@
  * by redeeming it on /redeem, or by pasting the key in Settings, Plan.
  *
  * Rules:
- *   - A workspace is on lifetime tier N while the licences it holds add up to N (a tier-2 licence counts as 2),
- *     to a maximum of MAX_LIFETIME_TIER. Every change recomputes the tier from the ledger, so the plan cannot
+ *   - There is one lifetime tier. A workspace is on it while it holds a licence (a second code is refused, and any
+ *     tier AppSumo reports counts as that one tier). Every change recomputes the plan from the ledger, so it cannot
  *     drift from the licences.
  *   - A refund (deactivate) ends that licence at once; the workspace drops a tier, or onto no plan when it was the
  *     last. A licence already replaced by an upgrade is left alone.
@@ -269,7 +269,7 @@ export async function claimLicense(db: Db, tenantId: string, licenseKey: string,
         throw new LifetimeError(409, "This workspace has a paid subscription. Cancel it first, or redeem your code in a new workspace.");
       }
       if ((await workspaceTotal(tx, tenantId)) >= MAX_LIFETIME_TIER) {
-        throw new LifetimeError(409, `This workspace already has the most you can stack (tier ${MAX_LIFETIME_TIER}). Use this code on another workspace.`);
+        throw new LifetimeError(409, "This workspace already has a lifetime licence. Use this code in another workspace.");
       }
       await tx
         .update(lifetimeLicenses)

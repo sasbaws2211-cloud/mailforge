@@ -96,7 +96,7 @@ export default function AdminLifetimePage() {
       <PageHeader
         eyebrow="Admin"
         title="Lifetime deals"
-        subtitle="Sell Loomail on AppSumo. Licences arrive by AppSumo's webhook and unlock a lifetime plan for one workspace."
+        subtitle="Sell Loomail on AppSumo. Licences arrive by AppSumo's webhook and unlock the lifetime plan for one workspace."
       />
 
       {note && (
@@ -248,7 +248,7 @@ export default function AdminLifetimePage() {
 
         <h3 className="mt-6 text-[14px] font-medium text-foreground">Refund a code</h3>
         <p className="text-[13px] text-muted-foreground">
-          For a code Loomail made that AppSumo refunded. The workspace using it drops a tier, or onto no plan if it was the last. Licences AppSumo reports
+          For a code Loomail made that AppSumo refunded. The workspace using it goes onto no plan. Licences AppSumo reports
           are refunded by AppSumo's webhook.
         </p>
         <div className="mt-2 flex flex-wrap items-end gap-3">
