@@ -49,6 +49,31 @@ export interface AdminOverview {
   generated_at: string;
 }
 
+export interface AdminLifetime {
+  mode: "subscriptions" | "lifetime" | "both";
+  modes: string[];
+  spots: { cap: number; sold: number; left: number };
+  codes: { total: number; unused: number; redeemed: number; refunded: number };
+  appsumo: { api_key: boolean; oauth: boolean; redirect_url: string; buy_url: string };
+  webhook_path: string;
+  callback_path: string;
+  redeem_path: string;
+  licenses: Array<{
+    license_key: string;
+    license_key_short: string;
+    tier: number;
+    status: string;
+    workspace_id: string | null;
+    workspace_name: string | null;
+    last_event: string;
+    created_at: string | null;
+    claimed_at: string | null;
+    deactivated_at: string | null;
+    source: string;
+  }>;
+  events: Array<{ event: string; license: string; outcome: string; at: string }>;
+}
+
 export type FunnelStageId = "signed_up" | "signed_in" | "address" | "sender" | "flow" | "event" | "first_email" | "paid";
 
 export interface AdminFunnel {
@@ -277,3 +302,15 @@ export async function testAdminAi(slot: AdminAiSlot): Promise<AdminAiTestResult>
   if (body.ok === false) return { ok: false, kind: body.kind, status: body.status, detail: body.detail, error: body.error };
   return { ok: false, error: body.error ?? `Request failed (${res.status})` };
 }
+
+export const fetchAdminLifetime = () => adminRequest<AdminLifetime>("/lifetime");
+
+export const saveAdminLifetimeSettings = (input: { mode?: string; cap?: number; reason: string }) =>
+  adminRequest<{ ok: true }>("/lifetime/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+
+export const makeAdminLifetimeCodes = (count: number, reason: string) => adminPost<{ made: number }>("/lifetime/codes", { count, reason });
+
+export const refundAdminLifetimeCode = (code: string, reason: string) => adminPost<{ ok: true; result: string }>("/lifetime/codes/refund", { code, reason });
+
+/** The CSV AppSumo asks for: one code per line, no header. */
+export const adminLifetimeCsvUrl = (all: boolean) => `/v1/admin/lifetime/codes.csv${all ? "?all=true" : ""}`;

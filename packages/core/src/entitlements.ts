@@ -49,6 +49,8 @@ export interface Entitlements {
   limits: PlanLimits;
   /** Emails and public pages carry a small "Powered by" link. */
   showsPoweredBy: boolean;
+  /** Whether Loomail Sending may be used on this plan (false on lifetime plans). */
+  managedSendingAllowed: boolean;
 }
 
 const UNLIMITED: PlanLimits = { contacts: null, emailsPerMonth: null, seats: null, aiTokensPerMonth: null };
@@ -113,6 +115,8 @@ export function entitlementsFor(input: {
     paymentStatus: paymentStatus(input.plan, paidThrough, now),
     limits: enforced ? applyAddons(applyAiOverride(PLANS[plan].limits, input.aiTokensOverride), input.addons) : UNLIMITED,
     showsPoweredBy: enforced && Boolean(PLANS[plan].showsPoweredBy),
+    // Only a hosted, enforced workspace is restricted; self-hosted installs are never limited.
+    managedSendingAllowed: !enforced || PLANS[plan].managedSending !== false,
   };
 }
 

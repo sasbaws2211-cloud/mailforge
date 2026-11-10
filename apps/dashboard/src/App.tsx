@@ -54,6 +54,7 @@ import DataSettings from "./pages/settings/DataSettings.js";
 import AdminPage from "./pages/admin/AdminPage.js";
 import AdminTenantPage from "./pages/admin/AdminTenantPage.js";
 import AdminAuditPage from "./pages/admin/AdminAuditPage.js";
+import AdminLifetimePage from "./pages/admin/AdminLifetimePage.js";
 import AdminAiPage from "./pages/admin/AdminAiPage.js";
 import AdminSupportPage from "./pages/admin/AdminSupportPage.js";
 import AdminSupportTicketPage from "./pages/admin/AdminSupportTicketPage.js";
@@ -105,6 +106,7 @@ export default function App() {
       >
         <Route index element={<AdminPage />} />
         <Route path="ai" element={<AdminAiPage />} />
+        <Route path="lifetime" element={<AdminLifetimePage />} />
         <Route path="audit" element={<AdminAuditPage />} />
         <Route path="support" element={<AdminSupportPage />} />
         <Route path="support/:id" element={<AdminSupportTicketPage />} />

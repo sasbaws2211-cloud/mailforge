@@ -22,6 +22,7 @@ import {
   isAddonKind,
   isBillingInterval,
   isPaidPlanId,
+  isLifetimePlanId,
   isPlanId,
   isValidPackCount,
   parseAddonCheckoutPlan,
@@ -31,6 +32,7 @@ import type { Db } from "../plugins/db.js";
 import type { BillingRuntime } from "../billing/config.js";
 import { BillingError, cancelSubscriptionForTenant, checkoutStatus, startAddonCheckout, startCheckout } from "../billing/service.js";
 import { stopAddonRenewal } from "../billing/addon-renewals.js";
+import { getMode } from "../appsumo/lifetime.js";
 
 export interface BillingRouteOptions {
   runtime: BillingRuntime;
@@ -148,8 +150,15 @@ const billingRoutes: FastifyPluginAsync<BillingRouteOptions> = async (app, opts)
       }
 
       const [user] = await db.select({ email: users.email }).from(users).where(eq(users.id, request.tenant!.userId)).limit(1);
-      const [tenant] = await db.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, request.tenant!.id)).limit(1);
+      const [tenant] = await db.select({ name: tenants.name, plan: tenants.plan }).from(tenants).where(eq(tenants.id, request.tenant!.id)).limit(1);
       if (!user || !tenant) return reply.status(404).send({ error: "Account not found." });
+      // A lifetime licence replaces card plans, and in lifetime-only mode none are sold.
+      if (isLifetimePlanId(tenant.plan)) {
+        return reply.status(400).send({ error: "This workspace has a lifetime licence, so it does not need a card plan.", code: "has_lifetime" });
+      }
+      if ((await getMode(db)) === "lifetime") {
+        return reply.status(400).send({ error: "Card plans are not sold right now. Redeem your lifetime code under Settings, Plan.", code: "lifetime_only" });
+      }
 
       try {
         const { url, txRef, accessCode } = await startCheckout(

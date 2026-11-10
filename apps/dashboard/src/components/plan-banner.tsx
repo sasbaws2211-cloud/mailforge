@@ -50,7 +50,7 @@ export function PlanBanner() {
   const canPay = isOwner && data?.billing.enabled === true;
 
   async function act(n: PlanNotice) {
-    if (!n.action || n.action.kind === "plans") return;
+    if (!n.action || n.action.kind === "plans" || n.action.kind === "redeem") return;
     setError(null);
     try {
       if (n.action.kind === "subscribe") await flow.start({ plan: "essential", interval: "monthly" });
@@ -83,7 +83,7 @@ export function PlanBanner() {
       <Icon size={16} className={cn("mt-0.5 shrink-0", TONE_ICON[notice.tone])} aria-hidden="true" />
       <p className="flex-1 text-[14px] leading-relaxed text-foreground">
         {notice.message}{" "}
-        {notice.action && notice.action.kind !== "plans" && canPay ? (
+        {notice.action && notice.action.kind !== "plans" && notice.action.kind !== "redeem" && canPay ? (
           <Button size="sm" className="ml-1 align-middle" disabled={flow.busy} onClick={() => void act(notice)}>
             {flow.busy
               ? "Opening checkout..."
@@ -93,7 +93,13 @@ export function PlanBanner() {
           </Button>
         ) : (
           <Link to="/settings/plan" className="font-medium text-accent-text underline-offset-4 hover:underline">
-            {notice.action?.kind === "subscribe" ? "Subscribe to Essential" : notice.action?.kind === "addon" ? "Add more usage" : "View plan"}
+            {notice.action?.kind === "subscribe"
+              ? "Subscribe to Essential"
+              : notice.action?.kind === "addon"
+                ? "Add more usage"
+                : notice.action?.kind === "redeem"
+                  ? "Redeem your code"
+                  : "View plan"}
           </Link>
         )}
         {error && <span className="ml-2 text-danger">{error}</span>}

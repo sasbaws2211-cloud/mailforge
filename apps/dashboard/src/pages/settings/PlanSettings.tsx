@@ -34,6 +34,7 @@ import {
   usePlan,
   useCancelSubscription,
   useBillingPayments,
+  useRedeemLifetime,
   useStopAutoRenewal,
   useCheckoutFlow,
   type MeterKind,
@@ -503,6 +504,9 @@ export default function PlanSettings() {
           {returnNotice.message}
         </Notice>
       )}
+      {params.get("lifetime") === "claimed" && (
+        <Notice variant="success">Your AppSumo code is redeemed. Your lifetime plan is active. Thank you!</Notice>
+      )}
 
       <Section
         title="Plan & usage"
@@ -544,8 +548,15 @@ export default function PlanSettings() {
         </p>
       </Section>
 
+      {(plan.lifetime.mode !== "subscriptions" || plan.lifetime.license !== null || plan.lifetime.pending_code) && (
+        <div id="redeem">
+          <LifetimeSection plan={plan} isOwner={isOwner} />
+        </div>
+      )}
+
       {plan.billing.enabled && <BillingSection plan={plan} canManage={isOwner} />}
 
+      {!plan.lifetime.on_lifetime_plan && plan.lifetime.mode !== "lifetime" && (
       <Section
         title="Plans"
         configured={null}
@@ -597,6 +608,7 @@ export default function PlanSettings() {
           </p>
         )}
       </Section>
+      )}
 
       {plan.billing.enabled && isOwner && plan.addons.length > 0 && (
         <Section
@@ -663,6 +675,123 @@ function AutoRenewals({ items }: { items: PlanInfo["auto_renewals"] }) {
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * The AppSumo lifetime deal: what this workspace holds, the tiers, and a box to redeem a code. A code left
+ * waiting in this browser (from /redeem or the AppSumo activation link) is redeemed with one click.
+ */
+function LifetimeSection({ plan, isOwner }: { plan: PlanInfo; isOwner: boolean }) {
+  const L = plan.lifetime;
+  const redeem = useRedeemLifetime();
+  const [key, setKey] = useState("");
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const tierName = L.license ? (L.tiers.find((t) => t.tier === L.license!.tier)?.name ?? `Lifetime Tier ${L.license.tier}`) : null;
+
+  async function submit(blank: boolean) {
+    setError(null);
+    setDone(null);
+    try {
+      const r = await redeem.mutateAsync(blank ? undefined : key.trim());
+      setKey("");
+      setDone(`Done. Your plan is now Lifetime Tier ${r.tier}. Thank you!`);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  return (
+    <Section
+      title="Lifetime deal"
+      configured={null}
+      description="Bought the AppSumo lifetime deal? Redeem your code here. A second code on the same workspace stacks to the next tier."
+      actions={tierName ? <Badge variant="accent">{tierName}</Badge> : undefined}
+    >
+      {L.license && (
+        <Notice variant="info" className="mb-4">
+          <b>{tierName}</b> is active on this workspace (licence {L.license.key_hint}).{" "}
+          {L.license.tier < L.max_tier ? "Need more room? Buy another code and redeem it here to stack it." : "That is the top tier. Thank you for backing us early."}
+        </Notice>
+      )}
+      {done && (
+        <Notice variant="success" className="mb-4">
+          {done}
+        </Notice>
+      )}
+      {isOwner && L.can_redeem && (
+        <div className="space-y-3">
+          {L.pending_code && (
+            <div className="rounded-md border border-border bg-sunken p-3">
+              <p className="text-[14px] text-foreground">You have an AppSumo code waiting from earlier.</p>
+              <Button size="sm" className="mt-2" disabled={redeem.isPending} onClick={() => void submit(true)}>
+                {redeem.isPending ? "Redeeming..." : "Redeem my code"}
+              </Button>
+            </div>
+          )}
+          <form
+            className="flex flex-wrap items-end gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (key.trim()) void submit(false);
+            }}
+          >
+            <div className="min-w-0 flex-1 basis-64">
+              <label htmlFor="lifetime-code" className="text-[13px] text-foreground">
+                Your code
+              </label>
+              <input
+                id="lifetime-code"
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                placeholder="LM-XXXX-XXXX-XXXX"
+                autoComplete="off"
+                spellCheck={false}
+                className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-[14px] uppercase tracking-wide"
+              />
+            </div>
+            <Button size="sm" type="submit" disabled={redeem.isPending || !key.trim()}>
+              {redeem.isPending && key.trim() ? "Redeeming..." : "Redeem"}
+            </Button>
+          </form>
+          <FormError message={error} />
+        </div>
+      )}
+      {isOwner && !L.can_redeem && L.license === null && (
+        <p className="text-[13px] text-muted-foreground">
+          Redeeming is not available on a workspace with a paid subscription. Cancel the subscription first, or redeem your code in a new workspace.
+        </p>
+      )}
+      {!isOwner && <p className="text-[13px] text-muted-foreground">Only a workspace owner can redeem a code.</p>}
+
+      <div className="mt-5 grid gap-3 md:grid-cols-3">
+        {L.tiers.map((t) => (
+          <div key={t.id} className={cn("rounded-lg border p-3", L.license?.tier === t.tier ? "border-accent bg-accent-soft/40" : "border-border bg-card")}>
+            <p className="text-[14px] font-semibold text-foreground">{t.name}</p>
+            <ul className="mt-2 space-y-1 text-[13px] text-foreground">
+              {t.features.map((f) => (
+                <li key={f} className="flex gap-2">
+                  <span aria-hidden="true" className="text-accent-text">
+                    &#10003;
+                  </span>
+                  <span>{f}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+      {L.buy_url && (
+        <p className="mt-4 text-[13px] text-muted-foreground">
+          Do not have a code yet?{" "}
+          <a className="text-accent-text underline-offset-4 hover:underline" href={L.buy_url} target="_blank" rel="noreferrer">
+            See the lifetime deal on AppSumo
+          </a>
+          {L.spots.cap ? ` (${L.spots.left} of ${L.spots.cap} left)` : ""}.
+        </p>
+      )}
+    </Section>
   );
 }
 

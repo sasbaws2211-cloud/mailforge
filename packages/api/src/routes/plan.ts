@@ -12,6 +12,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import {
   BILLING_GRACE_DAYS,
+  LIFETIME_PLAN_IDS,
+  MAX_LIFETIME_TIER,
+  isLifetimePlanId,
   chargeAmountMinor,
   PLANS,
   ADDONS,
@@ -26,6 +29,8 @@ import {
 import type { Db } from "../plugins/db.js";
 import { loadAddonTotals, loadEntitlements, loadUsage } from "../plan/usage.js";
 import { listAddonRenewals } from "../billing/addon-renewals.js";
+import { buyUrl, getMode, hasLiveSubscription, spots, workspaceView } from "../appsumo/lifetime.js";
+import { readPending } from "../appsumo/pending.js";
 import type { BillingRuntime } from "../billing/config.js";
 import { chargeCents, subscriptionSummary } from "../billing/service.js";
 import { loadAiStatus } from "../ai/resolver.js";
@@ -49,13 +54,17 @@ const planRoutes: FastifyPluginAsync<{ billing?: BillingRuntime }> = async (app,
     const db: Db = request.server.db;
     const tenantId = request.tenant!.id;
     const now = new Date();
-    const [ent, usage, subscription, ai, topups, renewals] = await Promise.all([
+    const [ent, usage, subscription, ai, topups, renewals, lifetimeMode, lifetimeSpots, lifetimeWs, liveSub] = await Promise.all([
       loadEntitlements(db, tenantId, now),
       loadUsage(db, tenantId, now),
       subscriptionSummary(db, tenantId, now),
       loadAiStatus(db, tenantId, now),
       loadAddonTotals(db, tenantId, now),
       listAddonRenewals(db, tenantId),
+      getMode(db),
+      spots(db),
+      workspaceView(db, tenantId),
+      hasLiveSubscription(db, tenantId, now),
     ]);
 
     const used: Record<LimitKind, number> = {
@@ -154,7 +163,32 @@ const planRoutes: FastifyPluginAsync<{ billing?: BillingRuntime }> = async (app,
           pack_charge: !billing?.enabled || billing.currency === "USD" ? null : chargeAmountMinor(usd, billing.currency, billing.usdRate) / 100,
         };
       }),
-      plans: PLAN_IDS.filter((id) => id !== "free").map((id) => {
+      // The AppSumo lifetime deal: the operator's mode, the tiers, what this workspace holds, and whether it can redeem.
+      lifetime: {
+        mode: lifetimeMode,
+        buy_url: buyUrl() || null,
+        spots: lifetimeSpots,
+        tiers: LIFETIME_PLAN_IDS.map((id, i) => ({
+          tier: i + 1,
+          id,
+          name: PLANS[id].name,
+          features: PLANS[id].features,
+          limits: {
+            contacts: PLANS[id].limits.contacts,
+            emails_per_month: PLANS[id].limits.emailsPerMonth,
+            seats: PLANS[id].limits.seats,
+            ai_tokens_per_month: PLANS[id].limits.aiTokensPerMonth,
+          },
+        })),
+        license: lifetimeWs.license,
+        max_tier: MAX_LIFETIME_TIER,
+        on_lifetime_plan: isLifetimePlanId(ent.storedPlan),
+        // Redeeming is possible unless a paid subscription would overwrite it, or the workspace is already at the top tier.
+        can_redeem: lifetimeMode !== "subscriptions" || lifetimeWs.total > 0 ? !liveSub && lifetimeWs.total < MAX_LIFETIME_TIER : false,
+        // A code the buyer left waiting in this browser (from /redeem or the activation link).
+        pending_code: readPending(request) !== "",
+      },
+      plans: PLAN_IDS.filter((id) => isPaidPlanId(id)).map((id) => {
         const p = PLANS[id];
         return {
           id,

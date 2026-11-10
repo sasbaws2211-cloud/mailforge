@@ -270,6 +270,11 @@ export { LIBRARY_CATALOG, libraryEntry, recommendedLibraryFlow, type LibraryCata
 
 export {
   PLAN_IDS,
+  LIFETIME_PLAN_IDS,
+  MAX_LIFETIME_TIER,
+  lifetimePlanForTotal,
+  isLifetimePlanId,
+  lifetimeTier,
   PLANS,
   TRIAL_PLAN,
   TRIAL_PLAN_VALUE,
@@ -305,6 +310,7 @@ export {
   type PaidPlanId,
   type PaymentStatus,
   type PlanId,
+  type LifetimePlanId,
   type PlanDef,
   type PlanLimits,
 } from "./plans.js";

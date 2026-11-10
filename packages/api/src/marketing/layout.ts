@@ -38,7 +38,19 @@ export interface SiteContext {
   usdRate?: number | null;
   /** Legal entity name for the legal pages. */
   legalName: string;
+  /**
+   * The AppSumo lifetime-deal setup: which mode the operator chose, the buy link and the licences left. Absent
+   * when nothing is configured or the database is not reachable, in which case the normal trial pages show.
+   */
+  lifetime?: {
+    mode: "subscriptions" | "lifetime" | "both";
+    buyUrl: string;
+    spots: { cap: number; sold: number; left: number };
+  };
 }
+
+/** True when the operator sells ONLY the lifetime deal: no trial, no card plans. */
+export const isLifetimeOnly = (ctx: SiteContext): boolean => ctx.lifetime?.mode === "lifetime";
 
 /** The default social-share image: a file in apps/dashboard/public, so it is served from the site root. 1200x630, what every major platform shows. */
 export const OG_IMAGE_PATH = "/og-default.png";
@@ -230,7 +242,7 @@ footer .fl{display:flex;gap:20px;flex-wrap:wrap}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 `;
 
-function nav(opts: PageOptions): string {
+function nav(opts: PageOptions, ctx: SiteContext): string {
   const cur = (p: string): string => (opts.path === p ? ' aria-current="page"' : "");
   const links = opts.minimalNav
     ? ""
@@ -238,7 +250,7 @@ function nav(opts: PageOptions): string {
   return `<header class="nav"><div class="wrap">
 <a class="logo" href="/" aria-label="${SITE_NAME} home">${MARK_SVG}<b>${SITE_NAME.toLowerCase()}</b></a>
 ${links}
-<div class="right"><a class="signin" href="/login">Sign in</a><a class="btn sm" href="/signup">Start free trial</a></div>
+<div class="right"><a class="signin" href="/login">Sign in</a><a class="btn sm" href="/signup">${isLifetimeOnly(ctx) ? "Create account" : "Start free trial"}</a></div>
 </div></header>`;
 }
 
@@ -289,7 +301,7 @@ ${opts.headExtra ?? ""}
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-${nav(opts)}
+${nav(opts, ctx)}
 <main id="main">
 ${body}
 </main>

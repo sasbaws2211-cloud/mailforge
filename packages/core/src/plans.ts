@@ -15,7 +15,18 @@
  * Mirror side: PUBLIC (packages/core is mirrored).
  */
 
-export const PLAN_IDS = ["free", "essential"] as const;
+/**
+ * Lifetime plans are bought once (on AppSumo) and redeemed with a code. They are never offered on the
+ * pricing page or at checkout, never expire and are never billed: see appsumo/service.ts. Redeeming more
+ * codes in the same workspace ("stacking") moves it up a tier, to MAX_LIFETIME_CODES.
+ */
+export const LIFETIME_PLAN_IDS = ["lifetime_1", "lifetime_2", "lifetime_3"] as const;
+export type LifetimePlanId = (typeof LIFETIME_PLAN_IDS)[number];
+
+/** The highest lifetime tier. Licences held by one workspace add up (a tier-2 licence counts as 2) to this at most. */
+export const MAX_LIFETIME_TIER = 3;
+
+export const PLAN_IDS = ["free", "essential", ...LIFETIME_PLAN_IDS] as const;
 export type PlanId = (typeof PLAN_IDS)[number];
 
 /** Value stored in tenants.plan while a signup trial is running. */
@@ -66,6 +77,14 @@ export interface PlanDef {
   recommended?: boolean;
   /** Free plan shows a small "Powered by Loomail" link in emails and pages. */
   showsPoweredBy?: boolean;
+  /** A one-time (lifetime) plan: no price, no renewal, never lapses. */
+  lifetime?: boolean;
+  /**
+   * Whether Loomail Sending (we send the email for you) may be used. False on lifetime plans, which
+   * send through the customer's own email provider so a one-time payment never carries a monthly sending cost.
+   * Omitted means allowed.
+   */
+  managedSending?: boolean;
 }
 
 /** A year for the price of 10 months. This exact amount is what gets billed. */
@@ -109,6 +128,45 @@ export const PLANS: Readonly<Record<PlanId, PlanDef>> = {
       "Unlimited team members",
       "Priority support",
     ],
+  },
+  // Lifetime tiers. The limits are deliberately modest: a one-time payment cannot carry a monthly
+  // cost, so these assume the customer sends through their own email provider (managedSending: false)
+  // and may add their own AI key. Review them before a deal launches.
+  lifetime_1: {
+    id: "lifetime_1",
+    name: "Lifetime Tier 1",
+    tagline: "One code. Yours for life.",
+    priceMonthlyUsd: 0,
+    priceAnnualUsd: 0,
+    priceAnnualMonthlyUsd: 0,
+    limits: { contacts: 1_000, emailsPerMonth: 10_000, seats: 2, aiTokensPerMonth: 300_000 },
+    lifetime: true,
+    managedSending: false,
+    features: ["1,000 customer profiles", "10,000 emails per month", "AI flow builder", "2 team members", "Send through your own email provider"],
+  },
+  lifetime_2: {
+    id: "lifetime_2",
+    name: "Lifetime Tier 2",
+    tagline: "Two codes stacked. Yours for life.",
+    priceMonthlyUsd: 0,
+    priceAnnualUsd: 0,
+    priceAnnualMonthlyUsd: 0,
+    limits: { contacts: 2_500, emailsPerMonth: 25_000, seats: 5, aiTokensPerMonth: 900_000 },
+    lifetime: true,
+    managedSending: false,
+    features: ["2,500 customer profiles", "25,000 emails per month", "AI flow builder", "5 team members", "Send through your own email provider"],
+  },
+  lifetime_3: {
+    id: "lifetime_3",
+    name: "Lifetime Tier 3",
+    tagline: "Three codes stacked. Yours for life.",
+    priceMonthlyUsd: 0,
+    priceAnnualUsd: 0,
+    priceAnnualMonthlyUsd: 0,
+    limits: { contacts: 5_000, emailsPerMonth: 60_000, seats: 10, aiTokensPerMonth: 2_000_000 },
+    lifetime: true,
+    managedSending: false,
+    features: ["5,000 customer profiles", "60,000 emails per month", "AI flow builder", "10 team members", "Send through your own email provider"],
   },
 };
 
@@ -200,6 +258,21 @@ export function parseAddonCheckoutPlan(plan: string | null | undefined): AddonKi
   return isAddonKind(kind) ? kind : null;
 }
 
+/** The lifetime plan for licences adding up to `total` tiers, or null for none. More than the maximum counts as the maximum. */
+export function lifetimePlanForTotal(total: number): LifetimePlanId | null {
+  if (!Number.isFinite(total) || total < 1) return null;
+  return LIFETIME_PLAN_IDS[Math.min(Math.floor(total), MAX_LIFETIME_TIER) - 1]!;
+}
+
+export function isLifetimePlanId(value: unknown): value is LifetimePlanId {
+  return typeof value === "string" && (LIFETIME_PLAN_IDS as readonly string[]).includes(value);
+}
+
+/** 1 to 3 for a lifetime plan, otherwise null. */
+export function lifetimeTier(plan: unknown): 1 | 2 | 3 | null {
+  return isLifetimePlanId(plan) ? ((LIFETIME_PLAN_IDS.indexOf(plan) + 1) as 1 | 2 | 3) : null;
+}
+
 export function isPlanId(value: unknown): value is PlanId {
   return typeof value === "string" && (PLAN_IDS as readonly string[]).includes(value);
 }
@@ -212,11 +285,11 @@ export type BillingInterval = "monthly" | "yearly";
 
 export const BILLING_INTERVALS: readonly BillingInterval[] = ["monthly", "yearly"];
 
-/** A plan that costs money (everything but Free). */
-export type PaidPlanId = Exclude<PlanId, "free">;
+/** A plan that is bought by subscription: only Essential. (Lifetime plans are redeemed, never charged.) */
+export type PaidPlanId = Exclude<PlanId, "free" | LifetimePlanId>;
 
 export function isPaidPlanId(value: unknown): value is PaidPlanId {
-  return isPlanId(value) && value !== "free";
+  return isPlanId(value) && value !== "free" && !isLifetimePlanId(value);
 }
 
 export function isBillingInterval(value: unknown): value is BillingInterval {

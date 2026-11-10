@@ -14,14 +14,17 @@ import {
 } from "../src/index.js";
 
 describe("AI allowance per plan", () => {
-  it("every plan has a monthly AI token allowance and it grows with the plan", () => {
+  it("every plan has a monthly AI token allowance and it grows with the subscription ladder", () => {
+    // free (none) < essential; the lifetime tiers sit between, each above the one before.
+    const order = ["free", "lifetime_1", "lifetime_2", "lifetime_3", "essential"] as const;
     let prev = -1;
-    for (const id of PLAN_IDS) {
+    for (const id of order) {
       const cap = PLANS[id].limits.aiTokensPerMonth;
-      expect(cap).not.toBeNull();
-      expect(cap!).toBeGreaterThan(prev);
+      expect(cap, id).not.toBeNull();
+      expect(cap!, id).toBeGreaterThan(prev);
       prev = cap!;
     }
+    for (const id of PLAN_IDS) expect(PLANS[id].limits.aiTokensPerMonth, id).not.toBeNull();
   });
 
   it("the plan's feature list names the AI flow builder", () => {
