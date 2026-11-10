@@ -5,7 +5,7 @@
  *
  * Owners only. With no key given it uses the code the buyer left waiting in this browser (see
  * appsumo/pending.ts), so someone who came from AppSumo only has to press one button after signing up.
- * A second code stacks on the same workspace, up to the top tier.
+ * There is one lifetime tier, so a second code in the same workspace is refused.
  *
  * Mirror side: PUBLIC (packages/api is mirrored).
  */

@@ -706,13 +706,12 @@ function LifetimeSection({ plan, isOwner }: { plan: PlanInfo; isOwner: boolean }
     <Section
       title="Lifetime deal"
       configured={null}
-      description="Bought the AppSumo lifetime deal? Redeem your code here. A second code on the same workspace stacks to the next tier."
+      description="Bought the AppSumo lifetime deal? Redeem your code here. One code unlocks this workspace for good."
       actions={tierName ? <Badge variant="accent">{tierName}</Badge> : undefined}
     >
       {L.license && (
         <Notice variant="info" className="mb-4">
-          <b>{tierName}</b> is active on this workspace (licence {L.license.key_hint}).{" "}
-          {L.license.tier < L.max_tier ? "Need more room? Buy another code and redeem it here to stack it." : "That is the top tier. Thank you for backing us early."}
+          <b>{tierName}</b> is active on this workspace (licence {L.license.key_hint}). Thank you for backing us early.
         </Notice>
       )}
       {done && (
@@ -765,7 +764,7 @@ function LifetimeSection({ plan, isOwner }: { plan: PlanInfo; isOwner: boolean }
       )}
       {!isOwner && <p className="text-[13px] text-muted-foreground">Only a workspace owner can redeem a code.</p>}
 
-      <div className="mt-5 grid gap-3 md:grid-cols-3">
+      <div className="mt-5 grid gap-3 md:max-w-sm">
         {L.tiers.map((t) => (
           <div key={t.id} className={cn("rounded-lg border p-3", L.license?.tier === t.tier ? "border-accent bg-accent-soft/40" : "border-border bg-card")}>
             <p className="text-[14px] font-semibold text-foreground">{t.name}</p>

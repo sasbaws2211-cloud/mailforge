@@ -340,9 +340,9 @@ ${cta}
   <div class="center">
     <p class="eyebrow">Pricing</p>
     <h1 style="font-size:clamp(2rem,4.4vw,3rem)">${lifetimeOnly ? "Pay once. Use it forever." : "One plan. Everything included."}</h1>
-    <p class="lead">${lifetimeOnly ? "Three lifetime tiers on AppSumo: buy a second or third code to stack them. " : "One simple price, every feature. "}${esc(noteFor(ctx))}</p>
+    <p class="lead">${lifetimeOnly ? "One lifetime deal on AppSumo. " : "One simple price, every feature. "}${esc(noteFor(ctx))}</p>
   </div>
-  <div class="${lifetimeOnly ? "plans" : "plans single"}"${lifetimeOnly ? ' style="grid-template-columns:repeat(3,1fr)"' : ""}>${lifetimeOnly ? lifetimeCards : cards}</div>
+  <div class="plans single">${lifetimeOnly ? lifetimeCards : cards}</div>
   ${offerStrip}
   <div class="center" style="margin-top:56px">
     <h2>Extra usage</h2>
@@ -483,7 +483,7 @@ export function redeemPage(ctx: SiteContext, state: { error?: string; code?: str
   <ol class="muted" style="margin-top:28px;padding-left:20px">
     <li>Create a ${SITE_NAME} account, or sign in.</li>
     <li>Enter your code here, or paste it under <b>Settings, Plan</b> in the app.</li>
-    <li>Have a second code? Redeem it the same way on the same workspace to stack it, up to ${LIFETIME_PLAN_IDS.length} tiers.</li>
+    <li>One code unlocks one workspace for good. Need another workspace? Use another code there.</li>
   </ol>
   <p class="muted" style="margin-top:20px">Already have an account? <a href="/login">Sign in</a>. Need help? <a href="mailto:${esc(ctx.supportEmail)}">${esc(ctx.supportEmail)}</a></p>
 </div>`;

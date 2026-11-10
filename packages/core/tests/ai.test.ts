@@ -15,8 +15,8 @@ import {
 
 describe("AI allowance per plan", () => {
   it("every plan has a monthly AI token allowance and it grows with the subscription ladder", () => {
-    // free (none) < essential; the lifetime tiers sit between, each above the one before.
-    const order = ["free", "lifetime_1", "lifetime_2", "lifetime_3", "essential"] as const;
+    // free (none) < lifetime < essential.
+    const order = ["free", "lifetime_1", "essential"] as const;
     let prev = -1;
     for (const id of order) {
       const cap = PLANS[id].limits.aiTokensPerMonth;

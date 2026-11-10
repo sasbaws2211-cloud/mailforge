@@ -1,5 +1,5 @@
 /**
- * AppSumo lifetime deals: the signed webhook, redeeming and stacking licences, the codes Loomail generates,
+ * AppSumo lifetime deals: the signed webhook, redeeming a licence (one per workspace), the codes Loomail generates,
  * refunds, the billing mode, and the admin endpoints. Runs against a real database.
  *
  * Needs a reachable Postgres via DATABASE_URL, like the other *.db tests.
@@ -230,9 +230,9 @@ describe("redeeming a licence from the dashboard", () => {
     const plan = (await app.inject({ method: "GET", url: "/v1/plan", cookies: cookie(t) })).json();
     expect(plan.plan.id).toBe("lifetime_1");
     expect(plan.meters.contacts.limit).toBe(PLANS.lifetime_1.limits.contacts);
-    expect(plan.lifetime).toMatchObject({ on_lifetime_plan: true, max_tier: 3, mode: "both" });
+    expect(plan.lifetime).toMatchObject({ on_lifetime_plan: true, max_tier: 1, mode: "both" });
     expect(plan.lifetime.license).toMatchObject({ tier: 1 });
-    expect(plan.lifetime.tiers).toHaveLength(3);
+    expect(plan.lifetime.tiers).toHaveLength(1);
     // Lifetime tiers are never offered as something to buy.
     expect(plan.plans.map((p: { id: string }) => p.id)).toEqual(["essential"]);
     expect((await app.inject({ method: "POST", url: "/v1/sending/enable", cookies: cookie(t) })).statusCode).not.toBe(200);
@@ -259,16 +259,17 @@ describe("redeeming a licence from the dashboard", () => {
     expect(await planOf(sub)).toBe("essential");
   });
 
-  it("follows upgrades, keeps access when the old key is refunded, and ends it when the last one is", async () => {
+  it("follows an upgrade to the new key (still the one lifetime tier), keeps access when the old key is refunded, and ends it with the last", async () => {
     if (!dbAvailable) return;
     const t = await newTenant();
     await hook("purchase", K("U1"), { tier: 1 });
     await redeem(t, K("U1"));
-    expect((await hook("upgrade", K("U2"), { tier: 2, prev: K("U1") })).statusCode).toBe(200);
-    expect(await planOf(t)).toBe("lifetime_2");
+    expect((await hook("upgrade", K("U2"), { tier: 3, prev: K("U1") })).statusCode).toBe(200);
+    expect(await planOf(t)).toBe("lifetime_1"); // there is one tier, however high AppSumo says
     expect((await lic(K("U1")))!.status).toBe("superseded");
+    expect((await lic(K("U2")))!.tenant_id).toBe(t.id);
     expect((await hook("deactivate", K("U1"))).statusCode).toBe(200); // the replaced key being refunded changes nothing
-    expect(await planOf(t)).toBe("lifetime_2");
+    expect(await planOf(t)).toBe("lifetime_1");
     expect((await hook("deactivate", K("U2"))).statusCode).toBe(200);
     expect(await planOf(t)).toBe("free"); // no plan: the data stays, limits drop to nothing
     const again = await redeem(t, K("U2"));
@@ -302,37 +303,34 @@ describe("codes Loomail generates", () => {
     expect(overview.spots.sold).toBe(0);
   });
 
-  it("stacks up to tier 3, refuses a fourth, and refunds drop a tier at a time", async () => {
+  it("allows one code per workspace, refuses a second, and a refund ends it", async () => {
     if (!dbAvailable) return;
     const admin = await newTenant({ email: ADMIN_EMAIL });
-    await app.inject({ method: "POST", url: "/v1/admin/lifetime/codes", cookies: cookie(admin), payload: { count: 4, reason: "test" }, headers: { "content-type": "application/json" } });
+    await app.inject({ method: "POST", url: "/v1/admin/lifetime/codes", cookies: cookie(admin), payload: { count: 2, reason: "test" }, headers: { "content-type": "application/json" } });
     const codes = (await q<{ license_key: string }>(sql`SELECT license_key FROM lifetime_licenses WHERE source = 'code' ORDER BY license_key`)).map((r) => r.license_key);
     const t = await newTenant();
     // typed without dashes, in lower case
     const typed = codes[0]!.replace(/-/g, "").toLowerCase();
-    expect((await redeem(t, "  " + typed + " ")).json()).toMatchObject({ tier: 1 });
-    expect((await redeem(t, codes[1]!)).json()).toMatchObject({ tier: 2 });
-    expect((await redeem(t, codes[2]!)).json()).toMatchObject({ tier: 3 });
-    expect(await planOf(t)).toBe("lifetime_3");
-    const fourth = await redeem(t, codes[3]!);
-    expect(fourth.statusCode).toBe(409);
+    expect((await redeem(t, "  " + typed + " ")).json()).toMatchObject({ tier: 1, plan_code: "lifetime_1" });
+    expect(await planOf(t)).toBe("lifetime_1");
+    const second = await redeem(t, codes[1]!);
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error).toMatch(/already has a lifetime licence/);
     expect((await redeem(t, codes[0]!)).statusCode).toBe(200); // the same code twice is harmless
+    expect(await lic(codes[1]!)).toMatchObject({ status: "inactive", tenant_id: null }); // the refused code is untouched
 
     const refund = (code: string) =>
       app.inject({ method: "POST", url: "/v1/admin/lifetime/codes/refund", cookies: cookie(admin), payload: { code, reason: "AppSumo refund" }, headers: { "content-type": "application/json" } });
-    expect((await refund(codes[2]!)).statusCode).toBe(200);
-    expect(await planOf(t)).toBe("lifetime_2");
-    expect((await refund(codes[1]!)).statusCode).toBe(200);
-    expect(await planOf(t)).toBe("lifetime_1");
     expect((await refund(codes[0]!)).statusCode).toBe(200);
     expect(await planOf(t)).toBe("free");
     expect((await refund(codes[0]!)).json().result).toMatch(/deactivated/);
-    // It cannot be used again.
+    // The refunded code cannot be used again; the other one still works in another workspace.
     const t2 = await newTenant();
     expect((await redeem(t2, codes[0]!)).statusCode).toBe(400);
+    expect((await redeem(t2, codes[1]!)).statusCode).toBe(200);
     const actions = await q<{ action: string }>(sql`SELECT action FROM admin_audit_log WHERE action LIKE 'lifetime_%'`);
-    expect(actions.map((a) => a.action)).toContain("lifetime_codes_generated");
-    expect(actions.filter((a) => a.action === "lifetime_code_refunded").length).toBeGreaterThanOrEqual(3);
+    expect(actions.map((x) => x.action)).toContain("lifetime_codes_generated");
+    expect(actions.filter((x) => x.action === "lifetime_code_refunded").length).toBeGreaterThanOrEqual(1);
   });
 
   it("will not refund a licence that came from AppSumo by hand: AppSumo's webhook does that", async () => {
@@ -435,7 +433,9 @@ describe("the billing mode", () => {
 
     const only = await app.inject({ method: "GET", url: "/pricing" });
     expect(only.body).toContain("Pay once. Use it forever.");
-    expect(only.body).toContain("Lifetime Tier 3");
+    expect(only.body).toContain("Lifetime");
+    expect(only.body).not.toContain("Lifetime Tier");
+    expect(only.body.match(/<div class="plan-card/g)).toHaveLength(1);
     expect(only.body).not.toContain("Start 7-day free trial");
     expect(only.body).toContain("Get the lifetime deal");
     expect((await app.inject({ method: "GET", url: "/signup" })).body).toContain("Create your account");
