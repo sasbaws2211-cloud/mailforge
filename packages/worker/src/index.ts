@@ -37,7 +37,6 @@ import { processDrainTick, fetchDrainBatchSimple, type FetchDrainBatch } from ".
 import { processReapTick } from "./reap.js";
 import { sweepAnonymous } from "./anonymous-retention.js";
 import { processWebhookDeliveries, sweepWebhookDeliveries } from "./webhook-delivery.js";
-import { sweepInboundLog } from "./inbound-retention.js";
 import { processCounterRollover } from "./counter-rollover.js";
 import { processPartitionMaintenance } from "./partition-maintenance.js";
 import { processContentTick } from "./content.js";
@@ -370,14 +369,6 @@ export async function startWorker(boss: PgBoss, db: Db): Promise<void> {
         for (const f of purge.failed) console.error(`[purge] FAILED for ${f.tenantId}: ${f.error}`);
       } catch (err) {
         console.error("[purge] tick failed:", err);
-      }
-
-      // What inbound sources received, past its retention.
-      try {
-        const swept = await sweepInboundLog(db, now);
-        if (swept > 0) console.log(`[inbound] swept ${swept} old log lines`);
-      } catch (err) {
-        console.error("[inbound] sweep failed:", err);
       }
 
       // Finished webhook deliveries past their retention.

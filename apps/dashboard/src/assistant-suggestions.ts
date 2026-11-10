@@ -6,7 +6,7 @@
  */
 /** Starter questions that fit the page the person is on. */
 export function suggestionsFor(pathname: string): string[] {
-  if (pathname.startsWith("/integrate")) return ["How do I send my first event?", "How do I connect a form or a payment tool?", "How do I read data from my database?"];
+  if (pathname.startsWith("/integrate")) return ["How do I send my first event?", "Where do I find my API keys?", "How do I add Loomail to my website?"];
   if (pathname.startsWith("/flows")) return ["How do I create my first flow?", "Why is my flow not sending anything?", "What is the approval queue?"];
   if (pathname.startsWith("/people")) return ["How do I import my contacts?", "Why can I not email this person?", "What are lifecycle states?"];
   if (pathname.startsWith("/segments")) return ["What is a segment?", "How do I start a flow from a segment?"];

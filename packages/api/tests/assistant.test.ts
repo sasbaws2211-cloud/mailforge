@@ -122,24 +122,15 @@ describe("finding an answer", () => {
   const has = (q: string, pattern: RegExp, n = 3) => expect(top(q, n).some((t) => pattern.test(t)), `${q} -> ${top(q, n).join(" | ")}`).toBe(true);
 
   it("finds the right guide or page for real questions", () => {
-    has("How do I connect my MySQL database through an SSH tunnel?", /Data warehouse guide.*SSH tunnel/);
-    has("connect Typeform to Loomail", /Typeform|Connect other tools/);
     has("why are my emails not sending", /not sending|Email sending/);
     has("what is a segment", /Segments/);
     has("how do I delete my workspace", /deletion/i);
     has("how do I send an event from my website", /Integrate/);
     has("what is the approval queue", /approval queue/i);
     has("how do I invite a teammate", /Team/);
-    has("Stripe webhook signing secret", /Stripe/);
     has("how to write a flow prompt for onboarding", /Onboarding/);
     has("how do I set my postal address", /Postal address/);
     has("what does the lifecycle page show", /Lifecycle/);
-    has("my webhook source shows rejected", /webhook sources|Ready-made|Any JSON webhook/i, 4);
-  });
-
-  it("finds a tool's own piece when asked about it by name", () => {
-    expect(retrieve("does Loomail support Shopify", null).chunks.some((c) => /Shopify/.test(c.text))).toBe(true);
-    expect(retrieve("how do I connect Tally for my waitlist", null).chunks.some((c) => /Tally/.test(c.text))).toBe(true);
   });
 
   it("meets different forms of a word", () => {

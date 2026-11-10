@@ -165,10 +165,6 @@ export function auditSummary(e: AdminAuditEntry): string {
       const after = (d.after ?? {}) as { ai_allowance_override?: number | null };
       return `Set the AI allowance to ${describeAllowance(after.ai_allowance_override)}`;
     }
-    case "set_warehouse_access": {
-      const after = (d.after ?? {}) as { warehouse_access?: boolean };
-      return after.warehouse_access ? "Switched warehouse sources on" : "Switched warehouse sources off";
-    }
     case "managed_sending_pause":
       return "Paused managed sending";
     case "managed_sending_resume":

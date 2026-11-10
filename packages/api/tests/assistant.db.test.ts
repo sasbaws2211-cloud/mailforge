@@ -30,7 +30,7 @@ interface Call {
   max_tokens?: number;
 }
 const calls: Call[] = [];
-let reply: string | (() => Promise<string>) = "Open **Integrate** and add a source.";
+let reply: string | (() => Promise<string>) = "Open **Integrate** and copy the snippet.";
 const fake: LlmProvider = {
   async complete(opts) {
     calls.push({ messages: opts.messages as Call["messages"], temperature: opts.temperature, max_tokens: opts.max_tokens });
@@ -96,7 +96,7 @@ afterAll(async () => {
 });
 beforeEach(() => {
   calls.length = 0;
-  reply = "Open **Integrate** and add a source.";
+  reply = "Open **Integrate** and copy the snippet.";
 });
 
 describe("who can ask", () => {
@@ -107,7 +107,7 @@ describe("who can ask", () => {
 
   it("is not offered to a suspended workspace or one waiting for deletion", async () => {
     for (const w of [who.locked!, who.pending!]) {
-      expect((await ask(w, q("how do I connect Typeform?"))).status).toBe(403);
+      expect((await ask(w, q("how do I send my first event?"))).status).toBe(403);
       expect((await status(w)).status).toBe(403);
     }
     expect(calls).toHaveLength(0);
@@ -136,9 +136,9 @@ describe("who can ask", () => {
 
 describe("answering", () => {
   it("answers from the documentation, shows where it came from, and sends the model the rules, the page and this workspace's facts", async () => {
-    const r = await ask(who.paid!, q("How do I connect Typeform to Loomail?"), { page: "/integrate" });
+    const r = await ask(who.paid!, q("How do I send my first event to Loomail?"), { page: "/integrate" });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
-    expect(r.body.answer).toBe("Open **Integrate** and add a source.");
+    expect(r.body.answer).toBe("Open **Integrate** and copy the snippet.");
     expect(r.body.sources.length).toBeGreaterThan(0);
     expect(r.body.sources.length).toBeLessThanOrEqual(3);
     expect(r.body.sources.every((s: any) => typeof s.source === "string" && typeof s.heading === "string")).toBe(true);
@@ -149,11 +149,11 @@ describe("answering", () => {
     const [system, user] = calls[0]!.messages;
     expect(calls[0]!.messages.map((m) => m.role)).toEqual(["system", "user"]);
     expect(system!.content).toContain("You are the Loomail assistant");
-    expect(system!.content).toContain("Typeform"); // the documentation about it was found
+    expect(system!.content).toContain("event"); // the documentation about it was found
     expect(system!.content).toContain("Plan: Essential");
     expect(system!.content).toContain("Business postal address entered: yes");
     expect(system!.content).toContain("Integrate: getting data into Loomail (/integrate)");
-    expect(user!.content).toBe("How do I connect Typeform to Loomail?");
+    expect(user!.content).toBe("How do I send my first event to Loomail?");
     expect(calls[0]).toMatchObject({ temperature: 0.2, max_tokens: 1200 });
   });
 
@@ -178,13 +178,13 @@ describe("answering", () => {
 
   it("carries the conversation so a follow-up makes sense, and ignores a page that is not a dashboard path", async () => {
     await ask(who.paid!, [
-      { role: "user", content: "How do I connect a MySQL database?" },
-      { role: "assistant", content: "Open Integrate, then Data warehouse." },
-      { role: "user", content: "and SQL Server?" },
+      { role: "user", content: "How do I create an API key?" },
+      { role: "assistant", content: "Open Integrate, then API keys." },
+      { role: "user", content: "and a second one?" },
     ], { page: "https://evil.example/x" });
     const m = calls[0]!.messages;
     expect(m.map((x) => x.role)).toEqual(["system", "user", "assistant", "user"]);
-    expect(m[0]!.content).toContain("Data warehouse"); // found through the earlier question
+    expect(m[0]!.content).toContain("API key"); // found through the earlier question
     expect(m[0]!.content).toContain("<current_page>\nunknown");
   });
 
@@ -211,17 +211,17 @@ describe("answering", () => {
     reply = async () => {
       throw new Error("401 invalid api key sk-SECRET-123 at https://internal.example");
     };
-    const r = await ask(who.paid!, q("how do I connect Typeform"));
+    const r = await ask(who.paid!, q("how do I send my first event"));
     expect(r.status).toBe(502);
     expect(JSON.stringify(r.body)).not.toMatch(/SECRET|internal|invalid api key/i);
     expect(r.body.code).toBe("assistant_error");
     reply = "   ";
-    expect((await ask(who.paid!, q("how do I connect Typeform"))).status).toBe(502); // an empty answer is not an answer
+    expect((await ask(who.paid!, q("how do I send my first event"))).status).toBe(502); // an empty answer is not an answer
 
     reply = () => new Promise<string>(() => {}); // never answers
     const slow = await buildApp({ db, logger: false, assistantProvider: fake, assistantTimeoutMs: 150 });
     await slow.ready();
-    const t = await ask(who.paid!, q("how do I connect Typeform"), {}, slow);
+    const t = await ask(who.paid!, q("how do I send my first event"), {}, slow);
     expect(t.status).toBe(502);
     await slow.close();
   });
@@ -231,7 +231,7 @@ describe("limits", () => {
   it("gives a trial workspace a daily number of questions, then says when they come back", async () => {
     const results: Array<{ status: number; remaining?: number }> = [];
     for (let i = 0; i < 4; i++) {
-      const r = await ask(who.trial!, q(`how do I connect Typeform? ${i}`));
+      const r = await ask(who.trial!, q(`how do I send my first event? ${i}`));
       results.push({ status: r.status, remaining: r.body.remaining });
     }
     expect(results).toEqual([{ status: 200, remaining: 2 }, { status: 200, remaining: 1 }, { status: 200, remaining: 0 }, { status: 429, remaining: undefined }]);
