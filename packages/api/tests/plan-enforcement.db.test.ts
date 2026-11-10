@@ -418,6 +418,16 @@ describe("GET /v1/plan", () => {
     expect(p.shows_powered_by).toBe(true);
   });
 
+  it("offers extra AI credits only where Loomail AI is capped", async () => {
+    if (!dbAvailable) return;
+    enforce(true);
+    const lifetime = await planOf(await newTenant("lifetime_1"));
+    expect(lifetime.meters.ai).toMatchObject({ limit: null, state: "unlimited" });
+    expect(lifetime.addons.map((a: { kind: string }) => a.kind)).toEqual(["profiles", "emails"]);
+    const essential = await planOf(await newTenant("essential"));
+    expect(essential.addons.map((a: { kind: string }) => a.kind)).toEqual(["profiles", "emails", "ai"]);
+  });
+
   it("flags meters as ok, near, at limit and over", async () => {
     if (!dbAvailable) return;
     enforce(true);

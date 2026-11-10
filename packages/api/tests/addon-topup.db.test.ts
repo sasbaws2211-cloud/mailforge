@@ -38,10 +38,10 @@ async function q<T>(query: ReturnType<typeof sql>): Promise<T[]> {
   return (await db.execute(query)).rows as T[];
 }
 
-async function newTenant(): Promise<{ id: string; userId: string; email: string }> {
+async function newTenant(plan = "essential"): Promise<{ id: string; userId: string; email: string }> {
   const slug = `addon-${Date.now()}-${counter++}`;
   const [t] = await q<{ id: string }>(
-    sql`INSERT INTO tenants (name, slug, plan, plan_paid_through) VALUES (${"Acme " + slug}, ${slug}, 'essential', null) RETURNING id`,
+    sql`INSERT INTO tenants (name, slug, plan, plan_paid_through) VALUES (${"Acme " + slug}, ${slug}, ${plan}, null) RETURNING id`,
   );
   const email = `${slug}@addon.example`;
   const [u] = await q<{ id: string }>(sql`INSERT INTO users (tenant_id, email, role) VALUES (${t!.id}::uuid, ${email}, 'owner') RETURNING id`);
@@ -160,6 +160,18 @@ describe("prepaid top-ups", () => {
     expect(now.limits.aiTokensPerMonth).toBe(PLANS.essential.limits.aiTokensPerMonth);
     const then = await loadEntitlements(d, t.id, new Date("2020-03-20T00:00:00Z"));
     expect(then.limits.aiTokensPerMonth).toBe(PLANS.essential.limits.aiTokensPerMonth! + 100_000);
+  });
+
+  it("does not sell extra AI credits where Loomail AI has no cap, but sells the rest", async () => {
+    if (!dbAvailable) return;
+    const t = await newTenant("lifetime_1");
+    const d = db as unknown as Db;
+    const input = { tenantId: t.id, userId: t.userId, email: t.email, workspaceName: "A", packs: 1 };
+    await expect(startAddonCheckout(d, fakePs, cfg, { ...input, kind: "ai" })).rejects.toMatchObject({ code: "addon_not_needed" });
+    await expect(startAddonCheckout(d, fakePs, cfg, { ...input, kind: "profiles" })).resolves.toMatchObject({ url: expect.any(String) });
+    // A plan that does cap AI can still top it up.
+    const capped = await newTenant("essential");
+    await expect(startAddonCheckout(d, fakePs, cfg, { ...input, tenantId: capped.id, userId: capped.userId, email: capped.email, kind: "ai" })).resolves.toMatchObject({ url: expect.any(String) });
   });
 
   it("refuses an invalid kind or pack count", async () => {

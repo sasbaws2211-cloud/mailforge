@@ -30,6 +30,7 @@ import {
   chargeAmountMinor,
   isAddonKind,
   isValidPackCount,
+  limitFor,
   parseAddonCheckoutPlan,
   startOfMonthUtc,
   type AddonKind,
@@ -53,11 +54,12 @@ import {
   tenants,
 } from "@loomail/db/schema";
 import type { Db } from "../plugins/db.js";
+import { loadEntitlements } from "../plan/usage.js";
 import { PaystackError, type PaystackClient, type PaystackTransaction } from "./paystack.js";
 
 const PROVIDER = "paystack";
 
-export type BillingErrorCode = "invalid_plan" | "already_subscribed" | "no_subscription" | "provider_error";
+export type BillingErrorCode = "invalid_plan" | "already_subscribed" | "no_subscription" | "provider_error" | "addon_not_needed";
 
 export class BillingError extends Error {
   constructor(
@@ -253,6 +255,13 @@ export async function startAddonCheckout(
   }
   if (input.repeat && input.packs > MAX_REPEAT_PACKS) {
     throw new BillingError("invalid_plan", `A top-up that repeats every month can be up to ${MAX_REPEAT_PACKS} packs.`, 400);
+  }
+  // Extra AI credits do nothing where Loomail AI has no cap (the lifetime plan, or a hand-set unlimited allowance).
+  if (input.kind === "ai") {
+    const ent = await loadEntitlements(db, input.tenantId);
+    if (ent.enforced && limitFor(ent, "ai") === null) {
+      throw new BillingError("addon_not_needed", "Your plan has no cap on Loomail AI, so there is nothing to top up.", 400);
+    }
   }
   const usd = addonPriceUsd(input.kind, input.packs);
   const amountCents = chargeAmountMinor(usd, cfg.currency, cfg.usdRate);

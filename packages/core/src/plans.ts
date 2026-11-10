@@ -139,7 +139,7 @@ export const PLANS: Readonly<Record<PlanId, PlanDef>> = {
     priceMonthlyUsd: 0,
     priceAnnualUsd: 0,
     priceAnnualMonthlyUsd: 0,
-    limits: { contacts: 1_000, emailsPerMonth: 10_000, seats: 2, aiTokensPerMonth: 300_000 },
+    limits: { contacts: 1_000, emailsPerMonth: 10_000, seats: 2, aiTokensPerMonth: null },
     lifetime: true,
     managedSending: false,
     features: ["1,000 customer profiles", "10,000 emails per month", "AI flow builder", "2 team members", "Send through your own email provider"],

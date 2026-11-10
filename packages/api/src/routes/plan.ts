@@ -151,7 +151,9 @@ const planRoutes: FastifyPluginAsync<{ billing?: BillingRuntime }> = async (app,
         };
       }),
       // Prepaid top-ups: what one pack is, what it costs, and the charge in the charge currency.
-      addons: ADDON_KINDS.map((kind) => {
+      // AI credits are not offered where Loomail AI has no cap (the lifetime plan, or a hand-set unlimited allowance):
+      // buying them would change nothing.
+      addons: ADDON_KINDS.filter((kind) => !(kind === "ai" && ent.enforced && limitFor(ent, "ai") === null)).map((kind) => {
         const a = ADDONS[kind];
         const usd = a.packPriceCents / 100;
         return {
