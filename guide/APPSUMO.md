@@ -27,7 +27,7 @@ money. **Review them before you launch.**
 | Customer profiles | 1,000 |
 | Emails per month | 10,000 |
 | Team members | 2 |
-| Loomail AI tokens per month | 300,000 |
+| Loomail AI tokens per month | No cap |
 
 AppSumo sets the price you charge; this only decides what the licence unlocks. Customers can still buy pay-as-you-go top-ups
 (extra profiles, emails, AI credits) on the lifetime plan.

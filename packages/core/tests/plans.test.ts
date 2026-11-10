@@ -210,17 +210,17 @@ describe("the lifetime plan", () => {
     expect(effectivePlan("lifetime_1", null, now, new Date("2020-01-01T00:00:00Z"))).toBe("lifetime_1");
   });
 
-  it("has fixed monthly caps for everything that costs money, no price, and sends through the customer's own provider", () => {
+  it("caps profiles, emails and seats, has no AI cap, no price, and sends through the customer's own provider", () => {
     const p = PLANS.lifetime_1;
     expect(p.name).toBe("Lifetime");
     expect(p.lifetime).toBe(true);
     expect(p.managedSending).toBe(false);
     expect(p.priceMonthlyUsd).toBe(0);
-    for (const k of ["contacts", "emailsPerMonth", "seats", "aiTokensPerMonth"] as const) expect(p.limits[k], k).not.toBeNull();
+    for (const k of ["contacts", "emailsPerMonth", "seats"] as const) expect(p.limits[k], k).not.toBeNull();
+    expect(p.limits.aiTokensPerMonth).toBeNull(); // Loomail AI is not metered on the lifetime plan
     // It stays well below the monthly plan it would otherwise cannibalise.
     expect(p.limits.contacts!).toBeLessThan(PLANS.essential.limits.contacts!);
     expect(p.limits.emailsPerMonth!).toBeLessThan(PLANS.essential.limits.emailsPerMonth!);
-    expect(p.limits.aiTokensPerMonth!).toBeLessThan(PLANS.essential.limits.aiTokensPerMonth!);
   });
 
   it("does not allow Loomail Sending on a hosted workspace, but never restricts a self-hosted one", async () => {

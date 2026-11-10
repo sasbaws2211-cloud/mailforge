@@ -392,7 +392,7 @@ describe("which AI serves a workspace", () => {
 describe("the customer's view: GET /v1/settings/llm", () => {
   it("says none, then platform, then byok as things are set up", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "lifetime_1" });
+    const c = await newTenant({ plan: "essential" });
     let r = (await call("GET", "/v1/settings/llm", c.session)).json();
     expect(r.llm).toBeNull();
     expect(r.ai.source).toBe("none");
@@ -412,12 +412,12 @@ describe("the customer's view: GET /v1/settings/llm", () => {
 
   it("shows the plan allowance and what has been used, when plans are enforced", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "lifetime_1" });
+    const c = await newTenant({ plan: "essential" });
     await setPlatform(admin, "primary", "sk-pri");
     await addUsage(c, "platform", 1234);
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const r = (await call("GET", "/v1/settings/llm", c.session)).json();
-    expect(r.ai.allowance).toMatchObject({ plan: "Lifetime", limit: 300_000, used: 1234, spent: false });
+    expect(r.ai.allowance).toMatchObject({ plan: "Essential", limit: 8_000_000, used: 1234, spent: false });
     expect(typeof r.ai.allowance.resets_at).toBe("string");
   });
 
@@ -465,7 +465,7 @@ describe("the plan meter", () => {
   });
 
   it("counts only the current calendar month", async () => {
-    const c = await newTenant({ plan: "lifetime_1" });
+    const c = await newTenant({ plan: "essential" });
     await db.execute(sql`INSERT INTO llm_usage (tenant_id, feature, source, provider, total_tokens, created_at) VALUES (${c.id}::uuid, 'content', 'platform', 'custom', 250000, now() - interval '40 days')`);
     await addUsage(c, "platform", 1000);
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
@@ -485,9 +485,9 @@ describe("compile: AI must be available", () => {
 
   it("goes ahead on Loomail AI while the allowance lasts", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "lifetime_1" });
+    const c = await newTenant({ plan: "essential" });
     await setPlatform(admin, "primary", "sk-pri");
-    await addUsage(c, "platform", 299_999);
+    await addUsage(c, "platform", 7_999_999);
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const f = await makeFlow(c);
     const r = await call("POST", `/v1/flows/${f}/compile`, c.session);
@@ -497,9 +497,9 @@ describe("compile: AI must be available", () => {
 
   it("is refused with 402 once the month's allowance is spent, naming both ways out", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "lifetime_1" });
+    const c = await newTenant({ plan: "essential" });
     await setPlatform(admin, "primary", "sk-pri");
-    await addUsage(c, "platform", 300_000);
+    await addUsage(c, "platform", 8_000_000);
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const f = await makeFlow(c);
     const r = await call("POST", `/v1/flows/${f}/compile`, c.session);
@@ -524,7 +524,7 @@ describe("AI draft: served, metered and tagged", () => {
 
   it("on Loomail AI: uses the operator's key and records platform usage", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "lifetime_1" });
+    const c = await newTenant({ plan: "essential" });
     await setPlatform(admin, "primary", "sk-pri");
     stubCalls.length = 0;
     const r = await draft(c, await makeFlow(c));
@@ -578,9 +578,9 @@ describe("AI draft: served, metered and tagged", () => {
 
   it("refuses with 402 when the allowance is spent, and makes no call to the provider", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "lifetime_1" });
+    const c = await newTenant({ plan: "essential" });
     await setPlatform(admin, "primary", "sk-pri");
-    await addUsage(c, "platform", 300_000);
+    await addUsage(c, "platform", 8_000_000);
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     stubCalls.length = 0;
     const r = await draft(c, await makeFlow(c));
@@ -619,10 +619,10 @@ describe("admin console: usage views", () => {
 
   it("each workspace's detail shows its AI source, usage and allowance", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "lifetime_1" });
+    const c = await newTenant({ plan: "essential" });
     await addUsage(c, "platform", 4000);
     let d = (await call("GET", `/v1/admin/tenants/${c.id}`, admin.session)).json();
-    expect(d.ai).toMatchObject({ source: "platform", platform_tokens_this_month: 4000, calls_this_month: 1, allowance_tokens: 300_000 });
+    expect(d.ai).toMatchObject({ source: "platform", platform_tokens_this_month: 4000, calls_this_month: 1, allowance_tokens: 8_000_000 });
     await giveOwnKey(c, "sk-own");
     d = (await call("GET", `/v1/admin/tenants/${c.id}`, admin.session)).json();
     expect(d.ai.source).toBe("byok");

@@ -220,15 +220,15 @@ describe("the monthly allowance", () => {
   it("blocks Loomail AI exactly when the plan's tokens are used up, with a retry-later code", async () => {
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
-    const t = await newTenant("lifetime_1"); // 300,000 a month
-    await addUsage(t, 299_999);
+    const t = await newTenant("essential"); // 8,000,000 a month
+    await addUsage(t, 7_999_999);
     expect((await resolveTenantProvider(db, t, "content")).ok).toBe(true);
     await addUsage(t, 1);
     const r = await resolveTenantProvider(db, t, "content");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.code).toBe("allowance");
-      expect(r.reason).toMatch(/Lifetime plan/);
+      expect(r.reason).toMatch(/Essential plan/);
       expect(r.reason).toMatch(/own AI key/i);
     }
   });
@@ -240,6 +240,16 @@ describe("the monthly allowance", () => {
     await addUsage(t, 1_000_000);
     expect(await aiAllowanceFor(db, t, NOW)).toMatchObject({ limit: 8_000_000, used: 1_000_000 });
     expect((await resolveTenantProvider(db, t, "content")).ok).toBe(true);
+  });
+
+  it("the lifetime plan has no AI cap: however much it uses, Loomail AI is never held", async () => {
+    process.env.LOOMAIL_ENFORCE_PLANS = "true";
+    await setPlatform("primary", "sk-pri");
+    const t = await newTenant("lifetime_1");
+    await addUsage(t, 50_000_000);
+    expect(await aiAllowanceFor(db, t, NOW)).toMatchObject({ limit: null });
+    expect((await resolveTenantProvider(db, t, "content")).ok).toBe(true);
+    expect((await tenantsOutOfAiAllowance(db, [t], NOW)).size).toBe(0);
   });
 
   it("a workspace on its own key is never blocked", async () => {
@@ -262,12 +272,12 @@ describe("the monthly allowance", () => {
   it("tenantsOutOfAiAllowance names only workspaces on Loomail AI that have used it up", async () => {
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
-    const spent = await newTenant("lifetime_1");
-    const fine = await newTenant("lifetime_1");
-    const own = await newTenant("lifetime_1");
-    await addUsage(spent, 300_000);
+    const spent = await newTenant("essential");
+    const fine = await newTenant("essential");
+    const own = await newTenant("essential");
+    await addUsage(spent, 8_000_000);
     await addUsage(fine, 100);
-    await addUsage(own, 300_000);
+    await addUsage(own, 8_000_000);
     await setOwn(own, "sk-own");
     expect([...(await tenantsOutOfAiAllowance(db, [spent, fine, own], NOW))]).toEqual([spent]);
     delete process.env.LOOMAIL_ENFORCE_PLANS;
@@ -299,8 +309,8 @@ describe("content generation holds, never drops, when the allowance is spent", (
   it("a tick leaves a spent workspace's queued messages exactly as they were", async () => {
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
-    const t = await newTenant("lifetime_1");
-    await addUsage(t, 300_000);
+    const t = await newTenant("essential");
+    await addUsage(t, 8_000_000);
     const msg = await pendingMessage(t);
     const r = await processContentTick(db, NOW, 20, [t]);
     expect(r.claimed).toBe(0);
@@ -311,8 +321,8 @@ describe("content generation holds, never drops, when the allowance is spent", (
   it("when the allowance runs out mid-batch the message goes back to the queue, not to 'failed'", async () => {
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
-    const t = await newTenant("lifetime_1");
-    await addUsage(t, 300_000);
+    const t = await newTenant("essential");
+    await addUsage(t, 8_000_000);
     const id = await pendingMessage(t);
     await db.execute(sql`UPDATE lifecycle_messages SET status = 'generating' WHERE id = ${id}::uuid`);
     const [row] = await q<{ contact_id: string; flow_id: string; membership_id: string }>(
@@ -331,9 +341,9 @@ describe("content generation holds, never drops, when the allowance is spent", (
   it("a workspace with tokens left is still processed alongside a spent one", async () => {
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
-    const spent = await newTenant("lifetime_1");
-    const fine = await newTenant("lifetime_1");
-    await addUsage(spent, 300_000);
+    const spent = await newTenant("essential");
+    const fine = await newTenant("essential");
+    await addUsage(spent, 8_000_000);
     const heldMsg = await pendingMessage(spent);
     await pendingMessage(fine);
     const r = await processContentTick(db, NOW, 20, [spent, fine]);
@@ -417,11 +427,11 @@ describe("a hand-set allowance is what the worker enforces", () => {
   it("raises the cap above the plan's, lowers it below, or lifts it", async () => {
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
-    const t = await newTenant("lifetime_1"); // plan allowance 300,000
-    await addUsage(t, 325_000);
+    const t = await newTenant("essential"); // plan allowance 8,000,000
+    await addUsage(t, 8_100_000);
     expect((await resolveTenantProvider(db, t, "content")).ok).toBe(false);
-    await override(t, 400_000);
-    expect(await aiAllowanceFor(db, t, NOW)).toMatchObject({ limit: 400_000, used: 325_000 });
+    await override(t, 9_000_000);
+    expect(await aiAllowanceFor(db, t, NOW)).toMatchObject({ limit: 9_000_000, used: 8_100_000 });
     expect((await resolveTenantProvider(db, t, "content")).ok).toBe(true);
     await override(t, 1_000);
     expect((await resolveTenantProvider(db, t, "content")).ok).toBe(false);
@@ -429,16 +439,16 @@ describe("a hand-set allowance is what the worker enforces", () => {
     expect(await aiAllowanceFor(db, t, NOW)).toMatchObject({ limit: null });
     expect((await resolveTenantProvider(db, t, "content")).ok).toBe(true);
     await override(t, null);
-    expect(await aiAllowanceFor(db, t, NOW)).toMatchObject({ limit: 300_000 });
+    expect(await aiAllowanceFor(db, t, NOW)).toMatchObject({ limit: 8_000_000 });
   });
 
   it("content generation is held or released by the override", async () => {
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await setPlatform("primary", "sk-pri");
-    const t = await newTenant("lifetime_1");
-    await addUsage(t, 300_000);
+    const t = await newTenant("essential");
+    await addUsage(t, 8_000_000);
     expect([...(await tenantsOutOfAiAllowance(db, [t], NOW))]).toEqual([t]);
-    await override(t, 500_000);
+    await override(t, 9_000_000);
     expect((await tenantsOutOfAiAllowance(db, [t], NOW)).size).toBe(0);
   });
 });
