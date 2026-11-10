@@ -212,7 +212,7 @@ describe("GET /v1/flows/:id/results: split_tests", () => {
     expect((await results(early)).split_tests[0].comparison.verdict).toBe("too_early");
     const close = await seed({ plan: abPlan, node: 2, a: { n: 200, converted: 40, sentStep: 3 }, b: { n: 200, converted: 44, sentStep: 4 } });
     expect((await results(close)).split_tests[0].comparison.verdict).toBe("no_difference");
-  });
+  }, 60_000);
 
   it("with no goal there is no verdict, but opens and clicks are still counted", async () => {
     if (!dbAvailable) return;

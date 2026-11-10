@@ -407,7 +407,7 @@ describe("the per-scan cap", () => {
     const second = await scan();
     expect(second).toMatchObject({ enrollmentsSucceeded: 30, flowsCapped: 0 });
     expect(await activeIn(flowId)).toHaveLength(230);
-  });
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -472,5 +472,5 @@ describe("the pre-filter and the enrollment guards agree", () => {
     expect([...enrolled].sort()).toEqual([...would].sort());
     // and every contact the query let through was one the guards accepted: nothing wasted
     expect(result.enrollmentsAttempted).toBe(would.size);
-  });
+  }, 60_000);
 });

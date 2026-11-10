@@ -118,13 +118,13 @@ async function cleanup(): Promise<void> {
 const owner = (t: Tenant) => ({ [SESSION_COOKIE_NAME]: t.session });
 const member = (t: Tenant) => ({ [SESSION_COOKIE_NAME]: t.memberSession });
 
-const start = (t: Tenant, plan = "starter", interval = "yearly") =>
+const start = (t: Tenant, plan = "essential", interval = "yearly") =>
   app.inject({ method: "POST", url: "/v1/billing/checkout", cookies: owner(t), payload: { plan, interval } });
 const poll = (reference: string, cookies: Record<string, string>, a: FastifyInstance = app) =>
   a.inject({ method: "GET", url: `/v1/billing/checkouts/${encodeURIComponent(reference)}`, cookies });
 
 /** Start a checkout and return its reference. */
-async function begin(t: Tenant, plan = "starter", interval = "yearly"): Promise<string> {
+async function begin(t: Tenant, plan = "essential", interval = "yearly"): Promise<string> {
   const res = await start(t, plan, interval);
   expect(res.statusCode, res.body).toBe(200);
   return res.json().reference as string;
@@ -136,10 +136,10 @@ function settle(reference: string, t: Tenant, opts: { status?: string; amount?: 
     id: 930_000 + counter,
     reference,
     status: opts.status ?? "success",
-    amount: opts.amount ?? 19000,
+    amount: opts.amount ?? 100000,
     currency: "USD",
     customer: { id: 1, email: t.email },
-    plan: { plan_code: "PLN_poll_USD_19000" },
+    plan: { plan_code: "PLN_poll_USD_100000" },
   };
   stub.txs.set(reference, tx);
   return tx;
@@ -169,7 +169,7 @@ beforeEach(async () => {
   stub.reset();
   resetCheckoutThrottle();
   // Only this file's cached plan: other test files share the table and run in parallel.
-  await db.execute(sql`DELETE FROM billing_provider_plans WHERE plan = 'starter' AND interval = 'yearly' AND currency = 'USD'`);
+  await db.execute(sql`DELETE FROM billing_provider_plans WHERE plan = 'essential' AND interval = 'yearly' AND currency = 'USD'`);
 });
 
 afterEach(async () => {
@@ -213,7 +213,7 @@ describe("polling a checkout", () => {
     const ref = await begin(t);
     const res = await poll(ref, owner(t));
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ status: "pending", plan: "starter", interval: "yearly" });
+    expect(res.json()).toEqual({ status: "pending", plan: "essential", interval: "yearly" });
     expect(await tenantPlan(t)).toBe("free");
   });
 
@@ -226,10 +226,10 @@ describe("polling a checkout", () => {
     settle(ref, t);
     resetCheckoutThrottle();
     const res = await poll(ref, owner(t));
-    expect(res.json()).toEqual({ status: "paid", plan: "starter", interval: "yearly" });
-    expect(await tenantPlan(t)).toBe("starter");
+    expect(res.json()).toEqual({ status: "paid", plan: "essential", interval: "yearly" });
+    expect(await tenantPlan(t)).toBe("essential");
     const subs = await q<{ status: string; plan: string }>(sql`SELECT status, plan FROM subscriptions WHERE tenant_id = ${t.id}::uuid`);
-    expect(subs).toEqual([{ status: "active", plan: "starter" }]);
+    expect(subs).toEqual([{ status: "active", plan: "essential" }]);
   });
 
   it("once paid it answers from the database and does not call the provider again", async () => {

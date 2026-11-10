@@ -54,6 +54,20 @@ const email = (order: number, extra: Record<string, unknown> = {}) => ({
 });
 const hook = (order: number, url = "https://hooks.example.com/in", extra: Record<string, unknown> = {}) => ({ order, delay: "0m", webhook: { url }, ...extra });
 
+/**
+ * Remove the workspaces this file makes, including their queued webhook calls. The worker's delivery job claims every
+ * due call in the database, so calls left behind here would be picked up by another test file's run.
+ */
+async function wipeWorkspaces() {
+  for (const slug of SLUGS) {
+    const t = sql`(SELECT id FROM tenants WHERE slug = ${slug})`;
+    for (const table of ["flow_webhook_deliveries", "webhook_secrets", "flow_memberships", "templates", "flows", "contacts", "sessions", "users"]) {
+      await db.execute(sql`DELETE FROM ${sql.raw(table)} WHERE tenant_id IN ${t}`);
+    }
+    await db.execute(sql`DELETE FROM tenants WHERE slug = ${slug}`);
+  }
+}
+
 beforeAll(async () => {
   pool = new pg.Pool({ connectionString: DB_URL, connectionTimeoutMillis: 3000 });
   try {
@@ -65,13 +79,7 @@ beforeAll(async () => {
     console.warn("[flow-webhooks.test] DATABASE_URL not reachable - skipped.");
     return;
   }
-  for (const slug of SLUGS) {
-    const t = sql`(SELECT id FROM tenants WHERE slug = ${slug})`;
-    for (const table of ["flow_webhook_deliveries", "webhook_secrets", "flow_memberships", "templates", "flows", "contacts", "sessions", "users"]) {
-      await db.execute(sql`DELETE FROM ${sql.raw(table)} WHERE tenant_id IN ${t}`);
-    }
-    await db.execute(sql`DELETE FROM tenants WHERE slug = ${slug}`);
-  }
+  await wipeWorkspaces();
   const make = async (slug: string, roles: Array<"owner" | "member">) => {
     const [t] = await db.insert(tenants).values({ name: slug, slug, plan: "free" }).returning({ id: tenants.id });
     const cookies: string[] = [];
@@ -103,6 +111,7 @@ beforeAll(async () => {
 afterAll(async () => {
   delete process.env.LOOMAIL_RESTRICT_WEBHOOK_HOSTS;
   if (app) await app.close();
+  if (dbAvailable) await wipeWorkspaces().catch(() => {});
   if (pool) await pool.end();
 });
 

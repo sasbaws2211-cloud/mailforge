@@ -70,9 +70,8 @@ const q = (text: string) => [{ role: "user", content: text }];
 const one = async (query: ReturnType<typeof sql>) => (await db.execute(query)).rows as Array<Record<string, any>>;
 const asstUsage = async (tenant: string) => one(sql`SELECT source, provider, total_tokens, cost_micros, ok FROM llm_usage WHERE tenant_id = ${tenant} AND feature = 'assistant' ORDER BY created_at`);
 
-beforeAll(async () => {
-  pool = new pg.Pool({ connectionString: DB_URL, connectionTimeoutMillis: 3000 });
-  db = drizzle(pool);
+/** Remove every workspace this file makes, with its AI usage, so nothing is left to skew another test's totals. */
+async function wipeWorkspaces() {
   for (const slug of SLUGS) {
     const t = sql`(SELECT id FROM tenants WHERE slug = ${slug})`;
     for (const table of ["llm_usage", "llm_configs", "flows", "sessions", "users"]) {
@@ -80,6 +79,12 @@ beforeAll(async () => {
     }
     await db.execute(sql`DELETE FROM tenants WHERE slug = ${slug}`);
   }
+}
+
+beforeAll(async () => {
+  pool = new pg.Pool({ connectionString: DB_URL, connectionTimeoutMillis: 3000 });
+  db = drizzle(pool);
+  await wipeWorkspaces();
   const soon = new Date(Date.now() + 5 * 86400_000);
   who.paid = await workspace("asst-paid", { plan: "essential", settings: { postal_address: "1 Main Street, Springfield" } });
   who.trial = await workspace("asst-trial", { plan: "trial", trialEndsAt: soon });
@@ -92,6 +97,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await app?.close();
+  await wipeWorkspaces().catch(() => {});
   await pool?.end();
 });
 beforeEach(() => {

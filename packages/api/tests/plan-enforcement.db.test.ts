@@ -140,7 +140,7 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 
 describe("enforcement off (self-hosted default)", () => {
-  it("a Free tenant past 500 contacts can still add contacts and invite people", async () => {
+  it("a tenant with no plan, past any limit, can still add contacts and invite people when enforcement is off", async () => {
     if (!dbAvailable) return;
     enforce(false);
     const t = await newTenant("free", { contacts: 500 });
@@ -161,45 +161,62 @@ describe("enforcement off (self-hosted default)", () => {
 });
 
 describe("contact limit on ingest (enforcement on)", () => {
-  it("lets a Free tenant reach exactly 500 contacts, then refuses the next with a 402", async () => {
+  // The lifetime plan (1,000 customer profiles) is the cheap stand-in for "a plan with a limit to fill".
+  it("lets a workspace reach exactly its limit, then refuses the next with a 402", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("free", { contacts: 498 });
+    const t = await newTenant("lifetime_1", { contacts: 998 });
 
-    expect((await track(t, "n1")).statusCode).toBe(200); // 499
-    expect((await track(t, "n2")).statusCode).toBe(200); // 500 (exactly the limit)
-    expect(await contactCount(t.id)).toBe(500);
+    expect((await track(t, "n1")).statusCode).toBe(200); // 999
+    expect((await track(t, "n2")).statusCode).toBe(200); // 1,000 (exactly the limit)
+    expect(await contactCount(t.id)).toBe(1000);
 
     const refused = await track(t, "n3");
     expect(refused.statusCode).toBe(402);
     expect(refused.json()).toEqual({
-      error: "Your Free plan allows up to 500 contacts. Upgrade your plan to add more.",
+      error: "Your Lifetime plan allows up to 1,000 customer profiles. Buy extra usage in Settings, under Plan, to add more.",
       code: "plan_limit",
       limit_kind: "contacts",
-      limit: 500,
-      used: 500,
+      limit: 1000,
+      used: 1000,
+      plan: "lifetime_1",
+    });
+    expect(await contactCount(t.id)).toBe(1000); // nothing was created
+  });
+
+  it("a workspace with no plan (trial over, nothing bought) can add nobody, with a message that says why", async () => {
+    if (!dbAvailable) return;
+    enforce(true);
+    const t = await newTenant("free");
+    const refused = await track(t, "first");
+    expect(refused.statusCode).toBe(402);
+    expect(refused.json()).toMatchObject({
+      error: "Your free trial has ended. Subscribe to Essential to keep going. Your data is safe.",
+      code: "plan_limit",
+      limit: 0,
+      used: 0,
       plan: "free",
     });
-    expect(await contactCount(t.id)).toBe(500); // nothing was created
+    expect(await contactCount(t.id)).toBe(0);
   });
 
   it("existing contacts keep working at the limit: events are still recorded", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("free", { contacts: 500 });
+    const t = await newTenant("lifetime_1", { contacts: 1000 });
     const res = await track(t, "seed-7", { event: "still_active" });
     expect(res.statusCode).toBe(200);
     const [e] = await q<{ n: string }>(
       sql`SELECT count(*)::text AS n FROM events WHERE tenant_id = ${t.id}::uuid AND event_name = 'still_active'`,
     );
     expect(e!.n).toBe("1");
-    expect(await contactCount(t.id)).toBe(500);
+    expect(await contactCount(t.id)).toBe(1000);
   });
 
   it("identify: a new contact is refused, an existing one can still be updated", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("free", { contacts: 500 });
+    const t = await newTenant("lifetime_1", { contacts: 1000 });
     const refused = await identify(t, "brand-new", { name: "Nobody" });
     expect(refused.statusCode).toBe(402);
     expect(refused.json().limit_kind).toBe("contacts");
@@ -215,11 +232,11 @@ describe("contact limit on ingest (enforcement on)", () => {
   it("batch: items for existing contacts and up to the limit succeed, the rest report plan_limit", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("free", { contacts: 499 });
+    const t = await newTenant("lifetime_1", { contacts: 999 });
     const res = await batch(t, [
       { type: "track", userId: "seed-1", event: "e" }, // existing
-      { type: "track", userId: "fresh-a", event: "e" }, // 500th: allowed
-      { type: "track", userId: "fresh-b", event: "e" }, // 501st: refused
+      { type: "track", userId: "fresh-a", event: "e" }, // 1,000th: allowed
+      { type: "track", userId: "fresh-b", event: "e" }, // 1,001st: refused
       { type: "identify", userId: "fresh-c", traits: { name: "C" } }, // refused
     ]);
     expect(res.statusCode).toBe(200);
@@ -229,33 +246,33 @@ describe("contact limit on ingest (enforcement on)", () => {
     expect(body.errors.map((e: { index: number }) => e.index)).toEqual([2, 3]);
     for (const e of body.errors) {
       expect(e.code).toBe("plan_limit");
-      expect(e.message).toContain("500 contacts");
+      expect(e.message).toContain("1,000 customer profiles");
     }
-    expect(await contactCount(t.id)).toBe(500);
+    expect(await contactCount(t.id)).toBe(1000);
   });
 
   it("a refused event leaves no trace, so retrying the same messageId after an upgrade works", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("free", { contacts: 500 });
+    const t = await newTenant("lifetime_1", { contacts: 1000 });
     const refused = await track(t, "late-joiner", { messageId: "retry-me-1" });
     expect(refused.statusCode).toBe(402);
 
-    await db.execute(sql`UPDATE tenants SET plan = 'starter' WHERE id = ${t.id}::uuid`);
+    await db.execute(sql`UPDATE tenants SET plan = 'essential' WHERE id = ${t.id}::uuid`);
     const retry = await track(t, "late-joiner", { messageId: "retry-me-1" });
     expect(retry.statusCode).toBe(200);
     expect(retry.json()).toEqual({ success: true, deduplicated: false }); // not treated as a duplicate
-    expect(await contactCount(t.id)).toBe(501);
+    expect(await contactCount(t.id)).toBe(1001);
   });
 
-  it("a running trial is limited like Growth (10,000), not like Free (500)", async () => {
+  it("a running trial is limited like Essential (6,000), not like No plan (0)", async () => {
     if (!dbAvailable) return;
     enforce(true);
     const t = await newTenant("trial", { trialEndsAt: new Date(Date.now() + 5 * DAY), contacts: 600 });
     expect((await track(t, "trial-new")).statusCode).toBe(200);
   });
 
-  it("the moment a trial ends the tenant is Free: new contacts are refused, existing data stays", async () => {
+  it("the moment a trial ends the tenant has No plan: new contacts are refused, existing data stays", async () => {
     if (!dbAvailable) return;
     enforce(true);
     const t = await newTenant("trial", { trialEndsAt: new Date(Date.now() + 5 * DAY), contacts: 600 });
@@ -265,27 +282,27 @@ describe("contact limit on ingest (enforcement on)", () => {
     const refused = await track(t, "after-expiry");
     expect(refused.statusCode).toBe(402);
     expect(refused.json().plan).toBe("free");
-    expect(refused.json().limit).toBe(500);
-    expect(refused.json().used).toBe(601); // 600 seeded + 1; nothing deleted, and over the Free limit
+    expect(refused.json().limit).toBe(0);
+    expect(refused.json().used).toBe(601); // 600 seeded + 1; nothing deleted, and over the No-plan limit
     expect(await contactCount(t.id)).toBe(601);
     // The people already there are still served.
     expect((await track(t, "seed-1")).statusCode).toBe(200);
   });
 
-  it("a paid plan is limited at its own number, not at Free's", async () => {
+  it("a paid plan is limited at its own number, not at No plan's", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("starter", { contacts: 2499 });
-    expect((await track(t, "starter-last")).statusCode).toBe(200); // 2,500
-    const refused = await track(t, "starter-over");
+    const t = await newTenant("essential", { contacts: 5999 });
+    expect((await track(t, "essential-last")).statusCode).toBe(200); // 6,000
+    const refused = await track(t, "essential-over");
     expect(refused.statusCode).toBe(402);
-    expect(refused.json()).toMatchObject({ plan: "starter", limit: 2500, used: 2500 });
+    expect(refused.json()).toMatchObject({ plan: "essential", limit: 6000, used: 6000 });
   });
 
-  it("an unknown stored plan is treated as Free", async () => {
+  it("an unknown stored plan is treated as No plan", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("enterprise-legacy", { contacts: 500 });
+    const t = await newTenant("enterprise-legacy", { contacts: 5 });
     const refused = await track(t, "x");
     expect(refused.statusCode).toBe(402);
     expect(refused.json().plan).toBe("free");
@@ -294,22 +311,15 @@ describe("contact limit on ingest (enforcement on)", () => {
   it("one tenant's contacts never count against another's", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const full = await newTenant("free", { contacts: 500 });
-    const empty = await newTenant("free");
+    const full = await newTenant("lifetime_1", { contacts: 1000 });
+    const empty = await newTenant("lifetime_1");
     expect((await track(full, "x")).statusCode).toBe(402);
     expect((await track(empty, "x")).statusCode).toBe(200);
-  });
-
-  it("a plan with no contact limit never refuses (Scale at a big number is still bounded, null limits are not)", async () => {
-    if (!dbAvailable) return;
-    enforce(true);
-    const t = await newTenant("scale", { contacts: 1000 });
-    expect((await track(t, "scale-new")).statusCode).toBe(200);
   });
 });
 
 describe("seat limit on invitations (enforcement on)", () => {
-  it("Free has one seat: the owner fills it, so inviting is refused with a 402", async () => {
+  it("No plan has one seat: the owner fills it, so inviting is refused with a 402", async () => {
     if (!dbAvailable) return;
     enforce(true);
     const t = await newTenant("free");
@@ -320,24 +330,22 @@ describe("seat limit on invitations (enforcement on)", () => {
     expect(n!.n).toBe("0");
   });
 
-  it("pending invitations hold a seat, so two invites on a 3-seat plan with 2 members is one too many", async () => {
+  it("pending invitations hold a seat, so a second invite on a 2-seat plan with one member is one too many", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("starter"); // 3 seats
-    await db.execute(sql`INSERT INTO users (tenant_id, email, role) VALUES (${t.id}::uuid, 'm2@plan-enf.example', 'member')`);
-    // 2 members now. One invite takes the third seat...
+    const t = await newTenant("lifetime_1"); // 2 seats; the owner holds one
+    // One invite takes the second seat...
     expect((await invite(t, "first@plan-enf.example")).statusCode).toBe(200);
     // ...so the next is refused, even though nobody has accepted yet.
     const second = await invite(t, "second@plan-enf.example");
     expect(second.statusCode).toBe(402);
-    expect(second.json()).toMatchObject({ limit: 3, used: 3, plan: "starter" });
+    expect(second.json()).toMatchObject({ limit: 2, used: 2, plan: "lifetime_1" });
   });
 
   it("revoking an invitation frees the seat", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("starter");
-    await db.execute(sql`INSERT INTO users (tenant_id, email, role) VALUES (${t.id}::uuid, 'm2@plan-enf.example', 'member')`);
+    const t = await newTenant("lifetime_1");
     await invite(t, "first@plan-enf.example");
     expect((await invite(t, "again@plan-enf.example")).statusCode).toBe(402);
 
@@ -350,21 +358,20 @@ describe("seat limit on invitations (enforcement on)", () => {
   it("deactivated members and expired invitations do not hold a seat", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("starter");
+    const t = await newTenant("lifetime_1");
     await db.execute(sql`INSERT INTO users (tenant_id, email, role, deactivated_at) VALUES (${t.id}::uuid, 'gone@plan-enf.example', 'member', now())`);
     await db.execute(sql`
       INSERT INTO invites (tenant_id, email, role, token_hash, invited_by, expires_at)
       VALUES (${t.id}::uuid, 'stale@plan-enf.example', 'member', 'h', ${t.ownerId}::uuid, now() - interval '1 day')`);
-    // Only the owner holds a seat, so two more invitations fit in 3.
+    // Only the owner holds a seat, so exactly one more invitation fits in 2.
     expect((await invite(t, "a@plan-enf.example")).statusCode).toBe(200);
-    expect((await invite(t, "b@plan-enf.example")).statusCode).toBe(200);
-    expect((await invite(t, "c@plan-enf.example")).statusCode).toBe(402);
+    expect((await invite(t, "b@plan-enf.example")).statusCode).toBe(402);
   });
 
-  it("an unlimited-seat plan (Scale) never refuses", async () => {
+  it("an unlimited-seat plan (Essential) never refuses", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("scale");
+    const t = await newTenant("essential");
     for (let i = 0; i < 4; i++) expect((await invite(t, `p${i}@plan-enf.example`)).statusCode).toBe(200);
   });
 
@@ -390,17 +397,18 @@ describe("GET /v1/plan", () => {
     const t = await newTenant("trial", { trialEndsAt: new Date(Date.now() + 9 * DAY - 3_600_000), contacts: 100 });
     const p = await planOf(t);
     expect(p.enforced).toBe(true);
-    expect(p.plan).toMatchObject({ id: "growth", name: "Growth" });
+    expect(p.plan).toMatchObject({ id: "essential", name: "Essential" });
     expect(p.stored_plan).toBe("trial");
     expect(p.trial).toMatchObject({ active: true, expired: false, days_left: 9 });
-    expect(p.meters.contacts).toEqual({ used: 100, limit: 10000, state: "ok" });
-    expect(p.meters.seats).toMatchObject({ used: 1, limit: 10, members: 1, pending_invites: 0 });
+    expect(p.meters.contacts).toEqual({ used: 100, limit: 6000, state: "ok" });
+    expect(p.meters.seats).toMatchObject({ used: 1, limit: null, members: 1, pending_invites: 0 });
     expect(p.shows_powered_by).toBe(false);
-    expect(p.plans.map((x: { id: string }) => x.id)).toEqual(["free", "starter", "growth", "scale"]);
-    expect(p.plans.filter((x: { current: boolean }) => x.current).map((x: { id: string }) => x.id)).toEqual(["growth"]);
+    // Only plans a customer can buy are listed.
+    expect(p.plans.map((x: { id: string }) => x.id)).toEqual(["essential"]);
+    expect(p.plans.filter((x: { current: boolean }) => x.current).map((x: { id: string }) => x.id)).toEqual(["essential"]);
   });
 
-  it("describes an expired trial as Free, with the powered-by link", async () => {
+  it("describes an expired trial as No plan, with the powered-by link", async () => {
     if (!dbAvailable) return;
     enforce(true);
     const t = await newTenant("trial", { trialEndsAt: new Date(Date.now() - DAY) });
@@ -414,21 +422,21 @@ describe("GET /v1/plan", () => {
     if (!dbAvailable) return;
     enforce(true);
     const states = async (contacts: number) => {
-      const t = await newTenant("free", { contacts });
+      const t = await newTenant("lifetime_1", { contacts });
       return (await planOf(t)).meters.contacts.state;
     };
     expect(await states(100)).toBe("ok");
-    expect(await states(399)).toBe("ok");
-    expect(await states(400)).toBe("near"); // 80%
-    expect(await states(499)).toBe("near");
-    expect(await states(500)).toBe("at_limit");
-    expect(await states(501)).toBe("over");
+    expect(await states(799)).toBe("ok");
+    expect(await states(800)).toBe("near"); // 80%
+    expect(await states(999)).toBe("near");
+    expect(await states(1000)).toBe("at_limit");
+    expect(await states(1001)).toBe("over");
   });
 
   it("counts this month's sent emails and says when the allowance resets", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    const t = await newTenant("free", { contacts: 1 });
+    const t = await newTenant("lifetime_1", { contacts: 1 });
     const [c] = await q<{ id: string }>(sql`SELECT id FROM contacts WHERE tenant_id = ${t.id}::uuid LIMIT 1`);
     const [f] = await q<{ id: string }>(sql`
       INSERT INTO flows (tenant_id, name, priority, trigger_type, trigger_config, steps, status, flow_class)
@@ -446,7 +454,7 @@ describe("GET /v1/plan", () => {
 
     const p = await planOf(t);
     expect(p.meters.emails.used).toBe(2);
-    expect(p.meters.emails.limit).toBe(5000);
+    expect(p.meters.emails.limit).toBe(10000);
     const resets = new Date(p.meters.emails.resets_at);
     expect(resets.getUTCDate()).toBe(1);
     expect(resets.getTime()).toBeGreaterThan(Date.now());
@@ -487,7 +495,7 @@ describe("credit line on the public unsubscribe pages", () => {
     else process.env.LOOMAIL_SITE_URL = savedSite;
   });
 
-  it("a Free workspace's page links back to the site", async () => {
+  it("a workspace with no plan: its page links back to the site", async () => {
     if (!dbAvailable) return;
     enforce(true);
     const res = await pageFor(await newTenant("free"));
@@ -500,12 +508,12 @@ describe("credit line on the public unsubscribe pages", () => {
   it("a paid or trial workspace's page does not", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    expect((await pageFor(await newTenant("growth"))).body).not.toContain('class="credit"');
+    expect((await pageFor(await newTenant("essential"))).body).not.toContain('class="credit"');
     const trial = await newTenant("trial", { trialEndsAt: new Date(Date.now() + 3 * DAY) });
     expect((await pageFor(trial)).body).not.toContain('class="credit"');
   });
 
-  it("an expired trial is Free again, so the credit returns", async () => {
+  it("an expired trial has no plan again, so the credit returns", async () => {
     if (!dbAvailable) return;
     enforce(true);
     const t = await newTenant("trial", { trialEndsAt: new Date(Date.now() - DAY) });

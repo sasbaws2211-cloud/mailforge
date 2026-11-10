@@ -1,6 +1,6 @@
 /**
  * Integration tests for plan enforcement in the drain: the monthly email
- * allowance and the "Sent with Loomail" credit line for Free workspaces.
+ * allowance (the lifetime plan's 10,000 a month is the cheap one to fill) and the "Sent with Loomail" credit line.
  *
  * Needs a reachable Postgres via DATABASE_URL, like the other *.db tests.
  */
@@ -69,7 +69,7 @@ beforeAll(async () => {
   await wipe();
   const [t] = await db
     .insert(tenants)
-    .values({ name: "Drain Plan Co", slug: SLUG, plan: "free", settings: { postal_address: "1 Test St, Accra, Ghana" } })
+    .values({ name: "Drain Plan Co", slug: SLUG, plan: "lifetime_1", settings: { postal_address: "1 Test St, Accra, Ghana" } })
     .returning({ id: tenants.id });
   tenantId = t!.id;
 });
@@ -80,7 +80,7 @@ beforeEach(async () => {
     await db.execute(sql.raw(`DELETE FROM ${t} WHERE tenant_id = '${tenantId}'`));
   }
   await db.execute(sql`DELETE FROM contacts WHERE tenant_id = ${tenantId}::uuid`);
-  await setPlan("free");
+  await setPlan("lifetime_1");
   const [f] = await db
     .insert(flows)
     .values({
@@ -159,10 +159,10 @@ function drain(adapter: TransportAdapter, now: Date = NOW) {
 // ---------------------------------------------------------------------------
 
 describe("monthly email allowance in the drain", () => {
-  it("enforcement off: a Free tenant over 5,000 sent this month still sends", async () => {
+  it("enforcement off: a tenant over its 10,000 sent this month still sends", async () => {
     if (!dbAvailable) return;
     enforce(false);
-    await seedSent(5_000, new Date("2026-07-05T00:00:00Z"));
+    await seedSent(10_000, new Date("2026-07-05T00:00:00Z"));
     const ids = await queueApproved(2);
     const a = new RecordingAdapter();
     const r = await drain(a);
@@ -174,7 +174,7 @@ describe("monthly email allowance in the drain", () => {
   it("sends exactly up to the allowance and puts the rest back untouched", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    await seedSent(4_998, new Date("2026-07-05T00:00:00Z")); // 2 left of Free's 5,000
+    await seedSent(9_998, new Date("2026-07-05T00:00:00Z")); // 2 left of 10,000
     const ids = await queueApproved(5);
     const a = new RecordingAdapter();
     const r = await drain(a);
@@ -186,13 +186,13 @@ describe("monthly email allowance in the drain", () => {
     expect(st.filter((s) => s === "sent")).toHaveLength(2);
     expect(st.filter((s) => s === "approved")).toHaveLength(3); // waiting, not failed or dropped
     const [total] = (await db.execute<{ n: string }>(sql`SELECT count(*)::text AS n FROM lifecycle_messages WHERE tenant_id = ${tenantId}::uuid AND status = 'sent' AND sent_at >= '2026-07-01'`)).rows;
-    expect(total!.n).toBe("5000"); // never one past the cap
+    expect(total!.n).toBe("10000"); // never one past the cap
   });
 
   it("once the allowance is used, the tenant is skipped before anything is claimed (zero writes)", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    await seedSent(5_000, new Date("2026-07-05T00:00:00Z"));
+    await seedSent(10_000, new Date("2026-07-05T00:00:00Z"));
     const ids = await queueApproved(3);
     const before = await db.select({ u: lifecycleMessages.updatedAt }).from(lifecycleMessages).where(eq(lifecycleMessages.id, ids[0]!));
 
@@ -210,7 +210,7 @@ describe("monthly email allowance in the drain", () => {
   it("held messages go out when the calendar month rolls over", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    await seedSent(5_000, new Date("2026-07-05T00:00:00Z"));
+    await seedSent(10_000, new Date("2026-07-05T00:00:00Z"));
     const ids = await queueApproved(3);
     const a = new RecordingAdapter();
     expect((await drain(a, NOW)).sent).toBe(0);
@@ -224,7 +224,7 @@ describe("monthly email allowance in the drain", () => {
   it("the last second of the month still counts against July; the first second of August is a fresh allowance", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    await seedSent(5_000, new Date("2026-07-31T23:59:59Z"));
+    await seedSent(10_000, new Date("2026-07-31T23:59:59Z"));
     await queueApproved(1);
     const a = new RecordingAdapter();
     expect((await drain(a, new Date("2026-07-31T23:59:59Z"))).sent).toBe(0);
@@ -234,12 +234,12 @@ describe("monthly email allowance in the drain", () => {
   it("an upgrade releases held messages immediately", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    await seedSent(5_000, new Date("2026-07-05T00:00:00Z"));
+    await seedSent(10_000, new Date("2026-07-05T00:00:00Z"));
     const ids = await queueApproved(3);
     const a = new RecordingAdapter();
     expect((await drain(a)).sent).toBe(0);
 
-    await setPlan("starter"); // 25,000 a month
+    await setPlan("essential"); // 1,000,000 a month
     const r = await drain(a);
     expect(r.sent).toBe(3);
     expect(await statuses(ids)).toEqual(["sent", "sent", "sent"]);
@@ -248,7 +248,7 @@ describe("monthly email allowance in the drain", () => {
   it("only sent messages count: approved, failed, suppressed and last month's do not", async () => {
     if (!dbAvailable) return;
     enforce(true);
-    await seedSent(4_990, new Date("2026-07-05T00:00:00Z"), "sent"); // counts: leaves 10 of 5,000
+    await seedSent(9_990, new Date("2026-07-05T00:00:00Z"), "sent"); // counts: leaves 10 of 10,000
     await seedSent(900, new Date("2026-07-06T00:00:00Z"), "failed"); // does not count
     await seedSent(900, new Date("2026-07-06T00:00:00Z"), "suppressed"); // does not count
     await seedSent(900, new Date("2026-06-15T00:00:00Z"), "sent"); // last month: does not count
@@ -261,21 +261,21 @@ describe("monthly email allowance in the drain", () => {
     expect((await statuses(ids)).filter((s) => s === "approved")).toHaveLength(5);
   });
 
-  it("a running trial has Growth's allowance (100,000), not Free's", async () => {
+  it("a running trial has Essential's allowance (1,000,000), not the lifetime plan's", async () => {
     if (!dbAvailable) return;
     enforce(true);
     await setPlan("trial", new Date(NOW.getTime() + 5 * DAY));
-    await seedSent(5_001, new Date("2026-07-05T00:00:00Z")); // already past Free's cap
+    await seedSent(10_001, new Date("2026-07-05T00:00:00Z")); // already past the lifetime plan's cap
     await queueApproved(2);
     const r = await drain(new RecordingAdapter());
     expect(r.sent).toBe(2);
   });
 
-  it("once the trial has ended the tenant is Free, so the Free allowance applies", async () => {
+  it("once the trial has ended the tenant has no plan, so nothing is sent", async () => {
     if (!dbAvailable) return;
     enforce(true);
     await setPlan("trial", new Date(NOW.getTime() - 1000));
-    await seedSent(5_001, new Date("2026-07-05T00:00:00Z"));
+    await seedSent(1, new Date("2026-07-05T00:00:00Z"));
     const ids = await queueApproved(2);
     const r = await drain(new RecordingAdapter());
     expect(r.sent).toBe(0);
@@ -292,30 +292,30 @@ describe("'Sent with Loomail' credit line", () => {
     return a.sends[0]!;
   };
 
-  it("a Free workspace's email carries the credit line, linked to the site, in HTML and text", async () => {
+  it("a workspace with no plan sends nothing at all, so no email goes out without its place in the allowance", async () => {
     if (!dbAvailable) return;
     enforce(true);
     process.env.LOOMAIL_SITE_URL = "https://loomail.example";
-    const sent = await sendOne();
-    expect(sent.bodyHtml).toContain('<a href="https://loomail.example"');
-    expect(sent.bodyHtml).toContain("Sent with Loomail");
-    expect(sent.bodyText).toContain("Sent with Loomail: https://loomail.example");
-    // The compliance footer is still there, and comes first.
-    expect(sent.bodyHtml).toContain("Unsubscribe");
-    expect(sent.bodyHtml!.indexOf("Unsubscribe")).toBeLessThan(sent.bodyHtml!.indexOf("Sent with Loomail"));
+    await setPlan("free");
+    const ids = await queueApproved(1);
+    const a = new RecordingAdapter();
+    const r = await drain(a);
+    expect(r.sent).toBe(0);
+    expect(a.sends).toHaveLength(0);
+    expect(await statuses(ids)).toEqual(["approved"]);
   });
 
-  it("a paid workspace's email does not", async () => {
+  it("a paid workspace's email does not carry it", async () => {
     if (!dbAvailable) return;
     enforce(true);
     process.env.LOOMAIL_SITE_URL = "https://loomail.example";
-    await setPlan("starter");
+    await setPlan("essential");
     const sent = await sendOne();
     expect(sent.bodyHtml).not.toContain("Sent with Loomail");
     expect(sent.bodyText).not.toContain("Sent with Loomail");
   });
 
-  it("a trial workspace (it has Growth) does not", async () => {
+  it("a trial workspace (it has Essential) does not", async () => {
     if (!dbAvailable) return;
     enforce(true);
     process.env.LOOMAIL_SITE_URL = "https://loomail.example";
@@ -328,22 +328,9 @@ describe("'Sent with Loomail' credit line", () => {
     if (!dbAvailable) return;
     enforce(false);
     process.env.LOOMAIL_SITE_URL = "https://loomail.example";
-    const sent = await sendOne(); // plan is free
+    await setPlan("free");
+    const sent = await sendOne(); // no plan, but enforcement is off so it still sends
     expect(sent.bodyHtml).not.toContain("Sent with Loomail");
-  });
-
-  it("with no site URL configured there is nothing to link to, so no line is added", async () => {
-    if (!dbAvailable) return;
-    enforce(true);
-    delete process.env.LOOMAIL_SITE_URL;
-    const prev = process.env.BASE_URL;
-    delete process.env.BASE_URL;
-    try {
-      const sent = await sendOne();
-      expect(sent.bodyHtml).not.toContain("Sent with Loomail");
-    } finally {
-      if (prev !== undefined) process.env.BASE_URL = prev;
-    }
   });
 });
 

@@ -142,7 +142,7 @@ const as = (s: string) => ({ [SESSION_COOKIE_NAME]: s });
 const call = (method: "GET" | "PUT" | "POST", url: string, session: string, payload?: unknown) =>
   app.inject({ method, url, cookies: as(session), ...(payload !== undefined ? { payload: payload as object } : {}) });
 
-const newAdmin = () => newTenant({ email: ADMIN_EMAIL, plan: "growth" });
+const newAdmin = () => newTenant({ email: ADMIN_EMAIL, plan: "essential" });
 
 const setPlatform = (admin: Tenant, extra: Record<string, unknown> = {}) =>
   call("PUT", "/v1/admin/ai/primary", admin.session, { provider: "custom", api_key: "sk-pri", base_url: stubUrl, model: "pri-model", reason: REASON, ...extra });
@@ -212,7 +212,7 @@ describe("provider prices", () => {
 describe("cost of AI calls", () => {
   it("is recorded on each call from the provider's prices (100 in x $2 + 50 out x $10 = 700 micro-dollars)", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "starter" });
+    const c = await newTenant({ plan: "lifetime_1" });
     await setPlatform(admin, { input_price: 2, output_price: 10 });
     expect((await draft(c)).statusCode).toBe(200);
     expect(await usageRows(c)).toEqual([{ source: "platform", cost_micros: 700, total_tokens: 150 }]);
@@ -235,7 +235,7 @@ describe("cost of AI calls", () => {
 
   it("shows up in dollars: total, by feature, per heaviest workspace and per workspace page", async () => {
     const admin = await newAdmin();
-    const a = await newTenant({ plan: "growth" });
+    const a = await newTenant({ plan: "essential" });
     const b = await newTenant({ plan: "free" });
     await addUsage(a, { tokens: 1000, cost: 2_500_000 }); // $2.50
     await addUsage(a, { tokens: 1000, cost: 500_000 }); // $0.50
@@ -257,32 +257,32 @@ describe("per-workspace allowance override", () => {
 
   it("gives one workspace more than its plan, and the customer's own meter follows", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "free" });
-    const other = await newTenant({ plan: "free" });
+    const c = await newTenant({ plan: "lifetime_1" });
+    const other = await newTenant({ plan: "lifetime_1" });
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     const r = await set(admin, c, 750_000);
     expect(r.statusCode).toBe(200);
     expect(r.json().workspace.ai_allowance_override).toBe(750_000);
     expect((await call("GET", "/v1/plan", c.session)).json().meters.ai.limit).toBe(750_000);
-    expect((await call("GET", "/v1/plan", other.session)).json().meters.ai.limit).toBe(20_000); // nobody else changes
+    expect((await call("GET", "/v1/plan", other.session)).json().meters.ai.limit).toBe(300_000); // nobody else changes
     const d = (await call("GET", `/v1/admin/tenants/${c.id}`, admin.session)).json();
     expect(d.ai).toMatchObject({ allowance_override: 750_000, allowance_tokens: 750_000 });
   });
 
   it("really changes what is blocked: a workspace over its plan but under its override can still use AI", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "free" });
+    const c = await newTenant({ plan: "lifetime_1" });
     await setPlatform(admin);
-    await addUsage(c, { tokens: 25_000 }); // over Free's 20,000
+    await addUsage(c, { tokens: 325_000 }); // over the plan's 300,000
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     expect((await draft(c)).statusCode).toBe(402);
-    await set(admin, c, 100_000);
+    await set(admin, c, 500_000);
     expect((await draft(c)).statusCode).toBe(200);
   });
 
   it("can be lowered (down to zero) as well as raised", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "growth" });
+    const c = await newTenant({ plan: "essential" });
     await setPlatform(admin);
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await set(admin, c, 0);
@@ -291,7 +291,7 @@ describe("per-workspace allowance override", () => {
 
   it("'unlimited' lifts the cap, and null returns to the plan's", async () => {
     const admin = await newAdmin();
-    const c = await newTenant({ plan: "free" });
+    const c = await newTenant({ plan: "lifetime_1" });
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     await set(admin, c, "unlimited");
     let meter = (await call("GET", "/v1/plan", c.session)).json().meters.ai;
@@ -299,7 +299,7 @@ describe("per-workspace allowance override", () => {
     expect((await q<{ v: number }>(sql`SELECT ai_allowance_override AS v FROM tenants WHERE id = ${c.id}::uuid`))[0]!.v).toBe(-1);
     await set(admin, c, null);
     meter = (await call("GET", "/v1/plan", c.session)).json().meters.ai;
-    expect(meter.limit).toBe(20_000);
+    expect(meter.limit).toBe(300_000);
   });
 
   it("is validated, needs a reason, and 404s for an unknown workspace", async () => {

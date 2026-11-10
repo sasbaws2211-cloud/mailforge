@@ -121,7 +121,7 @@ afterAll(async () => {
 });
 
 async function withAdmin(): Promise<Tenant> {
-  admin = await newTenant({ email: ADMIN_EMAIL, plan: "growth" });
+  admin = await newTenant({ email: ADMIN_EMAIL, plan: "essential" });
   return admin;
 }
 
@@ -140,7 +140,7 @@ describe("who is a platform admin", () => {
 describe("access", () => {
   it("signed-out requests get 401; an ordinary workspace owner gets a plain 404 on every route and nothing changes", async () => {
     if (!dbAvailable) return;
-    const owner = await newTenant({ plan: "growth" });
+    const owner = await newTenant({ plan: "essential" });
     const victim = await newTenant();
 
     expect((await app.inject({ method: "GET", url: "/v1/admin/overview" })).statusCode).toBe(401);
@@ -150,7 +150,7 @@ describe("access", () => {
       ["GET", "/v1/admin/tenants"],
       ["GET", `/v1/admin/tenants/${victim.id}`],
       ["GET", "/v1/admin/audit"],
-      ["POST", `/v1/admin/tenants/${victim.id}/plan`, { plan: "scale", reason: "sneaky" }],
+      ["POST", `/v1/admin/tenants/${victim.id}/plan`, { plan: "essential", reason: "sneaky" }],
       ["POST", `/v1/admin/tenants/${victim.id}/trial`, { days: 30, reason: "sneaky" }],
       ["POST", `/v1/admin/tenants/${victim.id}/suspend`, { reason: "sneaky" }],
       ["POST", `/v1/admin/tenants/${victim.id}/unsuspend`, { reason: "sneaky" }],
@@ -199,23 +199,23 @@ describe("overview", () => {
     const before = (await get(a, "/v1/admin/overview")).json();
 
     const trial = await newTenant({ plan: "trial", trialEndsAt: new Date(Date.now() + 2 * DAY) });
-    const starter = await newTenant({ plan: "starter" });
+    const subscriber = await newTenant({ plan: "essential" });
     await newTenant({ plan: "free" });
     await db.execute(sql`
       INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-      VALUES (${starter.id}::uuid, 'paystack', 'starter', 'yearly', 19000, 'USD', 'active', 'p@y.z', now(), now() + interval '1 year')`);
-    await db.execute(sql`UPDATE tenants SET plan_paid_through = now() + interval '1 year' WHERE id = ${starter.id}::uuid`);
+      VALUES (${subscriber.id}::uuid, 'paystack', 'essential', 'yearly', 100000, 'USD', 'active', 'p@y.z', now(), now() + interval '1 year')`);
+    await db.execute(sql`UPDATE tenants SET plan_paid_through = now() + interval '1 year' WHERE id = ${subscriber.id}::uuid`);
     void trial;
 
     const after = (await get(a, "/v1/admin/overview")).json();
     expect(after.workspaces.total - before.workspaces.total).toBe(3);
     expect(after.workspaces.signups_7d - before.workspaces.signups_7d).toBe(3);
     expect(after.workspaces.by_stored_plan.trial_running - before.workspaces.by_stored_plan.trial_running).toBe(1);
-    expect(after.workspaces.by_stored_plan.starter - before.workspaces.by_stored_plan.starter).toBe(1);
+    expect(after.workspaces.by_stored_plan.essential - before.workspaces.by_stored_plan.essential).toBe(1);
     expect(after.workspaces.by_stored_plan.free - before.workspaces.by_stored_plan.free).toBe(1);
     expect(after.attention.trials_ending_in_3_days - before.attention.trials_ending_in_3_days).toBe(1);
-    // $190 a year is counted as 190/12 = $15.83 a month.
-    expect(after.revenue.mrr_usd - before.revenue.mrr_usd).toBeCloseTo(15.83, 1);
+    // $1,000 a year is counted as 1000/12 = $83.33 a month.
+    expect(after.revenue.mrr_usd - before.revenue.mrr_usd).toBeCloseTo(83.33, 1);
     expect(after.revenue.active_subscriptions - before.revenue.active_subscriptions).toBe(1);
     expect(after.billing_enabled).toBe(false);
   });
@@ -224,25 +224,25 @@ describe("overview", () => {
     if (!dbAvailable) return;
     const a = await withAdmin();
     const before = (await get(a, "/v1/admin/overview")).json();
-    const t = await newTenant({ plan: "growth" });
-    // Growth monthly is $49; charged as GHS 760 (76000 pesewas). MRR must grow by 49, not 760.
+    const t = await newTenant({ plan: "essential" });
+    // Essential monthly is $100; charged as GHS 1,550 (155000 pesewas). MRR must grow by 100, not 1,550.
     await db.execute(sql`
       INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-      VALUES (${t.id}::uuid, 'paystack', 'growth', 'monthly', 76000, 'GHS', 'active', 'p@y.z', now(), now() + interval '1 month')`);
+      VALUES (${t.id}::uuid, 'paystack', 'essential', 'monthly', 155000, 'GHS', 'active', 'p@y.z', now(), now() + interval '1 month')`);
     const after = (await get(a, "/v1/admin/overview")).json();
-    expect(after.revenue.mrr_usd - before.revenue.mrr_usd).toBeCloseTo(49, 1);
+    expect(after.revenue.mrr_usd - before.revenue.mrr_usd).toBeCloseTo(100, 1);
     expect(after.revenue.active_subscriptions - before.revenue.active_subscriptions).toBe(1);
 
     const detail = (await get(a, `/v1/admin/tenants/${t.id}`)).json();
-    expect(detail.subscriptions[0]).toMatchObject({ plan: "growth", amount_usd: 49, charged_amount: 760, currency: "GHS" });
+    expect(detail.subscriptions[0]).toMatchObject({ plan: "essential", amount_usd: 100, charged_amount: 1550, currency: "GHS" });
   });
 
   it("flags a payment that is overdue (in grace) and one that has lapsed", { retry: 4 }, async () => {
     if (!dbAvailable) return;
     const a = await withAdmin();
     const before = (await get(a, "/v1/admin/overview")).json();
-    const overdue = await newTenant({ plan: "growth" });
-    const lapsed = await newTenant({ plan: "growth" });
+    const overdue = await newTenant({ plan: "essential" });
+    const lapsed = await newTenant({ plan: "essential" });
     await db.execute(sql`UPDATE tenants SET plan_paid_through = now() - interval '1 day' WHERE id = ${overdue.id}::uuid`);
     await db.execute(sql`UPDATE tenants SET plan_paid_through = now() - interval '10 days' WHERE id = ${lapsed.id}::uuid`);
     const after = (await get(a, "/v1/admin/overview")).json();
@@ -255,7 +255,7 @@ describe("finding workspaces", () => {
   it("lists newest first with the facts an operator needs, and shows what plan is really in force", async () => {
     if (!dbAvailable) return;
     const a = await withAdmin();
-    const lapsed = await newTenant({ plan: "growth", name: "Lapsed Co" });
+    const lapsed = await newTenant({ plan: "essential", name: "Lapsed Co" });
     await db.execute(sql`UPDATE tenants SET plan_paid_through = now() - interval '10 days' WHERE id = ${lapsed.id}::uuid`);
     await db.execute(sql`
       INSERT INTO contacts (tenant_id, external_id, lifecycle_state, first_seen_at, last_seen_at)
@@ -270,8 +270,8 @@ describe("finding workspaces", () => {
       id: lapsed.id,
       name: "Lapsed Co",
       owner_email: lapsed.email,
-      stored_plan: "growth",
-      effective_plan: { id: "free", name: "Free" },
+      stored_plan: "essential",
+      effective_plan: { id: "free", name: "No plan" },
       payment_status: "lapsed",
       suspended: false,
       contacts: 7,
@@ -302,9 +302,9 @@ describe("finding workspaces", () => {
   it("filters by status and pages through results", async () => {
     if (!dbAvailable) return;
     const a = await withAdmin();
-    const s1 = await newTenant({ plan: "starter", name: "Pg One" });
-    const s2 = await newTenant({ plan: "starter", name: "Pg Two" });
-    const s3 = await newTenant({ plan: "starter", name: "Pg Three" });
+    const s1 = await newTenant({ plan: "essential", name: "Pg One" });
+    const s2 = await newTenant({ plan: "essential", name: "Pg Two" });
+    const s3 = await newTenant({ plan: "essential", name: "Pg Three" });
     const tr = await newTenant({ plan: "trial", trialEndsAt: new Date(Date.now() + DAY), name: "Pg Trial" });
     await post(a, `/v1/admin/tenants/${s3.id}/suspend`, { reason: "test" });
 
@@ -346,20 +346,20 @@ describe("one workspace", () => {
   it("shows plan, usage, members, subscription and history", async () => {
     if (!dbAvailable) return;
     const a = await withAdmin();
-    const t = await newTenant({ plan: "starter" });
+    const t = await newTenant({ plan: "essential" });
     await db.execute(sql`
       INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-      VALUES (${t.id}::uuid, 'paystack', 'starter', 'monthly', 1900, 'USD', 'active', 'payer@y.z', now(), now() + interval '1 month')`);
+      VALUES (${t.id}::uuid, 'paystack', 'essential', 'monthly', 10000, 'USD', 'active', 'payer@y.z', now(), now() + interval '1 month')`);
     await db.execute(sql`INSERT INTO billing_events (provider, event_key, event_type, tenant_id, outcome) VALUES ('paystack', ${"charge:" + t.id}, 'charge.completed', ${t.id}::uuid, 'applied')`);
     await post(a, `/v1/admin/tenants/${t.id}/suspend`, { reason: "chargeback" });
 
     const res = await get(a, `/v1/admin/tenants/${t.id}`);
     expect(res.statusCode).toBe(200);
     const d = res.json();
-    expect(d.workspace).toMatchObject({ id: t.id, stored_plan: "starter", suspended: true, suspended_reason: "chargeback" });
+    expect(d.workspace).toMatchObject({ id: t.id, stored_plan: "essential", suspended: true, suspended_reason: "chargeback" });
     expect(d.usage).toMatchObject({ contacts: 0, members: 1, pending_invites: 0 });
     expect(d.members).toEqual([expect.objectContaining({ email: t.email, role: "owner", deactivated: false })]);
-    expect(d.subscriptions[0]).toMatchObject({ plan: "starter", interval: "monthly", amount_usd: 19, status: "active", payer_email: "payer@y.z" });
+    expect(d.subscriptions[0]).toMatchObject({ plan: "essential", interval: "monthly", amount_usd: 100, status: "active", payer_email: "payer@y.z" });
     expect(d.billing_events[0]).toMatchObject({ type: "charge.completed", outcome: "applied" });
     expect(d.audit[0]).toMatchObject({ actor: ADMIN_EMAIL, action: "suspend" });
     expect(d.activity).toMatchObject({ flows: 0, has_email_transport: false, last_email_sent_at: null });
@@ -390,9 +390,9 @@ describe("setting a plan by hand", () => {
     const a = await withAdmin();
     const t = await newTenant();
     const url = `/v1/admin/tenants/${t.id}/plan`;
-    expect((await post(a, url, { plan: "scale" })).json().code).toBe("reason_required");
-    expect((await post(a, url, { plan: "scale", reason: "   " })).statusCode).toBe(400);
-    expect((await post(a, url, { plan: "scale", reason: "x".repeat(301) })).statusCode).toBe(400);
+    expect((await post(a, url, { plan: "essential" })).json().code).toBe("reason_required");
+    expect((await post(a, url, { plan: "essential", reason: "   " })).statusCode).toBe(400);
+    expect((await post(a, url, { plan: "essential", reason: "x".repeat(301) })).statusCode).toBe(400);
     expect((await post(a, url, { plan: "platinum", reason: "ok" })).json().code).toBe("invalid_plan");
     expect((await post(a, url, { plan: "trial", reason: "ok" })).statusCode).toBe(400); // trials have their own route
     expect((await post(a, url, { reason: "ok" })).statusCode).toBe(400);
@@ -404,23 +404,23 @@ describe("setting a plan by hand", () => {
     if (!dbAvailable) return;
     const a = await withAdmin();
     const t = await newTenant({ plan: "trial", trialEndsAt: new Date(Date.now() + 5 * DAY) });
-    const res = await post(a, `/v1/admin/tenants/${t.id}/plan`, { plan: "scale", reason: "Design partner, free for a year" });
+    const res = await post(a, `/v1/admin/tenants/${t.id}/plan`, { plan: "essential", reason: "Design partner, free for a year" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().workspace).toMatchObject({ stored_plan: "scale", effective_plan: { id: "scale" }, on_trial: false, payment_status: "none" });
+    expect(res.json().workspace).toMatchObject({ stored_plan: "essential", effective_plan: { id: "essential" }, on_trial: false, payment_status: "none" });
     const row = await tenantRow(t.id);
-    expect(row).toMatchObject({ plan: "scale", trial_ends_at: null, plan_paid_through: null });
+    expect(row).toMatchObject({ plan: "essential", trial_ends_at: null, plan_paid_through: null });
 
     const [entry] = await q<{ actor_email: string; actor_user_id: string; action: string; detail: { reason: string; before: { plan: string }; after: { plan: string } } }>(
       sql`SELECT actor_email, actor_user_id, action, detail FROM admin_audit_log WHERE tenant_id = ${t.id}::uuid`,
     );
     expect(entry).toMatchObject({ actor_email: ADMIN_EMAIL, action: "set_plan" });
-    expect(entry!.detail).toMatchObject({ reason: "Design partner, free for a year", before: { plan: "trial" }, after: { plan: "scale" } });
+    expect(entry!.detail).toMatchObject({ reason: "Design partner, free for a year", before: { plan: "trial" }, after: { plan: "essential" } });
   });
 
   it("can put a paid workspace back to free by hand", async () => {
     if (!dbAvailable) return;
     const a = await withAdmin();
-    const t = await newTenant({ plan: "growth" });
+    const t = await newTenant({ plan: "essential" });
     expect((await post(a, `/v1/admin/tenants/${t.id}/plan`, { plan: "free", reason: "Customer asked to downgrade" })).statusCode).toBe(200);
     expect((await tenantRow(t.id)).plan).toBe("free");
   });
@@ -428,14 +428,14 @@ describe("setting a plan by hand", () => {
   it("refuses while a paid subscription is live, because the next charge would overwrite it", async () => {
     if (!dbAvailable) return;
     const a = await withAdmin();
-    const t = await newTenant({ plan: "growth" });
+    const t = await newTenant({ plan: "essential" });
     await db.execute(sql`
       INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-      VALUES (${t.id}::uuid, 'paystack', 'growth', 'monthly', 4900, 'USD', 'active', 'p@y.z', now(), now() + interval '1 month')`);
-    const res = await post(a, `/v1/admin/tenants/${t.id}/plan`, { plan: "scale", reason: "upsell" });
+      VALUES (${t.id}::uuid, 'paystack', 'essential', 'monthly', 10000, 'USD', 'active', 'p@y.z', now(), now() + interval '1 month')`);
+    const res = await post(a, `/v1/admin/tenants/${t.id}/plan`, { plan: "lifetime_1", reason: "upsell" });
     expect(res.statusCode).toBe(409);
     expect(res.json().code).toBe("has_subscription");
-    expect((await tenantRow(t.id)).plan).toBe("growth");
+    expect((await tenantRow(t.id)).plan).toBe("essential");
     expect(await auditActions(t.id)).toEqual([]);
     expect((await post(a, `/v1/admin/tenants/${t.id}/trial`, { days: 5, reason: "x" })).statusCode).toBe(409);
   });
@@ -455,7 +455,7 @@ describe("trials", () => {
 
     const res = await post(a, url, { days: 7, reason: "Evaluating for a big customer" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().workspace).toMatchObject({ stored_plan: "trial", on_trial: true, effective_plan: { id: "growth" } });
+    expect(res.json().workspace).toMatchObject({ stored_plan: "trial", on_trial: true, effective_plan: { id: "essential" } });
     const row = await tenantRow(t.id);
     const leftDays = (new Date(row.trial_ends_at!).getTime() - Date.now()) / DAY;
     expect(leftDays).toBeGreaterThan(6.99);
@@ -469,7 +469,7 @@ describe("trials", () => {
     const t = await newTenant({ plan: "trial", trialEndsAt: new Date(Date.now() - 3 * DAY) });
     expect((await get(a, `/v1/admin/tenants/${t.id}`)).json().workspace.effective_plan.id).toBe("free");
     await post(a, `/v1/admin/tenants/${t.id}/trial`, { days: 14, reason: "Needed more time" });
-    expect((await get(a, `/v1/admin/tenants/${t.id}`)).json().workspace.effective_plan.id).toBe("growth");
+    expect((await get(a, `/v1/admin/tenants/${t.id}`)).json().workspace.effective_plan.id).toBe("essential");
   });
 });
 
@@ -477,7 +477,7 @@ describe("suspension", () => {
   it("switches a workspace off everywhere: dashboard API, session check, and the ingest API", async () => {
     if (!dbAvailable) return;
     const a = await withAdmin();
-    const t = await newTenant({ plan: "growth" });
+    const t = await newTenant({ plan: "essential" });
 
     // Working before.
     expect((await get(t, "/v1/plan")).statusCode).toBe(200);
@@ -503,7 +503,7 @@ describe("suspension", () => {
     const me = (await app.inject({ method: "GET", url: "/auth/me", cookies: as(t) })).json();
     expect(me.suspended).toBe(true);
     // Not deleted: the data is all still there.
-    expect((await tenantRow(t.id)).plan).toBe("growth");
+    expect((await tenantRow(t.id)).plan).toBe("essential");
   });
 
   it("does not affect other workspaces", async () => {
@@ -554,12 +554,12 @@ describe("cancelling a customer's subscription", () => {
   const insertLive = (tenantId: string) =>
     db.execute(sql`
       INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-      VALUES (${tenantId}::uuid, 'paystack', 'growth', 'monthly', 4900, 'USD', 'active', 'p@y.z', now(), now() + interval '1 month')`);
+      VALUES (${tenantId}::uuid, 'paystack', 'essential', 'monthly', 10000, 'USD', 'active', 'p@y.z', now(), now() + interval '1 month')`);
 
   it("answers 503 when online billing is not configured", async () => {
     if (!dbAvailable) return;
     const a = await withAdmin();
-    const t = await newTenant({ plan: "growth" });
+    const t = await newTenant({ plan: "essential" });
     await insertLive(t.id);
     const res = await post(a, `/v1/admin/tenants/${t.id}/cancel-subscription`, { reason: "r" });
     expect(res.statusCode).toBe(503);
@@ -575,7 +575,7 @@ describe("audit trail", () => {
     const t1 = await newTenant({ name: "Audit One" });
     const t2 = await newTenant({ name: "Audit Two" });
     await post(a, `/v1/admin/tenants/${t1.id}/suspend`, { reason: "first" });
-    await post(a, `/v1/admin/tenants/${t2.id}/plan`, { plan: "starter", reason: "second" });
+    await post(a, `/v1/admin/tenants/${t2.id}/plan`, { plan: "lifetime_1", reason: "second" });
     await post(a, `/v1/admin/tenants/${t1.id}/unsuspend`, { reason: "third" });
 
     // The log is global and other test files write to it in parallel, so look at our own entries only.
@@ -595,7 +595,7 @@ describe("audit trail", () => {
     const t = await newTenant();
     await post(a, `/v1/admin/tenants/${t.id}/plan`, { plan: "nope", reason: "r" });
     expect(await auditActions(t.id)).toEqual([]);
-    await post(a, `/v1/admin/tenants/${t.id}/plan`, { plan: "starter", reason: "r" });
+    await post(a, `/v1/admin/tenants/${t.id}/plan`, { plan: "lifetime_1", reason: "r" });
     expect(await auditActions(t.id)).toEqual(["set_plan"]);
   });
 });
