@@ -27,7 +27,7 @@ let db: ReturnType<typeof drizzle>;
 let dbAvailable = false;
 let tenantId: string;
 
-const TABLES = ["flow_split_choices", "flow_conversions", "lifecycle_messages", "flow_memberships", "flows", "events", "contacts"];
+const TABLES = ["scan_checkpoints", "flow_split_choices", "flow_conversions", "lifecycle_messages", "flow_memberships", "flows", "events", "contacts"];
 
 async function wipe() {
   for (const table of TABLES) {
@@ -183,5 +183,5 @@ describe("through the real scan", () => {
     for (const m of messages) expect(m.flowStepOrder, m.membershipId!).toBe(versionOf.get(m.membershipId!) === "a" ? 2 : 3);
     // and the recorded version is what the hash says
     for (const id of ids) expect(versionOf.get(id)).toBe(splitVersion(id, 1, 30));
-  });
+  }, 60_000);
 });

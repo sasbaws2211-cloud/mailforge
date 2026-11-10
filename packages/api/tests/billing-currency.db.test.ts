@@ -182,31 +182,27 @@ describe("checkout in GHS", () => {
   it("asks for the converted amount in cedis, in pesewas, not the USD figure", async () => {
     if (!dbAvailable) return;
     const t = await newTenant();
-    await checkout(appGhs, t, "growth", "monthly");
-    // $49 x 15.5 = 759.5 -> GHS 760 -> 76000 pesewas.
-    expect(stubGhs.plans).toEqual([expect.objectContaining({ amountCents: 76000, currency: "GHS", interval: "monthly" })]);
-    expect(stubGhs.inits).toEqual([expect.objectContaining({ amount: 76000, currency: "GHS" })]);
-    expect(await checkoutRow(t)).toMatchObject({ amount_cents: 76000, currency: "GHS", status: "pending" });
+    await checkout(appGhs, t, "essential", "monthly");
+    // $100 x 15.5 = 1550 cedis -> 155000 pesewas.
+    expect(stubGhs.plans).toEqual([expect.objectContaining({ amountCents: 155000, currency: "GHS", interval: "monthly" })]);
+    expect(stubGhs.inits).toEqual([expect.objectContaining({ amount: 155000, currency: "GHS" })]);
+    expect(await checkoutRow(t)).toMatchObject({ amount_cents: 155000, currency: "GHS", status: "pending" });
   });
 
   it("a yearly plan converts the yearly price as a whole", async () => {
     if (!dbAvailable) return;
     const t = await newTenant();
-    await checkout(appGhs, t, "growth", "yearly");
-    // $490 x 15.5 = 7595 -> 759500 pesewas.
-    expect(stubGhs.plans[0]).toMatchObject({ amountCents: 759500, interval: "yearly" });
-    expect((await checkoutRow(t)).amount_cents).toBe(759500);
+    await checkout(appGhs, t, "essential", "yearly");
+    // $1000 x 15.5 = 15500 cedis -> 1550000 pesewas.
+    expect(stubGhs.plans[0]).toMatchObject({ amountCents: 1550000, interval: "yearly" });
+    expect((await checkoutRow(t)).amount_cents).toBe(1550000);
   });
 
-  it("every paid plan and interval is converted, and the charge is a whole number of cedis", async () => {
+  it("the paid plan is converted for each interval, and the charge is a whole number of cedis", async () => {
     if (!dbAvailable) return;
     const expected: Record<string, number> = {
-      "starter/monthly": 295, // 19 x 15.5 = 294.5
-      "starter/yearly": 2945, // 190 x 15.5
-      "growth/monthly": 760,
-      "growth/yearly": 7595,
-      "scale/monthly": 2000, // 129 x 15.5 = 1999.5
-      "scale/yearly": 19995, // 1290 x 15.5
+      "essential/monthly": 1550, // 100 x 15.5
+      "essential/yearly": 15500, // 1000 x 15.5
     };
     for (const [key, cedis] of Object.entries(expected)) {
       const [plan, interval] = key.split("/") as [string, string];
@@ -219,28 +215,28 @@ describe("checkout in GHS", () => {
   it("USD stays exactly as before: dollars in cents, no conversion", async () => {
     if (!dbAvailable) return;
     const t = await newTenant();
-    await checkout(appUsd, t, "growth", "monthly");
-    expect(stubUsd.plans[0]).toMatchObject({ amountCents: 4900, currency: "USD" });
-    expect(await checkoutRow(t)).toMatchObject({ amount_cents: 4900, currency: "USD" });
+    await checkout(appUsd, t, "essential", "monthly");
+    expect(stubUsd.plans[0]).toMatchObject({ amountCents: 10000, currency: "USD" });
+    expect(await checkoutRow(t)).toMatchObject({ amount_cents: 10000, currency: "USD" });
   });
 
   it("reuses the provider plan for the same price, and makes a new one when the rate changes", async () => {
     if (!dbAvailable) return;
     const t = await newTenant();
-    await checkout(appGhs, t, "growth", "monthly");
-    await checkout(appGhs, t, "growth", "monthly");
+    await checkout(appGhs, t, "essential", "monthly");
+    await checkout(appGhs, t, "essential", "monthly");
     expect(stubGhs.plans).toHaveLength(1);
 
-    // The operator changes the rate: 49 x 16 = 784 cedis. Subscribers on the old plan keep their price.
+    // The operator changes the rate: 100 x 16 = 1600 cedis. Subscribers on the old plan keep their price.
     const opts = { logger: false as const, db, baseUrl: "http://localhost:3000", dashboardUrl: "http://localhost:3000" };
     const appNewRate = await buildApp({ ...opts, billing: { client: stubGhs, webhookSecret: SECRET, currency: "GHS", usdRate: 16 } });
     try {
-      await checkout(appNewRate, t, "growth", "monthly");
+      await checkout(appNewRate, t, "essential", "monthly");
     } finally {
       await appNewRate.close();
     }
-    expect(stubGhs.plans.map((p) => p.amountCents)).toEqual([76000, 78400]);
-    const [n] = await q<{ n: string }>(sql`SELECT count(*)::text AS n FROM billing_provider_plans WHERE plan = 'growth' AND currency = 'GHS'`);
+    expect(stubGhs.plans.map((p) => p.amountCents)).toEqual([155000, 160000]);
+    const [n] = await q<{ n: string }>(sql`SELECT count(*)::text AS n FROM billing_provider_plans WHERE plan = 'essential' AND currency = 'GHS'`);
     expect(n!.n).toBe("2");
   });
 });
@@ -249,17 +245,17 @@ describe("accepting a payment in GHS", () => {
   it("applies a payment of the converted amount", async () => {
     if (!dbAvailable) return;
     const t = await newTenant();
-    const { tx } = await startAndPay(appGhs, stubGhs, t, "growth", "monthly");
+    const { tx } = await startAndPay(appGhs, stubGhs, t, "essential", "monthly");
     const res = await webhook(appGhs, chargeBody(tx));
     expect(res.json().outcome).toBe("applied_initial");
     const [sub] = await q<{ plan: string; amount_cents: number; currency: string; status: string }>(sql`SELECT plan, amount_cents, currency, status FROM subscriptions WHERE tenant_id = ${t.id}::uuid`);
-    expect(sub).toMatchObject({ plan: "growth", amount_cents: 76000, currency: "GHS", status: "active" });
+    expect(sub).toMatchObject({ plan: "essential", amount_cents: 155000, currency: "GHS", status: "active" });
   });
 
-  it("REJECTS a payment of the USD figure in cedis: 49 GHS is not 760 GHS", async () => {
+  it("REJECTS a payment of the USD figure in cedis: 100 GHS is not 1550 GHS", async () => {
     if (!dbAvailable) return;
     const t = await newTenant();
-    const { tx } = await startAndPay(appGhs, stubGhs, t, "growth", "monthly", { amount: 4900 });
+    const { tx } = await startAndPay(appGhs, stubGhs, t, "essential", "monthly", { amount: 10000 });
     const res = await webhook(appGhs, chargeBody(tx));
     expect(res.json().outcome).toBe("rejected");
     const [row] = await q<{ plan: string }>(sql`SELECT plan FROM tenants WHERE id = ${t.id}::uuid`);
@@ -270,38 +266,37 @@ describe("accepting a payment in GHS", () => {
   it("rejects the right number in the wrong currency", async () => {
     if (!dbAvailable) return;
     const t = await newTenant();
-    const { tx } = await startAndPay(appGhs, stubGhs, t, "growth", "monthly", { currency: "USD", amount: 76000 });
+    const { tx } = await startAndPay(appGhs, stubGhs, t, "essential", "monthly", { currency: "USD", amount: 155000 });
     expect((await webhook(appGhs, chargeBody(tx))).json().outcome).toBe("rejected");
   });
 
   it("renews a GHS subscription, matched on its plan, currency and cedi amount", async () => {
     if (!dbAvailable) return;
     const t = await newTenant();
-    const { tx, row } = await startAndPay(appGhs, stubGhs, t, "growth", "monthly");
+    const { tx, row } = await startAndPay(appGhs, stubGhs, t, "essential", "monthly");
     await webhook(appGhs, chargeBody(tx));
     await db.execute(sql`UPDATE subscriptions SET current_period_end = now() + interval '1 day' WHERE tenant_id = ${t.id}::uuid`);
-    const renewal: PaystackTransaction = { id: 920_001 + counter, reference: `RENEW_${counter}`, status: "success", amount: 76000, currency: "GHS", customer: { email: t.email }, plan: { plan_code: row.provider_plan_id } };
+    const renewal: PaystackTransaction = { id: 920_001 + counter, reference: `RENEW_${counter}`, status: "success", amount: 155000, currency: "GHS", customer: { email: t.email }, plan: { plan_code: row.provider_plan_id } };
     stubGhs.txs.set(renewal.reference, renewal);
     expect((await webhook(appGhs, chargeBody(renewal))).json().outcome).toBe("applied_renewal");
 
     // The old dollar-sized amount is not a renewal of this subscription.
-    const wrong: PaystackTransaction = { ...renewal, id: renewal.id + 1, reference: `RENEW_B_${counter}`, amount: 4900 };
+    const wrong: PaystackTransaction = { ...renewal, id: renewal.id + 1, reference: `RENEW_B_${counter}`, amount: 10000 };
     stubGhs.txs.set(wrong.reference, wrong);
     expect((await webhook(appGhs, chargeBody(wrong))).json().outcome).toBe("ignored");
   });
 });
 
 describe("what the dashboard is told", () => {
-  it("lists the cedi price of each paid plan next to the USD price, and the rate", async () => {
+  it("lists the cedi price of the paid plan next to the USD price, and the rate", async () => {
     if (!dbAvailable) return;
     const t = await newTenant();
     const plan = await planOf(appGhs, t);
     expect(plan.billing).toMatchObject({ enabled: true, currency: "GHS", usd_rate: RATE });
     const byId = Object.fromEntries((plan.plans as Array<Record<string, unknown>>).map((p) => [p.id, p]));
-    expect(byId.growth).toMatchObject({ price_monthly_usd: 49, price_annual_usd: 490, charge_monthly: 760, charge_annual: 7595 });
-    expect(byId.starter).toMatchObject({ charge_monthly: 295, charge_annual: 2945 });
-    expect(byId.scale).toMatchObject({ charge_monthly: 2000, charge_annual: 19995 });
-    expect(byId.free).toMatchObject({ charge_monthly: null, charge_annual: null });
+    expect(byId.essential).toMatchObject({ price_monthly_usd: 100, price_annual_usd: 1000, charge_monthly: 1550, charge_annual: 15500 });
+    // Only plans a customer can buy are listed: not "No plan", and not the lifetime plan.
+    expect(Object.keys(byId)).toEqual(["essential"]);
   });
 
   it("in USD there is nothing extra to show", async () => {
@@ -315,10 +310,10 @@ describe("what the dashboard is told", () => {
   it("reports a GHS subscription as the USD plan price it stands for, plus what is really charged", async () => {
     if (!dbAvailable) return;
     const t = await newTenant();
-    const { tx } = await startAndPay(appGhs, stubGhs, t, "growth", "monthly");
+    const { tx } = await startAndPay(appGhs, stubGhs, t, "essential", "monthly");
     await webhook(appGhs, chargeBody(tx));
     const plan = await planOf(appGhs, t);
-    expect(plan.billing.subscription).toMatchObject({ plan: "growth", amount_usd: 49, charged_amount: 760, currency: "GHS", status: "active" });
+    expect(plan.billing.subscription).toMatchObject({ plan: "essential", amount_usd: 100, charged_amount: 1550, currency: "GHS", status: "active" });
   });
 
   it("a USD subscription keeps showing what it paid, even if the list price has since changed", async () => {
@@ -326,7 +321,7 @@ describe("what the dashboard is told", () => {
     const t = await newTenant();
     await db.execute(sql`
       INSERT INTO subscriptions (tenant_id, provider, plan, interval, amount_cents, currency, status, customer_email, current_period_start, current_period_end)
-      VALUES (${t.id}::uuid, 'paystack', 'growth', 'monthly', 3900, 'USD', 'active', ${t.email}, now(), now() + interval '1 month')`);
-    expect((await planOf(appUsd, t)).billing.subscription).toMatchObject({ amount_usd: 39, charged_amount: 39, currency: "USD" });
+      VALUES (${t.id}::uuid, 'paystack', 'essential', 'monthly', 7900, 'USD', 'active', ${t.email}, now(), now() + interval '1 month')`);
+    expect((await planOf(appUsd, t)).billing.subscription).toMatchObject({ amount_usd: 79, charged_amount: 79, currency: "USD" });
   });
 });

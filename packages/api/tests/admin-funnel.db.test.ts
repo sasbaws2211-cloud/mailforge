@@ -54,7 +54,7 @@ async function newTenant(o: Opts = {}): Promise<string> {
   const slug = `funnel-t-${Date.now()}-${counter++}`;
   const created = ago(o.createdHoursAgo ?? 48);
   const settings: Record<string, unknown> = {};
-  if (o.signup !== false) settings.signup = { plan_interest: "growth", ...(o.goal ? { goal: o.goal } : {}) };
+  if (o.signup !== false) settings.signup = { plan_interest: "essential", ...(o.goal ? { goal: o.goal } : {}) };
   if (o.address) settings.postal_address = "1 Main St";
   if (o.onboarding) settings.onboarding = o.onboarding;
   const [t] = await q<{ id: string }>(sql`
@@ -155,7 +155,7 @@ describe("loadOnboardingFunnel", () => {
     await newTenant({}); // signed up only
     await newTenant({ loggedIn: true });
     await newTenant({ loggedIn: true, address: true, transport: true });
-    await newTenant({ loggedIn: true, address: true, managed: true, flow: true, event: true, firstEmailAfterH: 3, plan: "growth" });
+    await newTenant({ loggedIn: true, address: true, managed: true, flow: true, event: true, firstEmailAfterH: 3, plan: "essential" });
     const f = await funnel();
     expect(f.cohort).toBe(4);
     expect(count(f, "signed_up")).toBe(4);

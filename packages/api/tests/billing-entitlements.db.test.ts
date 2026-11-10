@@ -107,21 +107,21 @@ describe("entitlements follow the paid-through date", () => {
   const track = (k: string, userId: string) =>
     app.inject({ method: "POST", url: "/v1/track", headers: { authorization: `Bearer ${k}`, "content-type": "application/json" }, payload: JSON.stringify({ userId, event: "e" }) });
 
-  it("a paid plan within its paid period (or its grace period) keeps the paid limits; past grace it is Free", async () => {
+  it("a paid plan within its paid period (or its grace period) keeps the paid limits; past grace it is No plan", async () => {
     if (!dbAvailable) return;
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     try {
-      // 600 contacts is over Free (500) but well inside Growth (10,000).
-      const current = await newTenant("growth", { paidThrough: new Date(Date.now() + 10 * DAY), contacts: 600 });
+      // 600 contacts is well inside Essential (6,000), but No plan allows none.
+      const current = await newTenant("essential", { paidThrough: new Date(Date.now() + 10 * DAY), contacts: 600 });
       expect((await track(await withKey(current), "n1")).statusCode).toBe(200);
 
-      const inGrace = await newTenant("growth", { paidThrough: new Date(Date.now() - 1 * DAY), contacts: 600 });
+      const inGrace = await newTenant("essential", { paidThrough: new Date(Date.now() - 1 * DAY), contacts: 600 });
       expect((await track(await withKey(inGrace), "n1")).statusCode).toBe(200);
 
-      const lapsed = await newTenant("growth", { paidThrough: new Date(Date.now() - (BILLING_GRACE_DAYS + 1) * DAY), contacts: 600 });
+      const lapsed = await newTenant("essential", { paidThrough: new Date(Date.now() - (BILLING_GRACE_DAYS + 1) * DAY), contacts: 600 });
       const res = await track(await withKey(lapsed), "n1");
       expect(res.statusCode).toBe(402);
-      expect(res.json()).toMatchObject({ plan: "free", limit: 500 });
+      expect(res.json()).toMatchObject({ plan: "free", limit: 0 });
     } finally {
       delete process.env.LOOMAIL_ENFORCE_PLANS;
     }
@@ -131,9 +131,9 @@ describe("entitlements follow the paid-through date", () => {
     if (!dbAvailable) return;
     process.env.LOOMAIL_ENFORCE_PLANS = "true";
     try {
-      const t = await newTenant("scale", { paidThrough: null, contacts: 600 });
+      const t = await newTenant("essential", { paidThrough: null, contacts: 600 });
       expect((await track(await withKey(t), "n1")).statusCode).toBe(200);
-      expect((await planOf(t)).plan.id).toBe("scale");
+      expect((await planOf(t)).plan.id).toBe("essential");
     } finally {
       delete process.env.LOOMAIL_ENFORCE_PLANS;
     }
@@ -150,8 +150,8 @@ describe("entitlements follow the paid-through date", () => {
         const token = generateUnsubscribeToken(t.id, "00000000-0000-4000-8000-000000000000", process.env.UNSUBSCRIBE_SIGNING_KEY!);
         return (await app.inject({ method: "GET", url: `/unsubscribe?token=${encodeURIComponent(token)}` })).body;
       };
-      const paid = await newTenant("growth", { paidThrough: new Date(Date.now() + 10 * DAY) });
-      const lapsed = await newTenant("growth", { paidThrough: new Date(Date.now() - (BILLING_GRACE_DAYS + 1) * DAY) });
+      const paid = await newTenant("essential", { paidThrough: new Date(Date.now() + 10 * DAY) });
+      const lapsed = await newTenant("essential", { paidThrough: new Date(Date.now() - (BILLING_GRACE_DAYS + 1) * DAY) });
       expect(await page(paid)).not.toContain('class="credit"');
       expect(await page(lapsed)).toContain('class="credit"');
     } finally {
